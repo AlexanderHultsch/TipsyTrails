@@ -10,10 +10,12 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "fastify": "^5.11.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0"
   }
 }
