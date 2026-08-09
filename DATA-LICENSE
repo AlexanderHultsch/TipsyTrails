@@ -1,0 +1,34 @@
+# Data licence
+
+The `LICENSE` file (MIT) covers the application source code only. It does
+**not** cover map data or any artefact derived from it.
+
+Map data, and everything derived from it, comes from OpenStreetMap and is
+licensed under the **Open Database License (ODbL) 1.0**. This notice covers
+the following artefacts, when present in this repository or produced from it:
+
+- `data/seed/bars.json`
+- `data/seed/districts.geojson`
+- `data/seed/grid.bin`
+- the `.pmtiles` tile extract (published as a GitHub Release asset, see
+  `SPEC.md` Section 13.2, and reproducible from `scripts/extract-tiles.sh`)
+
+These files do not all exist yet — they are introduced in later development
+phases (see `SPEC.md` Section 12) — but this notice applies to each one from
+the moment it exists.
+
+## Attribution
+
+**© OpenStreetMap contributors.**
+
+Any use of these artefacts, or of the map rendered from them, must carry this
+attribution and must not misrepresent the data as endorsed by or affiliated
+with the underlying source in any way other than as its origin.
+
+## Full terms
+
+- OpenStreetMap copyright and licence: https://www.openstreetmap.org/copyright
+- Full ODbL 1.0 text: https://opendatacommons.org/licenses/odbl/1-0/
+
+This file is a short notice, not a substitute for the licence text linked
+above. In case of conflict, the ODbL text governs.
