@@ -1,10 +1,10 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.2
+**Version:** 1.2.1
 **Status:** Draft — ready for implementation
-**Repository:** https://github.com/AlexanderHultsch/Tipsy-Trails
+**Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
-**Public URL:** `https://tipsy-trails.ahultsch.com` (via Cloudflare Tunnel)
+**Public URL:** `https://tipsytrails.ahultsch.com` (via Cloudflare Tunnel)
 
 > Changes from v1.1 are listed in Section 15. Anything not listed there is unchanged.
 
@@ -61,7 +61,7 @@ Progress is measured as **percentage of area explored** (per district and city-w
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Package manager | pnpm 9 (workspaces) | Fast, disk-efficient, first-class monorepo support |
+| Package manager | pnpm 10 (workspaces) | Fast, disk-efficient, first-class monorepo support |
 | Frontend framework | React 18 + TypeScript + Vite | Small bundle, mature MapLibre bindings |
 | Map renderer | MapLibre GL JS v4 | GPU-accelerated vector rendering, no license cost |
 | Tile format | PMTiles (Protomaps) v3 | Single static file, HTTP range requests, CDN-cacheable, offline-capable |
@@ -129,7 +129,7 @@ Client-side: district polygons, grid metadata, and the bar catalogue are cached 
 ### 4.2 Repository structure
 
 ```
-Tipsy-Trails/
+TipsyTrails/
 ├── docker-compose.yml
 ├── pnpm-workspace.yaml
 ├── .env.example
@@ -817,11 +817,11 @@ Each phase is independently testable and ends in a deployable state. Do not begi
 
 ### Phase 0 — Foundation
 
-Scaffold monorepo, Docker Compose (Caddy + API), SQLite with migration runner, health endpoint, Cloudflare Tunnel to `tipsy-trails.ahultsch.com`, `CLAUDE.md`, `README.md`, `.env.example`.
+Scaffold monorepo, Docker Compose (Caddy + API), SQLite with migration runner, health endpoint, Cloudflare Tunnel to `tipsytrails.ahultsch.com`, `CLAUDE.md`, `README.md`, `.env.example`.
 
 **Definition of Done**
 - [ ] `docker compose up -d --build` succeeds on the Pi from a clean clone
-- [ ] `https://tipsy-trails.ahultsch.com/api/health` returns `{"status":"ok"}` over the public internet
+- [ ] `https://tipsytrails.ahultsch.com/api/health` returns `{"status":"ok"}` over the public internet
 - [ ] The SPA shell loads and renders a placeholder page on a phone
 - [ ] Migrations run idempotently on container restart, tracked in `schema_migrations`
 - [ ] No secret is present anywhere in the repository, and secret scanning with push protection is enabled
@@ -1014,6 +1014,10 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.2.1 — repository rename
+
+Repository renamed to `TipsyTrails` and the public host to `tipsytrails.ahultsch.com`. The public URL stays HTTPS: the session cookie carries the `Secure` flag (Section 10.1) and would not be sent over plain HTTP. Package manager pinned to pnpm 10, which is what the toolchain provides.
 
 ### v1.2 — optimisation pass on v1.1
 

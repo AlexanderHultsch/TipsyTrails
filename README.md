@@ -4,7 +4,7 @@ A location-based exploration game for Karlsruhe, Germany.
 
 The city starts under fog. You clear it by walking through it. Bars stay hidden until you come within 100 m of one — then they are yours forever. Check in, stay 20 minutes, and the bar is mastered. Progress is measured as percentage of area explored, per district and city-wide, plus the number of bars you have mastered.
 
-Self-hosted on a Raspberry Pi, reachable at `https://tipsy-trails.ahultsch.com` through a Cloudflare Tunnel. No inbound ports, no third-party analytics, no stored movement trails.
+Self-hosted on a Raspberry Pi, reachable at `https://tipsytrails.ahultsch.com` through a Cloudflare Tunnel. No inbound ports, no third-party analytics, no stored movement trails.
 
 ## Status
 
