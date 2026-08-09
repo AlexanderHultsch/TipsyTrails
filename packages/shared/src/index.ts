@@ -1,1 +1,1 @@
-export const PLACEHOLDER = true;
+export { CONFIG, DERIVED } from './config.js';
