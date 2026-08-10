@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.2.2
+**Version:** 1.3
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -152,14 +152,17 @@ TipsyTrails/
 │       ├── public/
 │       └── Dockerfile
 ├── data/
-│   ├── seed/                     # committed: bars.json, districts.geojson, grid.bin
+│   ├── cities/                   # committed: <slug>.json, one per city — the pipeline's config seam, see 11.4
+│   ├── seed/
+│   │   └── karlsruhe/             # committed: bars.json, districts.geojson, neighbours.geojson, grid.bin, grid-meta.json
 │   ├── tiles/                    # gitignored: *.pmtiles (GitHub Release asset)
 │   └── db/                       # gitignored: tipsy.db, WAL, SHM — runtime only
 └── scripts/
+    ├── fetch-boundaries.ts       # Overpass → city outline, districts, neighbours (GeoJSON), see 11.4
     ├── build-grid.ts             # precompute cell→district mapping + playable_cells
-    ├── import-osm-bars.ts        # one-off Overpass import → data/seed/bars.json
+    ├── import-osm-bars.ts        # one-off Overpass import → data/seed/<slug>/bars.json
     ├── rebuild-grid.ts           # stub, see O3
-    └── extract-tiles.sh          # produce karlsruhe.<version>.pmtiles
+    └── extract-tiles.sh          # produce <slug>.<version>.pmtiles
 ```
 
 ### 4.3 Deployment
@@ -208,9 +211,9 @@ CREATE TABLE districts (
 );
 ```
 
-District polygons are **not** stored in the database. They live in `data/seed/districts.geojson` (simplified, served statically). The database only holds the cell→district lookup, precomputed by `scripts/build-grid.ts` into a packed `Uint16Array` file (`data/seed/grid.bin`), loaded into memory by the API at boot (~280 KB for Karlsruhe; sentinel `0xFFFF` means "not in any district").
+District polygons are **not** stored in the database. They live in `data/seed/karlsruhe/districts.geojson` (simplified, served statically). The database only holds the cell→district lookup, precomputed by `scripts/build-grid.ts` into a packed `Uint16Array` file (`data/seed/karlsruhe/grid.bin`), loaded into memory by the API at boot (~280 KB for Karlsruhe; sentinel `0xFFFF` means "not in any district").
 
-`scripts/build-grid.ts` is also what computes `playable_cells` for every district and for the city. It writes both `grid.bin` and a `data/seed/grid-meta.json` carrying `grid_width`, `grid_height`, and the per-district counts; the seeding step reads that file. These numbers are never typed in by hand.
+`scripts/build-grid.ts` is also what computes `playable_cells` for every district and for the city. It writes both `grid.bin` and a `data/seed/karlsruhe/grid-meta.json` carrying `grid_width`, `grid_height`, and the per-district counts; the seeding step reads that file. These numbers are never typed in by hand.
 
 ### 5.3 Users
 
@@ -402,6 +405,8 @@ The longitude scale is evaluated once at `origin_lat`, not per sample. Across Ka
 Distances use the haversine formula.
 
 ### 6.2 Karlsruhe grid parameters
+
+These parameters are not loose values in this document — they live in `data/cities/karlsruhe.json` (Section 11.4), and that file is what the seed and build scripts and the `cities` row (Section 5.1) actually read. The table below is its human-readable copy, kept here for quick reference.
 
 | Parameter | Value |
 |---|---|
@@ -783,11 +788,11 @@ Bars submitted by that user are **not** deleted — they are part of the shared 
 
 ---
 
-## 11. Bar Data
+## 11. Bar Data and Data Pipeline
 
 ### 11.1 Seeding
 
-`scripts/import-osm-bars.ts` runs **once, locally, offline from the app** and writes `data/seed/bars.json`, which is committed.
+`scripts/import-osm-bars.ts` runs **once, locally, offline from the app** and writes `data/seed/karlsruhe/bars.json`, which is committed.
 
 Overpass query: nodes, ways, and relations within the Karlsruhe boundary relation with `amenity` in `bar`, `pub`, `biergarten`, `nightclub`.
 
@@ -808,6 +813,43 @@ Submitted bars go live **immediately** for all users, with `source = 'community'
 **Duplicate guard.** Reject if an active bar exists within `SUGGEST_DUPLICATE_RADIUS_M` whose name is similar. Similarity is a normalized Levenshtein ratio ≥ `SUGGEST_NAME_SIMILARITY`, computed after normalising both names: lowercase, strip diacritics, strip punctuation, collapse whitespace, and drop leading articles and common suffixes (`bar`, `pub`, `kneipe`, `cafe`). The rejection names the conflicting bar so the user understands why.
 
 A submitting user immediately gets a `bar_discoveries` row for their own submission — they are demonstrably standing there.
+
+### 11.4 City data pipeline
+
+`import-osm-bars.ts` (11.1) is not the only script that has to reach outside the repository for OSM data — the district boundaries and the tile extract do too, and `build-grid.ts` (5.2) turns their output into the grid. None of these can run inside the implementing agent's sandbox: the sandbox has no route to Overpass or Geofabrik, the OSM data hosts. They are run by the project owner on his own machine, and their output is committed or released the same way as every other artefact (Section 13.1). Nothing at runtime depends on those hosts, and a v1 rebuild without network access to them is still possible from the committed output.
+
+Because C10 already requires the data model to be multi-city capable, there is no reason for this pipeline to be Karlsruhe-specific and generalised later. It is city-parameterised from the start.
+
+**The per-city configuration file is the single seam.** `data/cities/<slug>.json`, one file per city, committed. It holds everything both the scripts and the `cities` row (Section 5.1) need:
+
+| Field | Used by |
+|---|---|
+| `slug` | all scripts; `cities.slug` |
+| `name` | `cities.name` |
+| `osm_admin_filter` | `fetch-boundaries.ts` — the Overpass filter (admin level, name, regional key) that identifies the city relation |
+| `bounding_box` | `fetch-boundaries.ts`, `extract-tiles.sh` |
+| `cell_size_m` | `build-grid.ts`; `cities.cell_size_m` |
+| `geofabrik_region` | `extract-tiles.sh` |
+| `tiles_filename` | `extract-tiles.sh`; `CONFIG.TILES_FILENAME` |
+
+Every script takes a single `--city=<slug>` argument and reads everything else from this file. Adding a second city is adding a second JSON file, not a code change. This file is also what seeds the `cities` row from Section 5.1 — the seeding step reads it directly, the same way it already reads `grid-meta.json` for `playable_cells` (Section 5.2). Script parameters and the database row are therefore derived from one source and cannot drift apart.
+
+**The script chain.**
+
+| Script | Produces | Network |
+|---|---|---|
+| `scripts/fetch-boundaries.ts` | City outline, district polygons, and neighbouring municipalities as GeoJSON, into `data/seed/<slug>/` | Yes — Overpass |
+| `scripts/extract-tiles.sh` | The PMTiles extract, into `data/tiles/` | Yes — Geofabrik; also needs Java |
+| `scripts/build-grid.ts` | The cell grid (`grid.bin`, `grid-meta.json`), per Section 5.2 | No — offline. Belongs to Phase 3; not yet built |
+| `scripts/import-osm-bars.ts` | `data/seed/<slug>/bars.json`, per Section 11.1 | Yes — Overpass |
+
+`import-osm-bars.ts` joins this chain unchanged in behaviour — it still runs once, locally, offline from the running app (11.1) — except that it now also takes `--city` and reads its Overpass filter and output path from the city config instead of having Karlsruhe hard-coded.
+
+**Output and what is committed.** GeoJSON produced by `fetch-boundaries.ts` and `import-osm-bars.ts` lands in `data/seed/<slug>/` and is committed, ODbL-licensed like every other OSM-derived artefact (13.1, 13.3). The PMTiles extract from `extract-tiles.sh` is **never** committed, for the reasons already given in Section 13.2 — the scripts must not tempt anyone to override that by writing it anywhere under a committed path. `data/seed/` is therefore per-city rather than the flat directory earlier drafts of this document showed; the tree in Section 4.2 reflects that.
+
+**Scripts fail loudly and leave nothing half-written.** A failed run must not leave a truncated GeoJSON file that a later script, or a human, would happily consume as if it were complete. Output is written to a temporary path and renamed into place only on success, or not written at all. Every script prints a summary of what it produced — feature counts, file sizes, the city slug — on exit.
+
+**Re-running is safe.** Section 11.2 already establishes that the bar import never writes to the live database and produces a diff report rather than applying changes itself. The same posture extends to this whole chain: every script here is idempotent, writes only into `data/seed/` or `data/tiles/`, and never touches a running system.
 
 ---
 
@@ -878,7 +920,7 @@ Grid build script, fog bitmask storage, per-day counters, geolocation sampling, 
 Seed import, bar storage, discovery at 100 m, permanent visibility, bar markers, bar detail screen.
 
 **Definition of Done**
-- [ ] `data/seed/bars.json` is committed and imports cleanly
+- [ ] `data/seed/karlsruhe/bars.json` is committed and imports cleanly
 - [ ] Approaching within 100 m discovers a bar; it persists after reload
 - [ ] `/api/bars` returns only bars discovered by the requesting user
 - [ ] `/api/bars/:id` returns an identical 404 for an undiscovered bar and a nonexistent one
@@ -960,9 +1002,9 @@ The repository is public. Everything required to build, run, and self-host the p
 | Application source (api, web, shared) | Yes | |
 | Docker Compose, Caddyfile, Dockerfiles | Yes | |
 | Migrations | Yes | Schema is public; data is not |
-| `data/seed/bars.json` | Yes | OSM-derived, ODbL |
-| `data/seed/districts.geojson` | Yes | OSM-derived, ODbL |
-| `data/seed/grid.bin`, `grid-meta.json` | Yes | Reproducible via `scripts/build-grid.ts` |
+| `data/seed/karlsruhe/bars.json` | Yes | OSM-derived, ODbL |
+| `data/seed/karlsruhe/districts.geojson` | Yes | OSM-derived, ODbL |
+| `data/seed/karlsruhe/grid.bin`, `grid-meta.json` | Yes | Reproducible via `scripts/build-grid.ts` |
 | Map style definition | Yes | Own work |
 | Build and import scripts | Yes | |
 | `.env.example` | Yes | Variable names and shapes only, never values |
@@ -1014,6 +1056,10 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.3 — city-parameterised data pipeline
+
+Phase 2 needs a district-boundary fetch and a tile extract, and both need OSM data hosts (Overpass, Geofabrik) the implementing agent's sandbox cannot reach. Those scripts are specified as something the project owner runs locally instead — but C10 already commits this project to a multi-city data model, and a pipeline hard-coded to Karlsruhe would just have to be generalised the first time a second city is added. Added Section 11.4: a per-city `data/cities/<slug>.json` config file that is the single seam feeding both the scripts and the `cities` row (5.1), `scripts/fetch-boundaries.ts` for district and neighbour geometry, and the same idempotent, network-scoped, fail-loud posture already established for `import-osm-bars.ts` (11.2) extended across the whole chain. Section 4.2's tree updated to a per-city `data/seed/<slug>/` layout and the new script; Section 6.2 notes that Karlsruhe's grid parameters now live in `data/cities/karlsruhe.json`, with the table there kept as a human-readable copy.
 
 ### v1.2.2 — single-container deployment path
 
@@ -1073,4 +1119,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.2*
+*End of specification v1.3*
