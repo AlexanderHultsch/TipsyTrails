@@ -5,7 +5,9 @@ import { useSearchParams } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BurgerMenu } from '../components/BurgerMenu.js';
+import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { inkStyle } from '../map/ink-style.js';
+import { useSampleTracking } from '../tracking/useSampleTracking.js';
 
 const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 
@@ -49,6 +51,7 @@ export function MapScreen() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
   const [searchParams] = useSearchParams();
+  const trackingState = useSampleTracking();
 
   useEffect(() => {
     let cancelled = false;
@@ -90,12 +93,21 @@ export function MapScreen() {
   return (
     <main className="screen screen--map">
       <BurgerMenu />
+      <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
       {tilesUnavailable && (
         <div className="map-notice" role="status">
           <p>
             Map tiles aren&apos;t installed on this server yet. The rest of Tipsy Trails works
             normally - only the map is affected.
+          </p>
+        </div>
+      )}
+      {trackingState.lastNewCells !== null && trackingState.lastNewCells > 0 && (
+        <div className="map-toast" role="status">
+          <p>
+            Revealed {trackingState.lastNewCells} new area
+            {trackingState.lastNewCells === 1 ? '' : 's'}.
           </p>
         </div>
       )}

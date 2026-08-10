@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONFIG } from '@tipsytrails/shared';
 import { App } from './App.js';
 import { ACTIVE_CITY_SLUG } from './api/city.js';
 import type { BoundaryFeatureCollection } from './api/geo-types.js';
@@ -139,6 +140,84 @@ async function flushLazyMapScreen() {
   });
 }
 
+// Same shape as renderApp + flushLazyMapScreen, but flushed via the fake
+// timers the tracking tests below install - jsdom has no real timers worth
+// waiting on for the sample-batching throttle, per the task brief.
+async function renderMapWithFakeTimers() {
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={['/map']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
+interface GeolocationStub {
+  watchPosition: ReturnType<typeof vi.fn>;
+  clearWatch: ReturnType<typeof vi.fn>;
+  triggerPosition: (overrides?: { accuracy?: number; speed?: number | null }) => void;
+}
+
+// jsdom implements no Geolocation API at all, so navigator.geolocation is
+// defined fresh on the instance for each test that needs it, and removed
+// again afterwards.
+function stubGeolocation(): GeolocationStub {
+  let nextWatchId = 1;
+  let successCallback: PositionCallback | null = null;
+  const clearWatch = vi.fn();
+  const watchPosition = vi.fn((success: PositionCallback) => {
+    successCallback = success;
+    return nextWatchId++;
+  });
+  Object.defineProperty(navigator, 'geolocation', {
+    configurable: true,
+    value: { watchPosition, clearWatch },
+  });
+  return {
+    watchPosition,
+    clearWatch,
+    triggerPosition(overrides = {}) {
+      successCallback?.({
+        coords: {
+          latitude: 49.0069,
+          longitude: 8.4037,
+          accuracy: overrides.accuracy ?? 10,
+          speed: overrides.speed ?? null,
+        },
+        timestamp: Date.now(),
+      } as GeolocationPosition);
+    },
+  };
+}
+
+function removeGeolocationStub() {
+  delete (navigator as { geolocation?: unknown }).geolocation;
+}
+
+// jsdom implements no Screen Wake Lock API either.
+function stubWakeLock() {
+  const release = vi.fn().mockResolvedValue(undefined);
+  const request = vi.fn().mockResolvedValue({ release });
+  Object.defineProperty(navigator, 'wakeLock', {
+    configurable: true,
+    value: { request },
+  });
+  return { request, release };
+}
+
+function removeWakeLockStub() {
+  delete (navigator as { wakeLock?: unknown }).wakeLock;
+}
+
+function setOnline(online: boolean) {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
+}
+
 // React.lazy's dynamic import resolves over real module-transform time on
 // its first call, not just a microtask tick - noticeably longer than the
 // single setTimeout(0) flush used elsewhere in this file. Priming it once
@@ -162,6 +241,10 @@ afterEach(() => {
   });
   container.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  removeGeolocationStub();
+  removeWakeLockStub();
+  setOnline(true);
 });
 
 describe('App', () => {
@@ -762,5 +845,263 @@ describe('App', () => {
     await flushLazyMapScreen();
 
     expect(container.querySelector('.map-container')).not.toBeNull();
+  });
+
+  describe('position sampling and the status indicator', () => {
+    function stubMapFetch(handler?: FetchHandler) {
+      return stubFetch((url, init) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (handler) {
+          return handler(url, init);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+    }
+
+    it('queues a sample from the stubbed watch and posts a batch once the throttle interval elapses, not before', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      expect(fetchMock.mock.calls.some(([input]) => input === '/api/samples')).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
+      expect(sampleCalls).toHaveLength(1);
+      const body = JSON.parse((sampleCalls[0][1] as RequestInit).body as string);
+      expect(body.samples).toHaveLength(1);
+    });
+
+    it('accumulates several samples into one batch rather than one request per position', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+        geo.triggerPosition({ accuracy: 12 });
+        geo.triggerPosition({ accuracy: 15 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
+      expect(sampleCalls).toHaveLength(1);
+      const body = JSON.parse((sampleCalls[0][1] as RequestInit).body as string);
+      expect(body.samples).toHaveLength(3);
+    });
+
+    it('queues samples while offline without posting, then flushes and empties the queue on reconnect', async () => {
+      setOnline(false);
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 2 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      expect(fetchMock.mock.calls.some(([input]) => input === '/api/samples')).toBe(false);
+      expect(container.textContent).toContain('Offline (1 queued)');
+
+      setOnline(true);
+      await act(async () => {
+        window.dispatchEvent(new Event('online'));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
+      expect(sampleCalls).toHaveLength(1);
+      expect(container.textContent).not.toContain('queued');
+      expect(container.textContent).toContain('Online');
+    });
+
+    it('leaves a sample queued when posting it fails, rather than dropping it', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(500, { code: 'internal_error', message: 'Sync failed.' });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      expect(fetchMock.mock.calls.filter(([input]) => input === '/api/samples')).toHaveLength(1);
+      expect(container.textContent).toContain('Syncing (1 queued)');
+
+      const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
+      act(() => {
+        button.click();
+      });
+      expect(container.querySelector('.tracking-indicator__panel')?.textContent).toContain(
+        'Sync failed.',
+      );
+    });
+
+    it('maps GPS accuracy to good, fair and poor at the configured boundaries', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M });
+      });
+      expect(container.textContent).toContain('GPS: Good');
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_FAIR_M });
+      });
+      expect(container.textContent).toContain('GPS: Fair');
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_FAIR_M + 1 });
+      });
+      expect(container.textContent).toContain('GPS: Poor');
+    });
+
+    it('goes to GPS poor after GPS_STALE_MS with no further fix', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M });
+      });
+      expect(container.textContent).toContain('GPS: Good');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.GPS_STALE_MS);
+      });
+      expect(container.textContent).toContain('GPS: Poor');
+    });
+
+    it('stops the geolocation watch and releases the wake lock when leaving the map screen', async () => {
+      const geo = stubGeolocation();
+      const wakeLock = stubWakeLock();
+      stubMapFetch();
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(geo.watchPosition).toHaveBeenCalledTimes(1);
+      expect(wakeLock.request).toHaveBeenCalledWith('screen');
+
+      const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+      act(() => {
+        menuButton.click();
+      });
+      const settingsLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+        (entry) => entry.textContent === 'Settings',
+      ) as HTMLAnchorElement;
+
+      await act(async () => {
+        settingsLink.click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(geo.clearWatch).toHaveBeenCalledTimes(1);
+      expect(wakeLock.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not throw when the Screen Wake Lock API is unavailable', async () => {
+      stubGeolocation();
+      stubMapFetch();
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      expect(container.querySelector('.tracking-indicator__button')).not.toBeNull();
+      expect(container.textContent).toContain('Tracking');
+    });
+
+    it('opens the tracking status explanation when the indicator is tapped', async () => {
+      stubMapFetch();
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+
+      expect(container.querySelector('.tracking-indicator__panel')).toBeNull();
+
+      const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
+      act(() => {
+        button.click();
+      });
+
+      const panel = container.querySelector('.tracking-indicator__panel');
+      expect(panel).not.toBeNull();
+      expect(panel?.textContent).toContain('Foreground tracking');
+    });
   });
 });

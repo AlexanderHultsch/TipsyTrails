@@ -297,6 +297,84 @@ a {
   color: var(--color-ink);
 }
 
+/* Section 8.6: the GPS/connection/foreground-tracking indicator, always
+   visible on the map screen, top left so it doesn't collide with the
+   burger menu (Section 8.4, top right). */
+.tracking-indicator {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 10;
+}
+
+.tracking-indicator__button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-ink);
+  border-radius: 4px;
+  background: rgba(244, 239, 230, 0.85);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tracking-indicator__panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  z-index: 11;
+  width: 18rem;
+  max-width: calc(100vw - 2rem);
+  padding: 1rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  text-align: left;
+}
+
+.tracking-indicator__panel dt {
+  font-weight: 600;
+  margin-top: 0.75rem;
+}
+
+.tracking-indicator__panel dt:first-child {
+  margin-top: 0;
+}
+
+.tracking-indicator__panel dd {
+  margin: 0.25rem 0 0;
+  font-size: 0.9375rem;
+}
+
+.tracking-indicator__panel .button {
+  margin-top: 1rem;
+}
+
+.map-toast {
+  position: absolute;
+  bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 0.5rem 1rem;
+  background: rgba(244, 239, 230, 0.9);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.map-toast p {
+  font-size: 0.9375rem;
+  margin: 0;
+}
+
 .map-notice {
   position: absolute;
   top: 50%;

@@ -1,6 +1,6 @@
 import { ACTIVE_CITY_SLUG } from './city.js';
 import type { BoundaryFeatureCollection } from './geo-types.js';
-import type { User } from './types.js';
+import type { Sample, SamplesResponse, User } from './types.js';
 
 // Thrown for both API-reported failures (server JSON with a stable `code`)
 // and network failures (fetch itself rejecting). Callers render `message`
@@ -124,6 +124,13 @@ export function changePassword(input: {
   return request<{ ok: true }>('/api/auth/change-password', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+}
+
+export function postSamples(samples: Sample[]): Promise<SamplesResponse> {
+  return request<SamplesResponse>('/api/samples', {
+    method: 'POST',
+    body: JSON.stringify({ samples }),
   });
 }
 
