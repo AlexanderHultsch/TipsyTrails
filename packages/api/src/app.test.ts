@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,11 @@ import { runMigrations } from './db/migrate.js';
 import { loadEnv, type Env } from './env.js';
 
 const migrationsDir = fileURLToPath(new URL('../migrations', import.meta.url));
+
+// The real committed data/seed/karlsruhe/grid.bin, four levels up from this
+// file's own directory to the repository root — the same style
+// routes/static-data.test.ts uses to reach data/seed.
+const REAL_SEED_DIR = fileURLToPath(new URL('../../../data/seed', import.meta.url));
 
 const testEnv: Env = {
   NODE_ENV: 'test',
@@ -149,6 +154,40 @@ describe('missing WEB_ROOT', () => {
 
     const rootResponse = await app.inject({ method: 'GET', url: '/' });
     expect(rootResponse.statusCode).toBe(404);
+
+    const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(healthResponse.statusCode).toBe(200);
+    expect(healthResponse.json()).toEqual({ status: 'ok' });
+  });
+});
+
+describe('grid.bin loaded at boot', () => {
+  it('decorates the app with a Uint16Array matching grid.bin, spot-checked against a raw read', async () => {
+    const app = buildApp({ ...testEnv, SEED_DIR: REAL_SEED_DIR }, db);
+
+    expect(app.grid).not.toBeNull();
+    expect(app.grid).toBeInstanceOf(Uint16Array);
+    // 417 x 343 cells (SPEC.md Section 6.2), one Uint16 entry per cell.
+    expect(app.grid?.length).toBe(417 * 343);
+
+    const rawBuffer = readFileSync(join(REAL_SEED_DIR, 'karlsruhe', 'grid.bin'));
+    const rawGrid = new Uint16Array(
+      rawBuffer.buffer.slice(rawBuffer.byteOffset, rawBuffer.byteOffset + rawBuffer.byteLength),
+    );
+    const knownIndex = rawGrid.findIndex((value) => value !== 0xffff);
+    expect(knownIndex).toBeGreaterThanOrEqual(0);
+    // The value at that index is a real district index from grid-meta.json
+    // (27 districts, so every non-sentinel value is < 27), and the app's
+    // loaded grid must carry the identical value at the identical index.
+    expect(rawGrid[knownIndex]).toBeLessThan(27);
+    expect(app.grid?.[knownIndex]).toBe(rawGrid[knownIndex]);
+  });
+
+  it('still starts and answers /api/health when grid.bin is absent, logging the absence at error level', async () => {
+    const missingSeedDir = join(tmpdir(), `tipsytrails-missing-grid-${randomUUID()}`);
+    const app = buildApp({ ...testEnv, SEED_DIR: missingSeedDir }, db);
+
+    expect(app.grid).toBeNull();
 
     const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
     expect(healthResponse.statusCode).toBe(200);

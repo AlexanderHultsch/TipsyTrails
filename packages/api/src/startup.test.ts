@@ -2,14 +2,23 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
 import { initialiseDatabase } from './startup.js';
 
+// The real committed seed tree (data/seed/karlsruhe and its sibling
+// data/cities/karlsruhe.json), three levels up from this file's own
+// directory to the repository root — the same style
+// routes/static-data.test.ts uses to reach data/seed. City seeding
+// (db/seed-city.ts) needs both on every boot, unlike admin seeding.
+const REAL_SEED_DIR = fileURLToPath(new URL('../../../data/seed', import.meta.url));
+
 const baseEnv = {
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
   SESSION_SECRET: '01234567890123456789012345678901',
+  SEED_DIR: REAL_SEED_DIR,
 };
 
 let dbPath: string;

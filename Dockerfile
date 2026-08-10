@@ -29,11 +29,21 @@ ENV NODE_ENV=production
 ENV PORT=3000
 WORKDIR /app
 
+# Everything the running container reads on boot, and where that read
+# lives. Check this list when adding a new path a route or startup step
+# reads — packages/api/src/docker-image.test.ts fails if it falls out of
+# sync with what is actually copied below.
+#   node_modules + dist  the compiled API                    (build stage)
+#   migrations            applied by runMigrations() on boot   (startup.ts)
+#   public                 the built SPA
+#   data/seed              per-city grid + geojson             (routes/static-data.ts)
+#   data/cities             <slug>.json city config             (db/seed-city.ts)
 COPY --from=build --chown=node:node /app/deploy/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages/api/dist ./dist
 COPY --from=build --chown=node:node /app/packages/api/migrations ./migrations
 COPY --from=build --chown=node:node /app/packages/web/dist ./public
 COPY --chown=node:node data/seed ./data/seed
+COPY --chown=node:node data/cities ./data/cities
 
 EXPOSE 3000
 USER node

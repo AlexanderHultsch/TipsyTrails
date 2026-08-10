@@ -35,8 +35,15 @@ function sendStaticFileNotFound(reply: FastifyReply): void {
   });
 }
 
+// The one place `env.SEED_DIR` is resolved against its default, so every
+// consumer of the seed tree (this route, city/district seeding, the grid.bin
+// load at boot) agrees on the same directory.
+export function resolveSeedDir(env: Env): string {
+  return env.SEED_DIR ?? defaultSeedDir;
+}
+
 export function staticDataRoutes(env: Env) {
-  const seedDir = env.SEED_DIR ?? defaultSeedDir;
+  const seedDir = resolveSeedDir(env);
 
   return async function staticDataRoutesPlugin(app: FastifyInstance): Promise<void> {
     await app.register(fastifyStatic, {

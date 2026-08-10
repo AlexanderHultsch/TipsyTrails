@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyCookie from '@fastify/cookie';
@@ -6,23 +6,44 @@ import fastifyStatic from '@fastify/static';
 import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { ACTIVE_CITY_SLUG } from './active-city.js';
 import { mustChangePasswordGate } from './auth/password-gate.js';
 import type { Env } from './env.js';
 import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
+import { cityRoutes } from './routes/city.js';
 import { healthRoutes } from './routes/health.js';
-import { staticDataRoutes } from './routes/static-data.js';
+import { resolveSeedDir, staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: Database.Database;
+    // The cell -> district index grid (SPEC.md Section 5.2), or null when
+    // grid.bin is absent at boot (Section 13.2's tile-missing reasoning
+    // applies the same way: this is one feature's data, not the whole
+    // site's). Routes that need it must check for null and answer with a
+    // clear error, the same way routes/tiles.ts does when the tile extract
+    // is missing.
+    grid: Uint16Array | null;
   }
 }
 
 const defaultWebRoot = fileURLToPath(new URL('../public', import.meta.url));
+
+function loadGrid(gridPath: string): Uint16Array {
+  const fileBuffer = readFileSync(gridPath);
+  // Copied into a fresh, zero-offset ArrayBuffer so the Uint16Array view is
+  // guaranteed 2-byte aligned regardless of where Node placed the Buffer's
+  // backing allocation.
+  const copy = fileBuffer.buffer.slice(
+    fileBuffer.byteOffset,
+    fileBuffer.byteOffset + fileBuffer.byteLength,
+  );
+  return new Uint16Array(copy);
+}
 
 export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   const app = Fastify({
@@ -53,9 +74,22 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
     return payload;
   });
 
+  const gridPath = join(resolveSeedDir(env), ACTIVE_CITY_SLUG, 'grid.bin');
+  if (existsSync(gridPath)) {
+    app.decorate('grid', loadGrid(gridPath));
+  } else {
+    app.log.error(
+      `Grid file not found at ${gridPath}. Regenerate it with ` +
+        `scripts/build-grid.ts --city=${ACTIVE_CITY_SLUG}; routes needing the grid will answer ` +
+        'with an error until it is present.',
+    );
+    app.decorate('grid', null);
+  }
+
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
+  app.register(cityRoutes);
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
   const tilesAvailable = existsSync(tilesPath);
