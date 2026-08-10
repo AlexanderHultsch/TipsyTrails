@@ -13,6 +13,7 @@ import { requireAuth } from '../auth/cookie.js';
 import { cellsWithinRevealRadius } from '../fog/reveal.js';
 import { isBitSet, maskByteLength, setBit } from '../fog/mask.js';
 import { createRateLimiter } from '../http/rate-limit.js';
+import { toBarSummary, type BarSummary, type DiscoveredBarRow } from './bars.js';
 
 // SPEC.md Section 5.5/7.3/7.6/9.2: fog-of-war state (GET /api/fog,
 // POST /api/samples) and the progress it derives (GET /api/progress). Kept
@@ -135,6 +136,12 @@ interface AcceptedPosition extends LatLon {
   atMs: number;
 }
 
+interface ActiveBarRow {
+  id: number;
+  lat: number;
+  lon: number;
+}
+
 // SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation
 // rule: "the previous accepted position lives in memory only ... discarded
 // on restart." A plain in-memory Map, recreated every time this plugin is
@@ -238,6 +245,18 @@ export async function fogRoutes(app: FastifyInstance): Promise<void> {
       let previous = lastAccepted.get(userId) ?? null;
       const revealCandidates = new Set<number>();
 
+      // SPEC.md Section 7.4: discovery is checked against every accepted
+      // sample, independent of the reveal-speed gate below — a sample too
+      // fast to reveal fog still discovers a bar it passes. Loaded once per
+      // request rather than per sample; a city's active bar count is small
+      // enough that this beats a spatial query per sample.
+      const activeBars = db
+        .prepare<[number], ActiveBarRow>(
+          `SELECT id, lat, lon FROM bars WHERE city_id = ? AND status = 'active'`,
+        )
+        .all(city.id);
+      const discoveryCandidateIds = new Set<number>();
+
       for (const sample of sorted) {
         // 1. accuracy
         if (sample.accuracy > CONFIG.FOG_MAX_ACCURACY_M) {
@@ -268,6 +287,12 @@ export async function fogRoutes(app: FastifyInstance): Promise<void> {
         // 5. accepted.
         previous = { lat: sample.lat, lon: sample.lon, atMs: sample.timestamp };
 
+        for (const bar of activeBars) {
+          if (haversineDistanceM(sample, bar) <= CONFIG.BAR_DISCOVERY_RADIUS_M) {
+            discoveryCandidateIds.add(bar.id);
+          }
+        }
+
         // Reveal speed: from the sample where present (Geolocation API
         // speed is m/s), otherwise derived from the previous accepted
         // sample; neither available -> the sample reveals (Section 7.3).
@@ -283,8 +308,41 @@ export async function fogRoutes(app: FastifyInstance): Promise<void> {
         lastAccepted.set(userId, previous);
       }
 
+      // SPEC.md Section 7.4: discovery is permanent and independent of fog
+      // state, so it runs (and is returned) whether or not this batch
+      // revealed any fog at all — never gated behind `revealCandidates`.
+      const applyDiscoveries = db.transaction((): BarSummary[] => {
+        const insertDiscovery = db.prepare(
+          'INSERT OR IGNORE INTO bar_discoveries (user_id, bar_id, discovered_at) VALUES (?, ?, ?)',
+        );
+        const nowS = Math.floor(nowMs / 1000);
+        const newlyDiscoveredIds: number[] = [];
+        for (const barId of discoveryCandidateIds) {
+          const result = insertDiscovery.run(userId, barId, nowS);
+          if (result.changes > 0) {
+            newlyDiscoveredIds.push(barId);
+          }
+        }
+        if (newlyDiscoveredIds.length === 0) {
+          return [];
+        }
+        const placeholders = newlyDiscoveredIds.map(() => '?').join(', ');
+        const rows = db
+          .prepare<unknown[], DiscoveredBarRow>(
+            `SELECT bars.id AS id, bars.district_id AS district_id, bars.name AS name,
+                    bars.address AS address, bars.lat AS lat, bars.lon AS lon, bars.source AS source,
+                    bar_discoveries.discovered_at AS discovered_at
+             FROM bars
+             JOIN bar_discoveries ON bar_discoveries.bar_id = bars.id
+             WHERE bars.id IN (${placeholders}) AND bar_discoveries.user_id = ?`,
+          )
+          .all(...newlyDiscoveredIds, userId);
+        return rows.map(toBarSummary);
+      });
+      const newBars = discoveryCandidateIds.size > 0 ? applyDiscoveries() : [];
+
       if (revealCandidates.size === 0) {
-        return { newCells: 0 };
+        return { newCells: 0, newBars };
       }
 
       const applyReveal = db.transaction((): number => {
@@ -354,9 +412,9 @@ export async function fogRoutes(app: FastifyInstance): Promise<void> {
 
       const newCells = applyReveal();
       // Section 9.2's full shape is { newCells, newBars, visitUpdates };
-      // newBars (Phase 4) and visitUpdates (Phase 5) are not built yet and
-      // are deliberately omitted rather than sent as fabricated zeros.
-      return { newCells };
+      // visitUpdates (Phase 5) is not built yet and is deliberately omitted
+      // rather than sent as a fabricated value.
+      return { newCells, newBars };
     },
   );
 

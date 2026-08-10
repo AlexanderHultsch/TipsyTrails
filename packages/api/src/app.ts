@@ -14,6 +14,7 @@ import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
+import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
 import { fogRoutes } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
@@ -100,6 +101,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(accountRoutes);
   app.register(cityRoutes);
   app.register(fogRoutes);
+  app.register(barsRoutes);
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
   const tilesAvailable = existsSync(tilesPath);

@@ -5,6 +5,7 @@ import type Database from 'better-sqlite3';
 import { openDatabase } from './db/index.js';
 import { runMigrations } from './db/migrate.js';
 import { seedAdmin } from './db/seed-admin.js';
+import { seedBars } from './db/seed-bars.js';
 import { seedCity } from './db/seed-city.js';
 import type { Env } from './env.js';
 
@@ -17,6 +18,7 @@ export async function initialiseDatabase(env: Env): Promise<Database.Database> {
   runMigrations(db, migrationsDir);
   await seedAdmin(db, env);
   seedCity(db, env);
+  seedBars(db, env);
 
   return db;
 }
