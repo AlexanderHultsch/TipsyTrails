@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
+import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { mustChangePasswordGate } from './auth/password-gate.js';
@@ -12,6 +13,7 @@ import { applySecurityHeaders } from './http/security-headers.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
+import { tilesRoutes } from './routes/tiles.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -53,6 +55,17 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
+
+  const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
+  const tilesAvailable = existsSync(tilesPath);
+  if (!tilesAvailable) {
+    app.log.error(
+      `Tile extract not found at ${tilesPath}. Download it from ` +
+        'https://github.com/AlexanderHultsch/TipsyTrails/releases or regenerate it with ' +
+        'scripts/extract-tiles.sh; /tiles/* will answer with an error until it is present.',
+    );
+  }
+  app.register(tilesRoutes(env, tilesAvailable));
 
   const webRoot = env.WEB_ROOT ?? defaultWebRoot;
   if (existsSync(webRoot)) {

@@ -123,6 +123,24 @@ describe('loadEnv', () => {
     expect(env.WEB_ROOT).toBe('/srv/app');
   });
 
+  it('applies the default TILES_DIR when absent', () => {
+    const env = loadEnv(validEnv);
+
+    expect(env.TILES_DIR).toBe('/data/tiles');
+  });
+
+  it('treats an empty TILES_DIR as absent, falling back to the default', () => {
+    const env = loadEnv({ ...validEnv, TILES_DIR: '' });
+
+    expect(env.TILES_DIR).toBe('/data/tiles');
+  });
+
+  it('preserves a real TILES_DIR value unchanged', () => {
+    const env = loadEnv({ ...validEnv, TILES_DIR: '/srv/tiles' });
+
+    expect(env.TILES_DIR).toBe('/srv/tiles');
+  });
+
   it('falls back to the default port when PORT is empty and API_PORT is absent', () => {
     const env = loadEnv({ ...validEnv, PORT: '' });
 

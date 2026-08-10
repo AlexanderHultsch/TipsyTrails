@@ -15,16 +15,18 @@ export const envSchema = z.object({
   ADMIN_USERNAME: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   WEB_ROOT: z.string().transform(emptyToUndefined).optional(),
+  TILES_DIR: z.string().default('/data/tiles'),
 });
 
 export type Env = z.infer<typeof envSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const { API_PORT, PORT, DATABASE_PATH, DB_PATH, ...rest } = source;
+  const { API_PORT, PORT, DATABASE_PATH, DB_PATH, TILES_DIR, ...rest } = source;
   const normalised = {
     ...rest,
     API_PORT: emptyToUndefined(API_PORT) ?? emptyToUndefined(PORT),
     DATABASE_PATH: emptyToUndefined(DATABASE_PATH) ?? emptyToUndefined(DB_PATH),
+    TILES_DIR: emptyToUndefined(TILES_DIR),
   };
   const result = envSchema.safeParse(normalised);
   if (!result.success) {

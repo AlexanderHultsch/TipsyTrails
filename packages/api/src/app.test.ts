@@ -19,6 +19,7 @@ const testEnv: Env = {
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
   DATABASE_PATH: '/tmp/test.db',
   SESSION_SECRET: '0123456789012345678901234567890123',
+  TILES_DIR: '/data/tiles',
 };
 
 const indexHtml = '<!doctype html><html><body>Tipsy Trails SPA shell</body></html>';
