@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
-import type { Env } from './env.js';
+import { loadEnv, type Env } from './env.js';
 
 const testEnv: Env = {
   NODE_ENV: 'test',
@@ -102,6 +102,17 @@ describe('SPA static serving', () => {
     expect(response.headers['cache-control']).toBe('private, no-store');
     expect(response.body).not.toBe(indexHtml);
     expect(() => response.json()).not.toThrow();
+  });
+
+  it('resolves an empty WEB_ROOT to undefined so buildApp receives no override', () => {
+    const env = loadEnv({
+      PUBLIC_ORIGIN: testEnv.PUBLIC_ORIGIN,
+      DATABASE_PATH: testEnv.DATABASE_PATH,
+      SESSION_SECRET: testEnv.SESSION_SECRET,
+      WEB_ROOT: '',
+    });
+
+    expect(env.WEB_ROOT).toBeUndefined();
   });
 });
 

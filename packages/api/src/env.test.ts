@@ -104,4 +104,49 @@ describe('loadEnv', () => {
       }),
     ).toThrow();
   });
+
+  it('treats an empty WEB_ROOT as absent', () => {
+    const env = loadEnv({ ...validEnv, WEB_ROOT: '' });
+
+    expect(env.WEB_ROOT).toBeUndefined();
+  });
+
+  it('treats a whitespace-only WEB_ROOT as absent', () => {
+    const env = loadEnv({ ...validEnv, WEB_ROOT: '   ' });
+
+    expect(env.WEB_ROOT).toBeUndefined();
+  });
+
+  it('preserves a real WEB_ROOT value unchanged', () => {
+    const env = loadEnv({ ...validEnv, WEB_ROOT: '/srv/app' });
+
+    expect(env.WEB_ROOT).toBe('/srv/app');
+  });
+
+  it('falls back to the default port when PORT is empty and API_PORT is absent', () => {
+    const env = loadEnv({ ...validEnv, PORT: '' });
+
+    expect(env.API_PORT).toBe(3000);
+  });
+
+  it('falls back to DATABASE_PATH when DB_PATH is empty and DATABASE_PATH is set', () => {
+    const env = loadEnv({ ...validEnv, DB_PATH: '' });
+
+    expect(env.DATABASE_PATH).toBe(validEnv.DATABASE_PATH);
+  });
+
+  it('still throws naming DATABASE_PATH when DB_PATH is empty and DATABASE_PATH is absent', () => {
+    let message = '';
+    try {
+      loadEnv({
+        PUBLIC_ORIGIN: validEnv.PUBLIC_ORIGIN,
+        SESSION_SECRET: validEnv.SESSION_SECRET,
+        DB_PATH: '',
+      });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+
+    expect(message).toContain('DATABASE_PATH');
+  });
 });
