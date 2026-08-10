@@ -14,6 +14,13 @@ export interface SampleTrackingState {
   queueDepth: number;
   lastNewCells: number | null;
   postError: string | null;
+  // Increments once per successful POST /api/samples that actually revealed
+  // a cell (result.newCells > 0). Unlike lastNewCells - a count that can
+  // repeat the same value across two different batches - this is monotonic,
+  // so it is what map/fog/useFogLayer.ts depends on to notice "a reveal
+  // just happened" and refetch the mask (see that file's own comment on
+  // why GET /api/fog is refetched rather than diffed some cleverer way).
+  revealVersion: number;
 }
 
 // Section 7.2 + 8.6: watches position via watchPosition while the map
@@ -34,6 +41,7 @@ export function useSampleTracking(): SampleTrackingState {
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [lastNewCells, setLastNewCells] = useState<number | null>(null);
   const [postError, setPostError] = useState<string | null>(null);
+  const [revealVersion, setRevealVersion] = useState(0);
 
   useEffect(() => {
     function scheduleStaleCheck() {
@@ -117,6 +125,9 @@ export function useSampleTracking(): SampleTrackingState {
         queueRef.current = queueRef.current.slice(batch.length);
         setQueueDepth(queueRef.current.length);
         setLastNewCells(result.newCells);
+        if (result.newCells > 0) {
+          setRevealVersion((version) => version + 1);
+        }
         setPostError(null);
       } catch (err) {
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
@@ -176,5 +187,6 @@ export function useSampleTracking(): SampleTrackingState {
     queueDepth,
     lastNewCells,
     postError,
+    revealVersion,
   };
 }

@@ -45,11 +45,24 @@ function ringCount(feature: BoundaryFeatureCollection['features'][number]): numb
 // library. mapInstances lets tests reach the last constructed instance to
 // assert on lifecycle calls such as remove().
 const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoisted(() => {
-  const instances: { remove: ReturnType<typeof vi.fn> }[] = [];
+  const instances: { remove: ReturnType<typeof vi.fn>; container: HTMLDivElement }[] = [];
+  // Section 7.3's fog layer (map/fog/) additionally needs loaded()/
+  // getContainer() - loaded() true so FogController mounts synchronously
+  // instead of waiting for a 'load' event this stand-in never fires, and
+  // getContainer() a real element so its 2D canvas fallback (the only path
+  // reachable here, since jsdom has no WebGL2 either) has somewhere to
+  // attach to. addLayer/removeLayer/getLayer are stubbed too, defensively,
+  // for whichever fog tests below force the WebGL2 detector on instead.
   class MockMap {
     remove = vi.fn();
     on = vi.fn();
     off = vi.fn();
+    addLayer = vi.fn();
+    removeLayer = vi.fn();
+    getLayer = vi.fn();
+    loaded = vi.fn(() => true);
+    container = document.createElement('div');
+    getContainer = () => this.container;
     constructor() {
       instances.push(this);
     }
@@ -83,6 +96,18 @@ function jsonResponse(status: number, body: unknown) {
     ok: status >= 200 && status < 300,
     status,
     text: async () => JSON.stringify(body),
+  } as unknown as Response;
+}
+
+// GET /api/fog's shape (packages/api/src/routes/fog.ts, api/client.ts's
+// getFogMask): a raw application/octet-stream body plus the per-district
+// counts in an X-Fog-Progress header - jsonResponse above doesn't fit it.
+function fogResponse(mask: Uint8Array, progress: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'X-Fog-Progress': JSON.stringify(progress) }),
+    arrayBuffer: async () => mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength),
   } as unknown as Response;
 }
 
@@ -722,6 +747,50 @@ describe('App', () => {
     expect(container.querySelector('#settings-anonymous')).not.toBeNull();
     expect(mapInstance.remove).toHaveBeenCalledTimes(1);
     expect(removeProtocolMock).toHaveBeenCalledWith('pmtiles');
+  });
+
+  it('fetches the fog mask and grid on mount and renders the 2D canvas fallback (jsdom has no WebGL2)', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, {
+          slug: 'karlsruhe',
+          name: 'Karlsruhe',
+          originLat: 48.94,
+          originLon: 8.275,
+          gridWidth: 3,
+          gridHeight: 3,
+          cellSizeM: 50,
+          playableCells: 9,
+          districts: [],
+        });
+      }
+      if (url === '/api/fog') {
+        return fogResponse(new Uint8Array(2), {
+          revealedCells: 0,
+          playableCells: 9,
+          districts: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+    await flushLazyMapScreen();
+
+    expect(mapInstances).toHaveLength(1);
+    const [mapInstance] = mapInstances;
+    // No real WebGL2 in jsdom, so the fog controller's own (un-injected)
+    // detector takes the Section 7.3 fallback path here - the same
+    // selection logic is exercised directly, with a forced detector, in
+    // map/fog/fog-controller.test.ts.
+    expect(mapInstance.container.querySelector('canvas.fog-canvas-fallback')).not.toBeNull();
   });
 
   it('renders the city outline and the greyed-out, non-interactive neighbour shapes on /city', async () => {

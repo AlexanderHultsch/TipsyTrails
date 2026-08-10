@@ -6,6 +6,7 @@ import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
+import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
 import { useSampleTracking } from '../tracking/useSampleTracking.js';
 
@@ -48,10 +49,14 @@ function centerFromSearchParams(params: URLSearchParams): [number, number] | nul
 
 export function MapScreen() {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
+  // A state, not a ref: Section 7.3's fog layer (useFogLayer below) needs a
+  // render to see the map instance once the mount effect creates it - a
+  // ref update alone would not schedule one.
+  const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [searchParams] = useSearchParams();
   const trackingState = useSampleTracking();
+  useFogLayer(mapInstance, trackingState.revealVersion);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,11 +82,11 @@ export function MapScreen() {
       zoom: INITIAL_ZOOM,
       attributionControl: false,
     });
-    mapRef.current = map;
+    setMapInstance(map);
 
     return () => {
       cancelled = true;
-      mapRef.current = null;
+      setMapInstance(null);
       map.remove();
       maplibregl.removeProtocol('pmtiles');
     };
