@@ -9,4 +9,6 @@ data/db/*
 !data/db/.gitkeep
 data/tiles/
 
+.tmp-input/
+
 .DS_Store

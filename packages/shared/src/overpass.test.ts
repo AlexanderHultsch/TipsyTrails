@@ -3,12 +3,15 @@ import type { CityConfig } from './city.js';
 import {
   buildCityAndDistrictsQuery,
   buildNeighboursQuery,
+  filterLeafDistrictRelations,
+  filterMunicipalityNeighbourRelations,
   findCityRelation,
   findDistrictRelations,
   findNeighbourRelations,
   parseOverpassPayload,
   relationToFeature,
   relationToGeometry,
+  type GeoJsonPolygon,
   type OverpassRelation,
   type OverpassResponse,
 } from './overpass.js';
@@ -132,12 +135,87 @@ describe('parseOverpassPayload', () => {
   });
 });
 
+describe('parseOverpassPayload with GeoJSON input', () => {
+  const geoJsonPolygon = {
+    type: 'Polygon',
+    coordinates: [
+      [
+        [8.4, 49.0],
+        [8.5, 49.0],
+        [8.5, 49.1],
+        [8.4, 49.0],
+      ],
+    ],
+  };
+
+  it('accepts a GeoJSON FeatureCollection and yields the same shape as the equivalent Overpass payload', () => {
+    const overpassPayload = JSON.stringify({
+      version: 0.6,
+      elements: [relation(10, { boundary: 'administrative', name: 'Durlach', admin_level: '9' })],
+    });
+    const geoJsonPayload = JSON.stringify({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          id: 'relation/10',
+          properties: { boundary: 'administrative', name: 'Durlach', admin_level: '9' },
+          geometry: geoJsonPolygon,
+        },
+      ],
+    });
+
+    const fromOverpass = parseOverpassPayload(overpassPayload, 'application/json');
+    const fromGeoJson = parseOverpassPayload(geoJsonPayload, 'application/json');
+
+    expect(fromOverpass.elements).toHaveLength(1);
+    expect(fromGeoJson.elements).toHaveLength(1);
+    const el = fromGeoJson.elements[0] as OverpassRelation;
+    expect(el.type).toBe('relation');
+    expect(el.id).toBe(10);
+    expect(el.tags?.name).toBe('Durlach');
+    expect(el.tags?.admin_level).toBe('9');
+  });
+
+  it('drops Point features (admin_centre/label nodes), keeping only polygon boundaries', () => {
+    const geoJsonPayload = JSON.stringify({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          id: 'node/1',
+          properties: { name: 'Durlach' },
+          geometry: { type: 'Point', coordinates: [8.45, 49.05] },
+        },
+        {
+          type: 'Feature',
+          id: 'relation/11',
+          properties: { boundary: 'administrative', name: 'Durlach', admin_level: '9' },
+          geometry: geoJsonPolygon,
+        },
+      ],
+    });
+
+    const response = parseOverpassPayload(geoJsonPayload, 'application/json');
+    expect(response.elements).toHaveLength(1);
+    expect((response.elements[0] as OverpassRelation).id).toBe(11);
+  });
+});
+
 function relation(
   id: number,
   tags: Record<string, string>,
   members: OverpassRelation['members'] = [],
 ): OverpassRelation {
   return { type: 'relation', id, tags, members };
+}
+
+function geoRelation(
+  id: number,
+  tags: Record<string, string>,
+  geometry: GeoJsonPolygon,
+): OverpassRelation {
+  return { type: 'relation', id, tags, members: [], geometry };
 }
 
 describe('findCityRelation', () => {
@@ -305,5 +383,84 @@ describe('relationToFeature', () => {
     expect(feature.type).toBe('Feature');
     expect(feature.properties.osm_id).toBe(99);
     expect(feature.properties.name).toBe('Durlach');
+  });
+});
+
+describe('filterLeafDistrictRelations', () => {
+  const level9Containing = geoRelation(
+    100,
+    { boundary: 'administrative', name: 'Wettersbach', admin_level: '9' },
+    {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [8.0, 49.0],
+          [8.5, 49.0],
+          [8.5, 49.5],
+          [8.0, 49.5],
+          [8.0, 49.0],
+        ],
+      ],
+    },
+  );
+  const level10Inside = geoRelation(
+    101,
+    { boundary: 'administrative', name: 'Grünwettersbach', admin_level: '10' },
+    {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [8.1, 49.1],
+          [8.2, 49.1],
+          [8.2, 49.2],
+          [8.1, 49.2],
+          [8.1, 49.1],
+        ],
+      ],
+    },
+  );
+  const level9Standalone = geoRelation(
+    102,
+    { boundary: 'administrative', name: 'Durlach', admin_level: '9' },
+    {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [9.0, 50.0],
+          [9.5, 50.0],
+          [9.5, 50.5],
+          [9.0, 50.5],
+          [9.0, 50.0],
+        ],
+      ],
+    },
+  );
+
+  it('drops a level-9 area that contains a level-10 area, keeping only the level-10 one', () => {
+    const result = filterLeafDistrictRelations([level9Containing, level10Inside], [9, 10]);
+    expect(result.map((r) => r.id)).toEqual([101]);
+  });
+
+  it('keeps a level-9 area with nothing inside it', () => {
+    const result = filterLeafDistrictRelations([level9Standalone], [9, 10]);
+    expect(result.map((r) => r.id)).toEqual([102]);
+  });
+});
+
+describe('filterMunicipalityNeighbourRelations', () => {
+  it('drops a level-6 (county) relation and keeps a level-8 (municipality) relation', () => {
+    const county = relation(200, {
+      boundary: 'administrative',
+      name: 'Landkreis Karlsruhe',
+      admin_level: '6',
+    });
+    const municipality = relation(201, {
+      boundary: 'administrative',
+      name: 'Weingarten',
+      admin_level: '8',
+    });
+
+    const result = filterMunicipalityNeighbourRelations([county, municipality], [6, 8]);
+    expect(result.map((r) => r.id)).toEqual([201]);
   });
 });

@@ -66,6 +66,13 @@ export interface OverpassRelation {
   id: number;
   tags?: Record<string, string>;
   members: OverpassWayMember[];
+  /**
+   * Present only when this relation was derived from a GeoJSON input
+   * (see below) — the geometry overpass-turbo already computed, carried
+   * through as-is. When set, relationToGeometry returns it directly instead
+   * of chaining `members` into rings.
+   */
+  geometry?: GeoJsonPolygon | GeoJsonMultiPolygon;
 }
 
 export type OverpassElement = OverpassRelation | { type: 'node' | 'way'; id: number };
@@ -77,6 +84,92 @@ export interface OverpassResponse {
 }
 
 export class OverpassResponseError extends Error {}
+
+// ---------------------------------------------------------------------------
+// GeoJSON input — an alternative shape for --input-city / --input-neighbours
+// (SPEC.md 11.4). A human exporting boundaries from overpass-turbo naturally
+// produces a GeoJSON FeatureCollection, not the raw Overpass "out geom" JSON
+// this pipeline otherwise expects. Detected by payload shape and converted
+// to an OverpassResponse right here, at parse time, so every downstream step
+// — the city/district/neighbour lookups, the filtering rules, and
+// relationToFeature — runs identically for either input format. There is no
+// separate, forked pipeline for GeoJSON input.
+// ---------------------------------------------------------------------------
+
+interface RawGeoJsonFeature {
+  type: 'Feature';
+  id?: string | number;
+  properties?: Record<string, unknown> | null;
+  geometry?: { type: string; coordinates: unknown } | null;
+}
+
+interface RawGeoJsonFeatureCollection {
+  type: 'FeatureCollection';
+  features: RawGeoJsonFeature[];
+}
+
+function isGeoJsonFeatureCollection(value: unknown): value is RawGeoJsonFeatureCollection {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { type?: unknown }).type === 'FeatureCollection' &&
+    Array.isArray((value as { features?: unknown }).features)
+  );
+}
+
+/** Extracts the numeric OSM id from a GeoJSON feature's `id` (e.g. "relation/62518"). */
+function osmIdFromGeoJsonFeature(feature: RawGeoJsonFeature): number {
+  const id = feature.id;
+  if (typeof id === 'number') return id;
+  const match = typeof id === 'string' ? id.match(/(\d+)$/) : null;
+  if (!match) {
+    const name = feature.properties?.name;
+    throw new OverpassResponseError(
+      `GeoJSON feature${typeof name === 'string' ? ` "${name}"` : ''} has no usable "id" field ` +
+        `to derive an OSM id from.`,
+    );
+  }
+  return Number(match[1]);
+}
+
+function geoJsonPolygonGeometry(
+  geometry: RawGeoJsonFeature['geometry'],
+): GeoJsonPolygon | GeoJsonMultiPolygon | undefined {
+  if (geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')) {
+    return geometry as GeoJsonPolygon | GeoJsonMultiPolygon;
+  }
+  return undefined;
+}
+
+/**
+ * Converts a GeoJSON FeatureCollection into an OverpassResponse. Drops every
+ * non-polygon feature — the overpass-turbo export contains Point features
+ * (OSM admin_centre/label nodes), which are not boundaries and carry no
+ * usable geometry. Tags come straight from `properties` (already the OSM
+ * tags, exactly as overpass-turbo exports them); the geometry is carried
+ * through as-is.
+ */
+function geoJsonToOverpassResponse(collection: RawGeoJsonFeatureCollection): OverpassResponse {
+  const elements: OverpassRelation[] = [];
+  for (const feature of collection.features) {
+    const geometry = geoJsonPolygonGeometry(feature.geometry);
+    if (!geometry) continue;
+
+    const tags: Record<string, string> = {};
+    for (const [key, value] of Object.entries(feature.properties ?? {})) {
+      if (typeof value === 'string') tags[key] = value;
+    }
+
+    elements.push({
+      type: 'relation',
+      id: osmIdFromGeoJsonFeature(feature),
+      tags,
+      members: [],
+      geometry,
+    });
+  }
+  return { elements };
+}
 
 // ---------------------------------------------------------------------------
 // Query construction — pure functions of the city config, per SPEC.md 11.4:
@@ -191,13 +284,24 @@ export function parseOverpassPayload(
     );
   }
 
+  if (isGeoJsonFeatureCollection(parsed)) {
+    if (parsed.features.length === 0) {
+      throw new OverpassResponseError(
+        `Expected a GeoJSON FeatureCollection with at least one feature, got zero. This usually ` +
+          `means the overpass-turbo export was run against the wrong query.`,
+      );
+    }
+    return geoJsonToOverpassResponse(parsed);
+  }
+
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
     !Array.isArray((parsed as { elements?: unknown }).elements)
   ) {
     throw new OverpassResponseError(
-      `Expected an Overpass response with an "elements" array, got: ${raw.slice(0, 200)}`,
+      `Expected an Overpass response with an "elements" array, or a GeoJSON FeatureCollection, ` +
+        `got: ${raw.slice(0, 200)}`,
     );
   }
 
@@ -384,6 +488,10 @@ function pointInRing(point: GeoJsonPosition, ring: GeoJsonPosition[]): boolean {
 export function relationToGeometry(
   relation: OverpassRelation,
 ): GeoJsonPolygon | GeoJsonMultiPolygon {
+  if (relation.geometry) {
+    return relation.geometry;
+  }
+
   const outerSegments = relation.members
     .filter((m) => m.role === 'outer' && m.geometry && m.geometry.length >= 2)
     .map((m) => wayGeometryToLine(m.geometry!));
@@ -422,4 +530,97 @@ export function relationToFeature(relation: OverpassRelation): GeoJsonFeature {
     },
     geometry: relationToGeometry(relation),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Filtering rules that fix real defects in the raw admin data (SPEC.md
+// 11.4), applied after findDistrictRelations / findNeighbourRelations and
+// before writing. These apply identically regardless of input format, since
+// both formats have already been normalised to OverpassRelation by this
+// point.
+// ---------------------------------------------------------------------------
+
+function outerRingsOf(geometry: GeoJsonPolygon | GeoJsonMultiPolygon): GeoJsonPosition[][] {
+  return geometry.type === 'Polygon'
+    ? [geometry.coordinates[0]]
+    : geometry.coordinates.map((polygon) => polygon[0]);
+}
+
+function ringCentroid(ring: GeoJsonPosition[]): GeoJsonPosition {
+  const points = isRingClosed(ring) ? ring.slice(0, -1) : ring;
+  let sumX = 0;
+  let sumY = 0;
+  for (const [x, y] of points) {
+    sumX += x;
+    sumY += y;
+  }
+  return [sumX / points.length, sumY / points.length];
+}
+
+/**
+ * A single point representing a polygon's location, for the district leaf
+ * containment test below: the centroid of its largest outer ring.
+ * Administrative boundaries are close enough to convex that this lands
+ * inside the shape in practice.
+ */
+function representativePoint(geometry: GeoJsonPolygon | GeoJsonMultiPolygon): GeoJsonPosition {
+  const rings = outerRingsOf(geometry);
+  const largest = rings.reduce((best, ring) =>
+    Math.abs(signedArea(ring)) > Math.abs(signedArea(best)) ? ring : best,
+  );
+  return ringCentroid(largest);
+}
+
+function polygonContainsPoint(
+  geometry: GeoJsonPolygon | GeoJsonMultiPolygon,
+  point: GeoJsonPosition,
+): boolean {
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.some(([outer, ...holes]) => {
+    return pointInRing(point, outer) && !holes.some((hole) => pointInRing(point, hole));
+  });
+}
+
+/**
+ * Keeps only the leaves of the district admin-level hierarchy. Karlsruhe's
+ * export has relations at both admin_level 9 and 10, and some level-9 areas
+ * (e.g. Wettersbach) geometrically contain level-10 areas (Grünwettersbach,
+ * Palmbach) — treating both as districts would count that area twice and
+ * corrupt the percentages Sections 6.3 and 7.6 compute. A relation is
+ * dropped when some other relation at a strictly higher configured admin
+ * level has its representative point inside it; relations at the highest
+ * configured level are always kept.
+ */
+export function filterLeafDistrictRelations(
+  relations: OverpassRelation[],
+  districtAdminLevels: number[],
+): OverpassRelation[] {
+  const maxLevel = Math.max(...districtAdminLevels);
+  return relations.filter((relation) => {
+    const level = Number(relation.tags?.admin_level);
+    if (level === maxLevel) return true;
+
+    const geometry = relationToGeometry(relation);
+    return !relations.some((other) => {
+      if (other === relation) return false;
+      const otherLevel = Number(other.tags?.admin_level);
+      if (otherLevel <= level) return false;
+      return polygonContainsPoint(geometry, representativePoint(relationToGeometry(other)));
+    });
+  });
+}
+
+/**
+ * Restricts neighbouring-municipality relations to the highest (numerically
+ * largest) admin level present in the city's own city_admin_levels — for
+ * Karlsruhe that is 8. The neighbours query also picks up county-level
+ * (Landkreis) relations at a lower admin level, which are not municipalities
+ * and are not what Section 8.3's greyed-out neighbour outlines are for.
+ */
+export function filterMunicipalityNeighbourRelations(
+  relations: OverpassRelation[],
+  cityAdminLevels: number[],
+): OverpassRelation[] {
+  const municipalityLevel = Math.max(...cityAdminLevels);
+  return relations.filter((relation) => Number(relation.tags?.admin_level) === municipalityLevel);
 }

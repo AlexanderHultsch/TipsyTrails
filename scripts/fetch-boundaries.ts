@@ -12,14 +12,16 @@
 //   node scripts/fetch-boundaries.ts --city=karlsruhe --overpass-url=https://overpass.example/api/interpreter
 //   node scripts/fetch-boundaries.ts --city=karlsruhe --input-city=./city.json --input-neighbours=./neighbours.json
 //
-// --input-city and --input-neighbours each read a previously saved Overpass
-// JSON response from disk instead of querying for it, so the two queries can
-// be run by hand (e.g. in a browser, from a machine that *can* reach
-// Overpass) and the conversion re-run here offline. Either flag may be given
-// on its own; whichever is omitted is still fetched over the network. When
-// both are given, this script makes no network request at all. Saved
-// responses go through the exact same validation and conversion as fetched
-// ones — there is no separate, laxer path for local files.
+// --input-city and --input-neighbours each read a previously saved response
+// from disk instead of querying for it, so the two queries can be run by
+// hand (e.g. in a browser, from a machine that *can* reach Overpass) and the
+// conversion re-run here offline. Either flag may be given on its own;
+// whichever is omitted is still fetched over the network. When both are
+// given, this script makes no network request at all. The file may be either
+// a raw Overpass "out geom" JSON response or a GeoJSON FeatureCollection —
+// the shape overpass-turbo's "export as GeoJSON" naturally produces — and
+// the two are detected and handled by the same code path, not a separate,
+// laxer one for local files.
 //
 // Node 22 strips TypeScript types natively, so relative imports here use an
 // explicit `.ts` extension and resolve straight to source with no build
@@ -39,6 +41,8 @@ import {
   DEFAULT_OVERPASS_TIMEOUT_S,
   buildCityAndDistrictsQuery,
   buildNeighboursQuery,
+  filterLeafDistrictRelations,
+  filterMunicipalityNeighbourRelations,
   findCityRelation,
   findDistrictRelations,
   findNeighbourRelations,
@@ -160,12 +164,13 @@ async function queryOverpass(
 }
 
 /**
- * Reads a previously saved Overpass response from disk and runs it through
- * the exact same `parseOverpassPayload` validation as a fetched response —
- * the same HTML-error-page rejection, the same "elements" shape check.
- * There is no content type to pass (there is no HTTP response here), which
- * `parseOverpassPayload` already tolerates for the HTML check via the body
- * itself.
+ * Reads a previously saved boundary response from disk and runs it through
+ * the exact same `parseOverpassPayload` validation and format detection as
+ * a fetched response — the same HTML-error-page rejection, the same shape
+ * check, whether the file holds a raw Overpass "out geom" JSON response or
+ * a GeoJSON FeatureCollection. There is no content type to pass (there is
+ * no HTTP response here), which `parseOverpassPayload` already tolerates for
+ * the HTML check via the body itself.
  */
 function loadOverpassResponseFromFile(path: string, flagName: string): OverpassResponse {
   let raw: string;
@@ -174,7 +179,7 @@ function loadOverpassResponseFromFile(path: string, flagName: string): OverpassR
   } catch (err) {
     throw new Error(
       `No file found at "${path}" (given via ${flagName}). Expected a saved Overpass "out geom" JSON ` +
-        `response.`,
+        `response or a GeoJSON FeatureCollection.`,
       { cause: err },
     );
   }
@@ -249,7 +254,10 @@ async function main(): Promise<void> {
     );
   }
   const cityRelation = findCityRelation(cityDistrictsResponse, config);
-  const districtRelations = findDistrictRelations(cityDistrictsResponse, config, cityRelation.id);
+  const districtRelations = filterLeafDistrictRelations(
+    findDistrictRelations(cityDistrictsResponse, config, cityRelation.id),
+    config.osm_admin_filter.district_admin_levels,
+  );
 
   let neighboursResponse: OverpassResponse;
   if (args.inputNeighbours) {
@@ -263,7 +271,10 @@ async function main(): Promise<void> {
       DEFAULT_OVERPASS_TIMEOUT_S,
     );
   }
-  const neighbourRelations = findNeighbourRelations(neighboursResponse, cityRelation.id);
+  const neighbourRelations = filterMunicipalityNeighbourRelations(
+    findNeighbourRelations(neighboursResponse, cityRelation.id),
+    config.osm_admin_filter.city_admin_levels,
+  );
 
   // Build every output document in memory first. Nothing is written until
   // all three have been converted successfully (SPEC.md 11.4: a failed run
