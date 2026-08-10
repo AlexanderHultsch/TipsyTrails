@@ -33,6 +33,7 @@ COPY --from=build --chown=node:node /app/deploy/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages/api/dist ./dist
 COPY --from=build --chown=node:node /app/packages/api/migrations ./migrations
 COPY --from=build --chown=node:node /app/packages/web/dist ./public
+COPY --chown=node:node data/seed ./data/seed
 
 EXPOSE 3000
 USER node

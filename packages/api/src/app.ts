@@ -13,6 +13,7 @@ import { applySecurityHeaders } from './http/security-headers.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
+import { staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
 
 declare module 'fastify' {
@@ -66,6 +67,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
     );
   }
   app.register(tilesRoutes(env, tilesAvailable));
+  app.register(staticDataRoutes(env));
 
   const webRoot = env.WEB_ROOT ?? defaultWebRoot;
   if (existsSync(webRoot)) {

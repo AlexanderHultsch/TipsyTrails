@@ -16,6 +16,7 @@ export const envSchema = z.object({
   ADMIN_PASSWORD: z.string().optional(),
   WEB_ROOT: z.string().transform(emptyToUndefined).optional(),
   TILES_DIR: z.string().default('/data/tiles'),
+  SEED_DIR: z.string().transform(emptyToUndefined).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

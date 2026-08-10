@@ -123,6 +123,24 @@ describe('loadEnv', () => {
     expect(env.WEB_ROOT).toBe('/srv/app');
   });
 
+  it('treats an empty SEED_DIR as absent', () => {
+    const env = loadEnv({ ...validEnv, SEED_DIR: '' });
+
+    expect(env.SEED_DIR).toBeUndefined();
+  });
+
+  it('treats a whitespace-only SEED_DIR as absent', () => {
+    const env = loadEnv({ ...validEnv, SEED_DIR: '   ' });
+
+    expect(env.SEED_DIR).toBeUndefined();
+  });
+
+  it('preserves a real SEED_DIR value unchanged', () => {
+    const env = loadEnv({ ...validEnv, SEED_DIR: '/srv/data/seed' });
+
+    expect(env.SEED_DIR).toBe('/srv/data/seed');
+  });
+
   it('applies the default TILES_DIR when absent', () => {
     const env = loadEnv(validEnv);
 
