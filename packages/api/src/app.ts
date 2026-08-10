@@ -19,6 +19,7 @@ const defaultWebRoot = fileURLToPath(new URL('../public', import.meta.url));
 export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   const app = Fastify({
     logger: env.NODE_ENV !== 'test',
+    trustProxy: 1,
   });
 
   app.decorate('db', db);
