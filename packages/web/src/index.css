@@ -171,6 +171,102 @@ a {
   margin: 0;
 }
 
+.avatar {
+  display: inline-block;
+  width: 3rem;
+  height: 3rem;
+}
+
+.avatar svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Section 8.4: single burger menu, top right, on every authenticated
+   screen. */
+.burger-menu {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 10;
+}
+
+.burger-menu__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--color-ink);
+  border-radius: 4px;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.burger-menu__panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  margin: 0;
+  padding: 0.5rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 10rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.burger-menu__panel a,
+.burger-menu__panel button {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  color: var(--color-ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.burger-menu__panel a:hover,
+.burger-menu__panel button:hover {
+  background: var(--color-border);
+}
+
+.settings-section {
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.settings-section:last-child {
+  border-bottom: none;
+}
+
+.settings-section--danger {
+  gap: 1rem;
+}
+
+.settings-section--danger h2 {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  margin: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

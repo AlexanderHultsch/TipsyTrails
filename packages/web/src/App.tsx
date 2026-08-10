@@ -12,6 +12,7 @@ import { Landing } from './screens/Landing.js';
 import { Login } from './screens/Login.js';
 import { Register } from './screens/Register.js';
 import { Reset } from './screens/Reset.js';
+import { Settings } from './screens/Settings.js';
 
 export function App() {
   return (
@@ -62,6 +63,14 @@ export function App() {
           element={
             <RequireAuth>
               <AppHome />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <RequireAuth>
+              <Settings />
             </RequireAuth>
           }
         />

@@ -124,3 +124,17 @@ export function changePassword(input: {
     body: JSON.stringify(input),
   });
 }
+
+export function updateSettings(input: { isAnonymous: boolean }): Promise<User> {
+  return request<User>('/api/settings', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteAccount(input: { password: string }): Promise<{ ok: true }> {
+  return request<{ ok: true }>('/api/account', {
+    method: 'DELETE',
+    body: JSON.stringify(input),
+  });
+}
