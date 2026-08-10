@@ -18,6 +18,10 @@ describe('DERIVED', () => {
     expect(DERIVED.SESSION_TTL_S).toBe(7776000);
   });
 
+  it('converts SESSION_REFRESH_THRESHOLD_DAYS to seconds', () => {
+    expect(DERIVED.SESSION_REFRESH_THRESHOLD_S).toBe(2592000);
+  });
+
   it('pushes the reminder after the visit could already have completed', () => {
     expect(DERIVED.VISIT_PUSH_AFTER_S).toBeGreaterThan(DERIVED.VISIT_REQUIRED_S);
   });
