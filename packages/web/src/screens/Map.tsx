@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import { useSearchParams } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BurgerMenu } from '../components/BurgerMenu.js';
@@ -9,9 +10,10 @@ import { inkStyle } from '../map/ink-style.js';
 const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 
 // Roughly the middle of Karlsruhe's bounding box (Section 6.2). There is no
-// city-metadata endpoint wired up in this phase (that is /api/city, and the
-// overview screens that would use it are explicitly out of scope here), so
-// this is a fixed starting view rather than one derived from server data.
+// city-metadata endpoint wired up in this phase (that is /api/city -
+// Section 9.2), so this is a fixed fallback view rather than one derived
+// from server data. Used whenever the URL doesn't carry a district centre
+// (see centerFromSearchParams below).
 const INITIAL_CENTER: [number, number] = [8.4037, 49.0069];
 const INITIAL_ZOOM = 12;
 
@@ -27,10 +29,26 @@ async function checkTilesAvailable(): Promise<boolean> {
   return response.status !== 503;
 }
 
+// Section 8.3: "tap to zoom in" from the district overview. There is no
+// shared app state layer in this phase to carry the tapped district's
+// position to this route any other way, so screens/DistrictOverview.tsx
+// passes it through the URL instead. Read once at mount, same as
+// INITIAL_CENTER below - this route has no in-place "recentre" affordance,
+// so a stale value if the query changes without a remount is out of scope.
+function centerFromSearchParams(params: URLSearchParams): [number, number] | null {
+  const lat = Number(params.get('lat'));
+  const lon = Number(params.get('lon'));
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  return [lon, lat];
+}
+
 export function MapScreen() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
     let cancelled = false;
@@ -52,7 +70,7 @@ export function MapScreen() {
     const map = new maplibregl.Map({
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
-      center: INITIAL_CENTER,
+      center: centerFromSearchParams(searchParams) ?? INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       attributionControl: false,
     });
@@ -64,6 +82,9 @@ export function MapScreen() {
       map.remove();
       maplibregl.removeProtocol('pmtiles');
     };
+    // Deliberately mount-only (Section 8.3's "tap to zoom in" is a one-time
+    // initial centre, not a live-recentre feature) - see the comment on
+    // centerFromSearchParams above.
   }, []);
 
   return (

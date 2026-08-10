@@ -1,3 +1,5 @@
+import { ACTIVE_CITY_SLUG } from './city.js';
+import type { BoundaryFeatureCollection } from './geo-types.js';
 import type { User } from './types.js';
 
 // Thrown for both API-reported failures (server JSON with a stable `code`)
@@ -137,4 +139,21 @@ export function deleteAccount(input: { password: string }): Promise<{ ok: true }
     method: 'DELETE',
     body: JSON.stringify(input),
   });
+}
+
+// Served by packages/api/src/routes/static-data.ts at
+// /static/<slug>/<filename>.geojson, one-day cache (Section 4.1). Plain
+// GETs against a public, unauthenticated path - request() is reused because
+// its JSON parsing and ApiError mapping are exactly what these screens need
+// too, not because the route requires a session.
+export function getCityBoundary(): Promise<BoundaryFeatureCollection> {
+  return request<BoundaryFeatureCollection>(`/static/${ACTIVE_CITY_SLUG}/city.geojson`);
+}
+
+export function getDistrictBoundaries(): Promise<BoundaryFeatureCollection> {
+  return request<BoundaryFeatureCollection>(`/static/${ACTIVE_CITY_SLUG}/districts.geojson`);
+}
+
+export function getNeighbourBoundaries(): Promise<BoundaryFeatureCollection> {
+  return request<BoundaryFeatureCollection>(`/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`);
 }

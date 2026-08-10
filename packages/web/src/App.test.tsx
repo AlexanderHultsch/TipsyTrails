@@ -1,9 +1,43 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.js';
+import { ACTIVE_CITY_SLUG } from './api/city.js';
+import type { BoundaryFeatureCollection } from './api/geo-types.js';
 import { Avatar } from './components/Avatar.js';
+
+// The real committed seed data (data/seed/karlsruhe), three levels up from
+// this file's own directory to the repository root - the same style
+// packages/shared/src/city.test.ts and packages/api/src/routes/
+// static-data.test.ts use to reach their own committed fixtures. The
+// `import.meta.url` indirection through `here` (rather than passing it
+// directly as `new URL(path, import.meta.url)`) matters here specifically:
+// under this package's jsdom test environment, Vite's static analysis
+// rewrites that exact literal pattern into a dev-server asset URL instead
+// of leaving it as a file:// URL, and fileURLToPath then rejects it.
+const here = import.meta.url;
+const SEED_DIR = fileURLToPath(new URL('../../../data/seed/karlsruhe', here));
+
+function loadFixture(filename: string): BoundaryFeatureCollection {
+  return JSON.parse(readFileSync(`${SEED_DIR}/${filename}`, 'utf-8')) as BoundaryFeatureCollection;
+}
+
+const cityFixture = loadFixture('city.geojson');
+const districtsFixture = loadFixture('districts.geojson');
+const neighboursFixture = loadFixture('neighbours.geojson');
+
+// One 'M' per ring is what geo/geojson-path.ts's svgPathOfGeometry emits
+// (see its ringPath helper) - counting them is a cheap way to check the
+// rendered path actually walks every ring of a real Polygon/MultiPolygon
+// fixture, not just that some string got produced.
+function ringCount(feature: BoundaryFeatureCollection['features'][number]): number {
+  return feature.geometry.type === 'Polygon'
+    ? feature.geometry.coordinates.length
+    : feature.geometry.coordinates.reduce((sum, polygon) => sum + polygon.length, 0);
+}
 
 // MapLibre needs a real WebGL context, which jsdom does not provide, so the
 // map route is exercised against a stand-in Map class rather than the real
@@ -332,6 +366,8 @@ describe('App', () => {
     const entries = container.querySelectorAll('.burger-menu__panel a, .burger-menu__panel button');
     expect(Array.from(entries).map((entry) => entry.textContent)).toEqual([
       'Map',
+      'City',
+      'Districts',
       'Settings',
       'Log out',
     ]);
@@ -603,5 +639,128 @@ describe('App', () => {
     expect(container.querySelector('#settings-anonymous')).not.toBeNull();
     expect(mapInstance.remove).toHaveBeenCalledTimes(1);
     expect(removeProtocolMock).toHaveBeenCalledWith('pmtiles');
+  });
+
+  it('renders the city outline and the greyed-out, non-interactive neighbour shapes on /city', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/city.geojson`) {
+        return jsonResponse(200, cityFixture);
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`) {
+        return jsonResponse(200, neighboursFixture);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/city');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const cityPaths = container.querySelectorAll('.city-overview__city');
+    expect(cityPaths).toHaveLength(cityFixture.features.length);
+    cityPaths.forEach((path, index) => {
+      const d = path.getAttribute('d') ?? '';
+      expect(d).toMatch(/^M/);
+      expect(d.match(/M/g)).toHaveLength(ringCount(cityFixture.features[index]));
+    });
+
+    const neighbourPaths = container.querySelectorAll('.city-overview__neighbour');
+    expect(neighbourPaths).toHaveLength(neighboursFixture.features.length);
+    neighbourPaths.forEach((path, index) => {
+      expect(path.getAttribute('aria-hidden')).toBe('true');
+      expect((path as unknown as HTMLElement).style.pointerEvents).toBe('none');
+      const d = path.getAttribute('d') ?? '';
+      expect(d.match(/M/g)).toHaveLength(ringCount(neighboursFixture.features[index]));
+    });
+
+    expect(container.textContent).toContain('View districts');
+  });
+
+  it('shows a message rather than an empty screen when the city boundary fetch fails', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/city.geojson`) {
+        throw new Error('network down');
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`) {
+        return jsonResponse(200, neighboursFixture);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/city');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.textContent).toContain(
+      'Could not reach the server. Check your connection and try again.',
+    );
+    expect(container.querySelector('.city-overview__map')).toBeNull();
+  });
+
+  it('renders all 27 districts as a list with a name and a percentage each', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
+        return jsonResponse(200, districtsFixture);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/districts');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const items = container.querySelectorAll('.district-list__item');
+    expect(items).toHaveLength(27);
+    expect(districtsFixture.features).toHaveLength(27);
+
+    items.forEach((item, index) => {
+      const name = districtsFixture.features[index].properties.name;
+      expect(item.textContent).toContain(name);
+      expect(item.querySelector('.district-list__percent')?.textContent).toMatch(/^\d+%$/);
+    });
+  });
+
+  it('navigates to the map when a district in the list is tapped', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
+        return jsonResponse(200, districtsFixture);
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/districts');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const firstDistrict = container.querySelector('.district-list__item') as HTMLAnchorElement;
+    expect(firstDistrict).not.toBeNull();
+    expect(firstDistrict.getAttribute('href')).toMatch(/^\/map\?/);
+
+    await act(async () => {
+      firstDistrict.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushLazyMapScreen();
+
+    expect(container.querySelector('.map-container')).not.toBeNull();
   });
 });

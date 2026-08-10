@@ -9,6 +9,8 @@ import {
 } from './auth/route-guards.js';
 import { AppHome } from './screens/AppHome.js';
 import { ChangePassword } from './screens/ChangePassword.js';
+import { CityOverview } from './screens/CityOverview.js';
+import { DistrictOverview } from './screens/DistrictOverview.js';
 import { Landing } from './screens/Landing.js';
 import { Login } from './screens/Login.js';
 import { Register } from './screens/Register.js';
@@ -80,6 +82,22 @@ export function App() {
           element={
             <RequireAuth>
               <Settings />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/city"
+          element={
+            <RequireAuth>
+              <CityOverview />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/districts"
+          element={
+            <RequireAuth>
+              <DistrictOverview />
             </RequireAuth>
           }
         />

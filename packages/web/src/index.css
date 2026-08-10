@@ -316,6 +316,73 @@ a {
   margin: 0;
 }
 
+/* City and district overview screens (Section 8.3): schematic inline-SVG
+   maps, drawn in the same restrained ink treatment as the map style
+   (Section 8.1) - a faint fill plus a firmer outline, never a solid block
+   of colour. */
+.city-overview__map,
+.district-overview__map {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 1.5rem 0;
+}
+
+.city-overview__city,
+.district-overview__district {
+  fill: var(--color-ink);
+  fill-opacity: 0.08;
+  stroke: var(--color-ink);
+  stroke-opacity: 0.85;
+  stroke-width: 1;
+}
+
+/* Section 8.3: neighbouring municipalities are greyed out and
+   non-interactive. Kept visually and semantically inert - pointer-events
+   and aria-hidden are set inline on each path (screens/CityOverview.tsx),
+   this only carries the "greyed out" colouring. */
+.city-overview__neighbour {
+  fill: var(--color-border);
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.city-overview__progress {
+  font-family: var(--font-serif);
+  font-size: 1.5rem;
+}
+
+.district-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.district-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 44px;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.district-list__item:hover {
+  background: var(--color-border);
+}
+
+.district-list__name {
+  font-weight: 600;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
