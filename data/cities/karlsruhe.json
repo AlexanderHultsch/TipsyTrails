@@ -1,0 +1,19 @@
+{
+  "slug": "karlsruhe",
+  "name": "Karlsruhe",
+  "bounding_box": {
+    "south": 48.94,
+    "west": 8.275,
+    "north": 49.095,
+    "east": 8.56
+  },
+  "cell_size_m": 50,
+  "geofabrik_region": "europe/germany/baden-wuerttemberg",
+  "tiles_filename": "karlsruhe.2026-08.pmtiles",
+  "osm_admin_filter": {
+    "name": "Karlsruhe",
+    "city_admin_levels": [6, 8],
+    "district_admin_levels": [9, 10],
+    "regional_key_prefix": "08212"
+  }
+}

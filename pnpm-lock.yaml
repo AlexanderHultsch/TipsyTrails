@@ -64,7 +64,11 @@ importers:
         specifier: ^26.2.0
         version: 26.2.0
 
-  packages/shared: {}
+  packages/shared:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.2.0
+        version: 26.2.0
 
   packages/web:
     dependencies:
