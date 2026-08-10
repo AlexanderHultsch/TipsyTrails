@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { CurrentUserProvider } from './auth/CurrentUserContext.js';
 import {
@@ -13,6 +14,14 @@ import { Login } from './screens/Login.js';
 import { Register } from './screens/Register.js';
 import { Reset } from './screens/Reset.js';
 import { Settings } from './screens/Settings.js';
+
+// MapLibre + PMTiles are ~250 KB gzipped on their own (Section 12, Phase 2
+// budget) and must never enter the shell chunk. A lazily imported route
+// component is what makes Vite emit them as a separate chunk, loaded only
+// when a map route is actually visited.
+const MapScreen = lazy(() =>
+  import('./screens/Map.js').then((module) => ({ default: module.MapScreen })),
+);
 
 export function App() {
   return (
@@ -71,6 +80,16 @@ export function App() {
           element={
             <RequireAuth>
               <Settings />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/map"
+          element={
+            <RequireAuth>
+              <Suspense fallback={null}>
+                <MapScreen />
+              </Suspense>
             </RequireAuth>
           }
         />

@@ -267,6 +267,55 @@ a {
   margin: 0;
 }
 
+/* Map screen (Section 8.3): the map owns the whole viewport beneath the
+   fixed burger menu, so this variant drops .screen's padding and gives the
+   map container something to fill via absolute positioning. */
+.screen--map {
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.map-container {
+  position: absolute;
+  inset: 0;
+}
+
+/* Section 10.5: a persistent, legible OSM attribution in the map's bottom
+   corner, present whether or not tiles loaded - rendered as an ordinary DOM
+   element rather than left to MapLibre's own attribution control so it
+   never depends on the map or its sources having loaded successfully. */
+.map-attribution {
+  position: absolute;
+  right: 0.5rem;
+  bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  padding: 0.25rem 0.5rem;
+  background: rgba(244, 239, 230, 0.85);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--color-ink);
+}
+
+.map-notice {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  max-width: 22rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.map-notice p {
+  font-size: 1rem;
+  margin: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

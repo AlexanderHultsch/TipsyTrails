@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { useLogout } from '../auth/useLogout.js';
 
 // Single burger menu, top right, on every authenticated screen (Section
-// 8.4). Phase 1 only has two real destinations - Settings and Log out; the
-// rest arrive with their own screens in later phases.
+// 8.4). Phase 2 adds Map; the rest arrive with their own screens in later
+// phases.
 export function BurgerMenu() {
   const [open, setOpen] = useState(false);
   const handleLogout = useLogout();
@@ -42,6 +42,11 @@ export function BurgerMenu() {
       </button>
       {open && (
         <ul id={menuId} className="burger-menu__panel">
+          <li>
+            <Link to="/map" onClick={() => setOpen(false)}>
+              Map
+            </Link>
+          </li>
           <li>
             <Link to="/settings" onClick={() => setOpen(false)}>
               Settings

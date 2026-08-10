@@ -1,9 +1,39 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.js';
 import { Avatar } from './components/Avatar.js';
+
+// MapLibre needs a real WebGL context, which jsdom does not provide, so the
+// map route is exercised against a stand-in Map class rather than the real
+// library. mapInstances lets tests reach the last constructed instance to
+// assert on lifecycle calls such as remove().
+const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoisted(() => {
+  const instances: { remove: ReturnType<typeof vi.fn> }[] = [];
+  class MockMap {
+    remove = vi.fn();
+    on = vi.fn();
+    off = vi.fn();
+    constructor() {
+      instances.push(this);
+    }
+  }
+  return {
+    MockMap,
+    addProtocolMock: vi.fn(),
+    removeProtocolMock: vi.fn(),
+    mapInstances: instances,
+  };
+});
+
+vi.mock('maplibre-gl', () => ({
+  default: {
+    Map: MockMap,
+    addProtocol: addProtocolMock,
+    removeProtocol: removeProtocolMock,
+  },
+}));
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -65,10 +95,31 @@ async function submit(button: Element) {
   });
 }
 
+// The map route is behind React.lazy (Section 12's code-splitting
+// requirement), which resolves over an extra microtask turn beyond the one
+// tick renderApp already waits out - enough for ordinary async screens, not
+// for a dynamic import settling and then its own effects running.
+async function flushLazyMapScreen() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+// React.lazy's dynamic import resolves over real module-transform time on
+// its first call, not just a microtask tick - noticeably longer than the
+// single setTimeout(0) flush used elsewhere in this file. Priming it once
+// up front keeps every /map test's timing uniform.
+beforeAll(async () => {
+  await import('./screens/Map.js');
+});
+
 beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  mapInstances.length = 0;
+  addProtocolMock.mockClear();
+  removeProtocolMock.mockClear();
 });
 
 afterEach(() => {
@@ -253,7 +304,7 @@ describe('App', () => {
     );
   });
 
-  it('opens the burger menu with exactly the two Phase 1 destinations, and closes it on Escape', async () => {
+  it('opens the burger menu with exactly the Phase 1 and Phase 2 destinations, and closes it on Escape', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(200, {
@@ -279,7 +330,11 @@ describe('App', () => {
     });
 
     const entries = container.querySelectorAll('.burger-menu__panel a, .burger-menu__panel button');
-    expect(Array.from(entries).map((entry) => entry.textContent)).toEqual(['Settings', 'Log out']);
+    expect(Array.from(entries).map((entry) => entry.textContent)).toEqual([
+      'Map',
+      'Settings',
+      'Log out',
+    ]);
 
     act(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -439,5 +494,114 @@ describe('App', () => {
     expect(container.textContent).toContain('Invalid username or password.');
     expect(container.querySelector('#settings-anonymous')).not.toBeNull();
     expect(fetchMock.mock.calls.some(([input]) => input === '/api/auth/logout')).toBe(false);
+  });
+
+  function stubSignedInUser() {
+    return jsonResponse(200, {
+      id: 1,
+      username: 'alice',
+      avatarSeed: 'seed',
+      isAdmin: false,
+      isAnonymous: false,
+      mustChangePassword: false,
+    });
+  }
+
+  it('renders the map screen with an OSM attribution link to the copyright page', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    const attribution = container.querySelector('.map-attribution') as HTMLAnchorElement | null;
+    expect(attribution).not.toBeNull();
+    expect(attribution?.getAttribute('href')).toBe('https://www.openstreetmap.org/copyright');
+    expect(container.querySelector('.map-notice')).toBeNull();
+  });
+
+  it('still shows the OSM attribution when the tile availability check fails outright', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        throw new Error('network down');
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    const attribution = container.querySelector('.map-attribution') as HTMLAnchorElement | null;
+    expect(attribution).not.toBeNull();
+    expect(attribution?.getAttribute('href')).toBe('https://www.openstreetmap.org/copyright');
+  });
+
+  it('shows a plain-language message, not a blank screen, when the API reports tiles_unavailable', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(503, {
+          code: 'tiles_unavailable',
+          message: 'The map tile extract is not installed on this server.',
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    const notice = container.querySelector('.map-notice');
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("aren't installed on this server yet");
+    expect(container.querySelector('.map-attribution')).not.toBeNull();
+  });
+
+  it('destroys the map instance when navigating away from /map', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    expect(mapInstances).toHaveLength(1);
+    const mapInstance = mapInstances[0];
+    expect(mapInstance.remove).not.toHaveBeenCalled();
+
+    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    act(() => {
+      menuButton.click();
+    });
+    const settingsLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+      (entry) => entry.textContent === 'Settings',
+    ) as HTMLAnchorElement;
+
+    await act(async () => {
+      settingsLink.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('#settings-anonymous')).not.toBeNull();
+    expect(mapInstance.remove).toHaveBeenCalledTimes(1);
+    expect(removeProtocolMock).toHaveBeenCalledWith('pmtiles');
   });
 });
