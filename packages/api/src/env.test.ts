@@ -73,4 +73,35 @@ describe('loadEnv', () => {
     expect(message).toContain('SESSION_SECRET');
     expect(message).not.toContain(sentinel);
   });
+
+  it('falls back to PORT when API_PORT is absent', () => {
+    const env = loadEnv({ ...validEnv, PORT: '8080' });
+
+    expect(env.API_PORT).toBe(8080);
+  });
+
+  it('falls back to DB_PATH when DATABASE_PATH is absent', () => {
+    const env = loadEnv({
+      PUBLIC_ORIGIN: validEnv.PUBLIC_ORIGIN,
+      SESSION_SECRET: validEnv.SESSION_SECRET,
+      DB_PATH: '/data/x.db',
+    });
+
+    expect(env.DATABASE_PATH).toBe('/data/x.db');
+  });
+
+  it('prefers API_PORT over PORT when both are set', () => {
+    const env = loadEnv({ ...validEnv, API_PORT: '4000', PORT: '9000' });
+
+    expect(env.API_PORT).toBe(4000);
+  });
+
+  it('still throws when neither DATABASE_PATH nor DB_PATH is given', () => {
+    expect(() =>
+      loadEnv({
+        PUBLIC_ORIGIN: validEnv.PUBLIC_ORIGIN,
+        SESSION_SECRET: validEnv.SESSION_SECRET,
+      }),
+    ).toThrow();
+  });
 });

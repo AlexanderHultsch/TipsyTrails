@@ -9,12 +9,19 @@ export const envSchema = z.object({
   SESSION_SECRET: z.string().min(32),
   ADMIN_USERNAME: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
+  WEB_ROOT: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const result = envSchema.safeParse(source);
+  const { API_PORT, PORT, DATABASE_PATH, DB_PATH, ...rest } = source;
+  const normalised = {
+    ...rest,
+    API_PORT: API_PORT ?? PORT,
+    DATABASE_PATH: DATABASE_PATH ?? DB_PATH,
+  };
+  const result = envSchema.safeParse(normalised);
   if (!result.success) {
     const names = [...new Set(result.error.issues.map((issue) => issue.path.join('.')))];
     throw new Error(`Invalid environment variables: ${names.join(', ')}`);
