@@ -9,6 +9,7 @@ import { mustChangePasswordGate } from './auth/password-gate.js';
 import type { Env } from './env.js';
 import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
+import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 
@@ -51,6 +52,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
 
   app.register(healthRoutes);
   app.register(authRoutes(env));
+  app.register(accountRoutes);
 
   const webRoot = env.WEB_ROOT ?? defaultWebRoot;
   if (existsSync(webRoot)) {
