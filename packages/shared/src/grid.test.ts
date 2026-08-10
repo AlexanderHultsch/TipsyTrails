@@ -7,6 +7,7 @@ import {
   checkAreaEstimate,
   computeGridDimensions,
   districtsWithNoCells,
+  haversineDistanceM,
   mPerDegLon,
   polygonAreaM2,
   polygonContainsPoint,
@@ -263,5 +264,34 @@ describe('assignGrid', () => {
     ];
     const result = assignGrid(grid, districts);
     expect(districtsWithNoCells(result.districts)).toEqual(['Empty']);
+  });
+});
+
+describe('haversineDistanceM', () => {
+  it('returns zero for identical points', () => {
+    expect(haversineDistanceM({ lat: 49.0135, lon: 8.4044 }, { lat: 49.0135, lon: 8.4044 })).toBe(
+      0,
+    );
+  });
+
+  it('matches a known reference distance (one degree of latitude at the equator)', () => {
+    // One degree of latitude is ~111.19 km everywhere, by construction of
+    // the great-circle formula (it does not depend on longitude).
+    const distance = haversineDistanceM({ lat: 0, lon: 0 }, { lat: 1, lon: 0 });
+    expect(distance).toBeGreaterThan(111000);
+    expect(distance).toBeLessThan(111300);
+  });
+
+  it('is symmetric', () => {
+    const a = { lat: 49.0, lon: 8.4 };
+    const b = { lat: 49.01, lon: 8.41 };
+    expect(haversineDistanceM(a, b)).toBeCloseTo(haversineDistanceM(b, a), 9);
+  });
+
+  it('roughly agrees with the equirectangular cell size at Karlsruhe scale', () => {
+    // Two adjacent cell centres, 50 m apart by construction of cellCenter.
+    const a = cellCenter(0, KARLSRUHE_GRID);
+    const b = cellCenter(1, KARLSRUHE_GRID);
+    expect(haversineDistanceM(a, b)).toBeCloseTo(50, 0);
   });
 });

@@ -9,11 +9,13 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { ACTIVE_CITY_SLUG } from './active-city.js';
 import { mustChangePasswordGate } from './auth/password-gate.js';
 import type { Env } from './env.js';
+import { loadDistrictIdByGridIndex } from './fog/district-index.js';
 import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { cityRoutes } from './routes/city.js';
+import { fogRoutes } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
 import { resolveSeedDir, staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
@@ -28,6 +30,10 @@ declare module 'fastify' {
     // clear error, the same way routes/tiles.ts does when the tile extract
     // is missing.
     grid: Uint16Array | null;
+    // `grid`'s per-cell district *index* resolved to a `districts` row id
+    // (SPEC.md Section 5.2), loaded alongside `grid` from the same seed
+    // directory. Null under the same conditions `grid` is null.
+    districtIdByGridIndex: Map<number, number> | null;
   }
 }
 
@@ -74,9 +80,11 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
     return payload;
   });
 
-  const gridPath = join(resolveSeedDir(env), ACTIVE_CITY_SLUG, 'grid.bin');
+  const seedDir = resolveSeedDir(env);
+  const gridPath = join(seedDir, ACTIVE_CITY_SLUG, 'grid.bin');
   if (existsSync(gridPath)) {
     app.decorate('grid', loadGrid(gridPath));
+    app.decorate('districtIdByGridIndex', loadDistrictIdByGridIndex(db, seedDir, ACTIVE_CITY_SLUG));
   } else {
     app.log.error(
       `Grid file not found at ${gridPath}. Regenerate it with ` +
@@ -84,12 +92,14 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
         'with an error until it is present.',
     );
     app.decorate('grid', null);
+    app.decorate('districtIdByGridIndex', null);
   }
 
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
   app.register(cityRoutes);
+  app.register(fogRoutes);
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
   const tilesAvailable = existsSync(tilesPath);

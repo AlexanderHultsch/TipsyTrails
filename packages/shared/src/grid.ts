@@ -56,6 +56,23 @@ export interface LatLon {
   lon: number;
 }
 
+// Mean Earth radius in metres, the standard constant for the haversine
+// formula (SPEC.md Section 6.1: "Distances use the haversine formula").
+// Distinct from M_PER_DEG_LAT above, which is a local equirectangular
+// approximation used only for grid projection, not for general distances.
+const EARTH_RADIUS_M = 6371000;
+
+/** Great-circle distance between two points, in metres (SPEC.md Section 6.1). */
+export function haversineDistanceM(a: LatLon, b: LatLon): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h));
+}
+
 /** The centre coordinate of cell (x, y) — the inverse of `toCell`. */
 export function cellCenterXY(x: number, y: number, grid: GridParams): LatLon {
   const lon = grid.origin_lon + ((x + 0.5) * grid.cell_size_m) / mPerDegLon(grid.origin_lat);
