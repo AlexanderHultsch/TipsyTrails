@@ -7,6 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare": "pnpm --filter @tipsytrails/shared build",
+    "build": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build && pnpm --filter @tipsytrails/web build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
