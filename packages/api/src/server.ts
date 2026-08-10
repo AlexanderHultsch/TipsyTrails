@@ -4,7 +4,7 @@ import { initialiseDatabase } from './startup.js';
 
 const env = loadEnv();
 const db = await initialiseDatabase(env);
-const app = buildApp(env);
+const app = buildApp(env, db);
 
 async function shutdown(): Promise<void> {
   await app.close();

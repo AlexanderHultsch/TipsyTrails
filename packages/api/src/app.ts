@@ -1,16 +1,31 @@
 import { existsSync } from 'node:fs';
 import { relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
+import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './env.js';
 import { healthRoutes } from './routes/health.js';
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    db: Database.Database;
+  }
+}
+
 const defaultWebRoot = fileURLToPath(new URL('../public', import.meta.url));
 
-export function buildApp(env: Env): FastifyInstance {
+export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   const app = Fastify({
     logger: env.NODE_ENV !== 'test',
+  });
+
+  app.decorate('db', db);
+  app.decorateRequest('userId', null);
+
+  app.register(fastifyCookie, {
+    secret: env.SESSION_SECRET,
   });
 
   app.addHook('onSend', async (request, reply, payload) => {

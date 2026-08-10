@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import type Database from 'better-sqlite3';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
+import { openDatabase } from './db/index.js';
+import { runMigrations } from './db/migrate.js';
 import { loadEnv, type Env } from './env.js';
+
+const migrationsDir = fileURLToPath(new URL('../migrations', import.meta.url));
 
 const testEnv: Env = {
   NODE_ENV: 'test',
@@ -18,9 +24,28 @@ const testEnv: Env = {
 const indexHtml = '<!doctype html><html><body>Tipsy Trails SPA shell</body></html>';
 const assetJs = 'console.log("tipsy-trails asset");';
 
+let dbPath: string;
+let db: Database.Database;
+
+beforeAll(() => {
+  dbPath = join(tmpdir(), `tipsytrails-app-test-db-${randomUUID()}.db`);
+  db = openDatabase(dbPath);
+  runMigrations(db, migrationsDir);
+});
+
+afterAll(() => {
+  db.close();
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = `${dbPath}${suffix}`;
+    if (existsSync(file)) {
+      rmSync(file);
+    }
+  }
+});
+
 describe('GET /api/health', () => {
   it('returns 200 with status ok', async () => {
-    const app = buildApp(testEnv);
+    const app = buildApp(testEnv, db);
     const response = await app.inject({ method: 'GET', url: '/api/health' });
 
     expect(response.statusCode).toBe(200);
@@ -28,7 +53,7 @@ describe('GET /api/health', () => {
   });
 
   it('carries the no-store cache header', async () => {
-    const app = buildApp(testEnv);
+    const app = buildApp(testEnv, db);
     const response = await app.inject({ method: 'GET', url: '/api/health' });
 
     expect(response.headers['cache-control']).toBe('private, no-store');
@@ -37,7 +62,7 @@ describe('GET /api/health', () => {
 
 describe('unknown /api route', () => {
   it('returns 404 with the no-store cache header', async () => {
-    const app = buildApp(testEnv);
+    const app = buildApp(testEnv, db);
     const response = await app.inject({ method: 'GET', url: '/api/does-not-exist' });
 
     expect(response.statusCode).toBe(404);
@@ -60,7 +85,7 @@ describe('SPA static serving', () => {
   });
 
   it('serves the SPA shell for GET / with the revalidation cache header', async () => {
-    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
     const response = await app.inject({ method: 'GET', url: '/' });
 
     expect(response.statusCode).toBe(200);
@@ -69,7 +94,7 @@ describe('SPA static serving', () => {
   });
 
   it('falls back to the SPA shell for a client-side route with status 200', async () => {
-    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
     const response = await app.inject({ method: 'GET', url: '/districts' });
 
     expect(response.statusCode).toBe(200);
@@ -78,7 +103,7 @@ describe('SPA static serving', () => {
   });
 
   it('serves a hashed asset with the immutable cache header', async () => {
-    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
     const response = await app.inject({ method: 'GET', url: '/assets/app-abc123.js' });
 
     expect(response.statusCode).toBe(200);
@@ -86,7 +111,7 @@ describe('SPA static serving', () => {
   });
 
   it('still serves /api/health with the no-store cache header', async () => {
-    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
     const response = await app.inject({ method: 'GET', url: '/api/health' });
 
     expect(response.statusCode).toBe(200);
@@ -95,7 +120,7 @@ describe('SPA static serving', () => {
   });
 
   it('never falls back to the SPA shell for an unknown /api route', async () => {
-    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
     const response = await app.inject({ method: 'GET', url: '/api/does-not-exist' });
 
     expect(response.statusCode).toBe(404);
@@ -119,7 +144,7 @@ describe('SPA static serving', () => {
 describe('missing WEB_ROOT', () => {
   it('returns 404 for GET / while /api/health keeps working', async () => {
     const missingWebRoot = join(tmpdir(), `tipsytrails-missing-webroot-${randomUUID()}`);
-    const app = buildApp({ ...testEnv, WEB_ROOT: missingWebRoot });
+    const app = buildApp({ ...testEnv, WEB_ROOT: missingWebRoot }, db);
 
     const rootResponse = await app.inject({ method: 'GET', url: '/' });
     expect(rootResponse.statusCode).toBe(404);
