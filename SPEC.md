@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -124,6 +124,10 @@ Two things Cloudflare does not do by default and that must be configured explici
 - **The tile file must be cached by a Cache Rule.** Cloudflare's default cache does not include `.pmtiles`. Without a rule matching `/tiles/*`, every range request reaches the Pi and the Phase 2 `cf-cache-status: HIT` check will never pass.
 - **The tile filename carries a version segment** (`karlsruhe.2026-08.pmtiles`), because a 30-day immutable-ish cache on a stable filename makes regenerated tiles unreachable for a month. The current filename lives in `config.ts` and is referenced by both the Caddyfile and the client.
 
+Range requests on the tile path are not an optimisation; they are mandatory. PMTiles works by fetching small byte ranges out of one large file — a server that ignores the `Range` header forces the client to download the whole 30–80 MB extract on every map view, which defeats the point of the format. Whatever serves `/tiles/*` must answer `206 Partial Content` to a ranged request, and this is verified directly (Section 12, Phase 2 Definition of Done), not inferred from the serving library.
+
+Which component sets the `Cache-Control` value in the table above depends on the deployment (Section 4.3). In the standalone two-container path, Caddy sets it when serving the file from disk, as the diagram in Section 4 shows. In the single-container deployment that actually runs on the Pi (v1.2.2), there is no Caddy in front of the API; the API sets `Cache-Control: public, max-age=2592000` itself on `/tiles/*` responses, the same way it already sets headers for hashed assets and `index.html` in `packages/api/src/app.ts`. The value is unchanged either way — only who applies it differs. The Cloudflare Cache Rule below is edge configuration and is required in both deployments regardless of which origin component sets the header.
+
 Client-side: district polygons, grid metadata, and the bar catalogue are cached in IndexedDB with an ETag-based revalidation on app start.
 
 ### 4.2 Repository structure
@@ -170,6 +174,8 @@ TipsyTrails/
 Build happens on the Pi. Push to `main` → SSH to Pi → `git pull && docker compose up -d --build`.
 
 Multi-stage Dockerfiles; the frontend build stage runs on the Pi (arm64).
+
+**Tile serving.** The extract is not in the image — Section 13.1 forbids committing it, and at 30–80 MB it does not belong in a build layer either. The platform mounts a persistent data volume for the container, the same one `DATABASE_PATH` lives under, so the extract lives there too, under a directory named by the `TILES_DIR` environment variable (default `/data/tiles`, mirroring the `/data/db/tipsy.db` default for `DATABASE_PATH` in `packages/api/src/env.ts`). The path the API reads is `${TILES_DIR}/${CONFIG.TILES_FILENAME}`. In the single-container deployment the API serves `/tiles/*` from that path itself, including range-request support (Section 4.1); in the standalone two-container path, Caddy serves it from the same mounted location per `caddy/Caddyfile`, unchanged. Startup and missing-file behaviour differ between the two deployments — see Section 13.2.
 
 A Vite + MapLibre build on a 4 GB Pi is close to the memory ceiling. The web Dockerfile sets `NODE_OPTIONS=--max-old-space-size=1536` in the build stage, and the README documents that at least 2 GB of swap must be configured on the Pi. If build time exceeds ~5 minutes, the documented upgrade path is GitHub Actions building an arm64 image to GHCR and the Pi pulling the image instead. Do not implement this in v1.
 
@@ -676,7 +682,7 @@ Tapping the indicator opens a short explanation of each state.
 
 ## 9. API
 
-REST, JSON, session cookie auth. All endpoints under `/api`. All responses `private, no-store`.
+REST, JSON, session cookie auth. All endpoints under `/api`, except the tile route served at `/tiles/*` (Section 9.2) — outside the `/api` prefix because it needs Cloudflare's cache, not session auth. All `/api` responses are `private, no-store`; the tile route is deliberately not (Section 4.1).
 
 ### 9.1 Auth
 
@@ -694,6 +700,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`. All responses `priv
 
 | Method | Path | Notes |
 |---|---|---|
+| GET | `/tiles/<filename>` | Serves the PMTiles extract (Section 4.3), with HTTP range support — must answer `206` to a ranged request. Unauthenticated, `Cache-Control: public, max-age=2592000` (Section 4.1) — the one path under the API's control that is deliberately not `private, no-store`. Answers with a clear error under `/tiles/*` if the extract is missing (Section 13.2) |
 | GET | `/api/health` | `{"status":"ok"}` — unauthenticated, used by Phase 0 and by Docker's healthcheck |
 | GET | `/api/city` | Active city metadata + grid parameters |
 | GET | `/api/fog` | Raw fog mask (`application/octet-stream`) + per-district revealed counts; Caddy applies the transport encoding |
@@ -729,7 +736,7 @@ Editing a bar's position recomputes `cell_index` and `district_id`. Existing dis
 
 Per the `RATE_LIMITS` block in Section 7.1, enforced with an in-memory token bucket. Exceeding returns 429 with a `Retry-After` header.
 
-**The client IP must be taken from the trusted proxy header, not the socket.** Behind Cloudflare Tunnel every request reaches the API from `cloudflared`, so socket-based limiting would put all users in one bucket and make the per-IP limits meaningless. Caddy sets `X-Forwarded-For`; Fastify runs with `trustProxy` restricted to the Docker network, and treats the header as authoritative only from that source. Getting this wrong turns Section 13.4's "rate limits are load-bearing" into a false statement, so it is verified in Phase 1.
+**The client IP must be taken from the trusted proxy header, not the socket.** Behind Cloudflare Tunnel every request reaches the API from `cloudflared`, so socket-based limiting would put all users in one bucket and make the per-IP limits meaningless. The Caddy instance immediately in front of the API sets `X-Forwarded-For` — this repository's own in the standalone two-container path, the platform's own single Caddy instance in front of the single container that runs on the Pi (Section 4.3, v1.2.2). Either way exactly one hop sits in front of the API, so Fastify runs with `trustProxy: 1`, trusting only that immediate hop. This matters because `X-Forwarded-For` is a comma-separated list the client can pre-seed with arbitrary entries; only the right-most hop is guaranteed to have been appended by infrastructure under our control. Trusting the left-most entry instead — what `trustProxy: true` does — would let any client mint a fresh rate-limit bucket per request just by sending a different fabricated value. Getting this wrong turns Section 13.4's "rate limits are load-bearing" into a false statement, so it is verified in Phase 1.
 
 Buckets are in memory and reset on restart — acceptable at this scale, and stated here so nobody mistakes it for a durability bug.
 
@@ -894,6 +901,7 @@ PMTiles extract for Karlsruhe, MapLibre integration, custom ink style, district 
 **Definition of Done**
 - [ ] Karlsruhe renders in the ink style on a mid-range Android phone
 - [ ] Pan and zoom hold ≥ 50 fps
+- [ ] The tile route answers `206 Partial Content` to a ranged request (Section 4.1)
 - [ ] Tiles are served with range requests and cached at the Cloudflare edge (verified via `cf-cache-status: HIT`), with the Cache Rule from Section 4.1 in place
 - [ ] City overview → district overview → map navigation works, neighbouring municipalities are greyed and inert
 - [ ] OSM attribution is visible and links correctly
@@ -1020,7 +1028,11 @@ The tile extract is roughly 30–80 MB. GitHub rejects files over 100 MB and war
 
 It is therefore published as a **GitHub Release asset**, not a tracked file. This keeps it freely downloadable — the project stays fully open — without bloating clone size. `scripts/extract-tiles.sh` regenerates it from a public Geofabrik extract, so the artefact is reproducible even without the release.
 
-`docker compose up` fails with a clear, actionable error if the tiles file is absent, naming both the download URL and the regeneration script. The expected filename comes from `CONFIG.TILES_FILENAME`, so a regenerated extract is published under a new versioned name and the edge cache is bypassed automatically (Section 4.1).
+`docker compose up` fails with a clear, actionable error if the tiles file is absent, naming both the download URL and the regeneration script. The expected filename comes from `CONFIG.TILES_FILENAME`, so a regenerated extract is published under a new versioned name and the edge cache is bypassed automatically (Section 4.1). This holds for the standalone two-container path (Section 4), where Compose can check for the file before anything else starts.
+
+It does **not** hold for the single-container deployment that runs on the Pi (v1.2.2). That container is the whole site — refusing to boot because the map extract is absent would take registration, login, and every other feature down over a file that only the map needs, which is a worse failure than a broken map screen. The API therefore always starts. If the file at `${TILES_DIR}/${CONFIG.TILES_FILENAME}` (Section 4.3) is missing at boot, the API logs the absence at `error` level, naming both the download URL and the `scripts/extract-tiles.sh` regeneration command, and every request under `/tiles/*` answers with a clear, machine-readable error (Section 9.5's conventions apply) that the client surfaces on the map screen rather than a raw 404 or a hung request. This is a deliberate difference between the two deployments, not an oversight: the standalone path can afford to fail fast because Compose owns nothing but this one service, while the single container cannot let one optional feature take the whole site down.
+
+Whichever deployment serves it, `/tiles/*` must answer HTTP range requests — PMTiles fetches small byte ranges out of the one large file rather than downloading it whole, and a server that ignores `Range` defeats the point of the format (Section 4.1). This is verified directly against a `206 Partial Content` response, not assumed from the serving library (Section 12, Phase 2 Definition of Done).
 
 ### 13.3 Licences
 
@@ -1056,6 +1068,18 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.4 — tile serving in the single-container deployment
+
+Sections 4.1 and 13.2 assumed Caddy would serve `/tiles/*` and that `docker compose up` would fail outright when the extract was missing — both true only of the standalone two-container path (Section 4). The single-container deployment that actually runs on the Pi (v1.2.2) has no Caddy in front of the API, so neither assumption held, and Phase 2 could not be built against them (`HANDOVER.md` §4.3).
+
+Closed the gap. The API now serves `/tiles/*` itself in that deployment, with HTTP range support stated as mandatory rather than an optimisation — PMTiles fetches small byte ranges out of one large file, and ignoring `Range` would force the whole 30–80 MB extract down the wire on every map view (Section 4.1). The extract lives on the platform's mounted data volume rather than in the image, under a directory named by the new `TILES_DIR` environment variable (default `/data/tiles`, mirroring `DATABASE_PATH`'s convention in `packages/api/src/env.ts`); see Section 4.3.
+
+Section 13.2's "fails to start" behaviour is now explicitly scoped to the standalone compose path. Refusing to boot the single container over a missing map file would take down registration, login, and every other feature over something only the map needs — a deliberate difference from the standalone path, stated as such rather than left implicit. Instead the API always starts, logs the absence loudly at startup with the download URL and the regeneration script, and answers `/tiles/*` with a clear, client-surfaceable error.
+
+Section 4.1's cache table is unchanged in its values but now says which component applies them per deployment: Caddy in the standalone path, the API itself in the single container. The Cloudflare Cache Rule remains required either way — it is edge configuration, not an origin concern.
+
+Section 9.2 gains the tile route, marked unauthenticated and cacheable — the one path under the API's control deliberately not `private, no-store`. Section 9.4's `trustProxy` description, stale since the single-container topology replaced the two-container tunnel (v1.2.2), is corrected to describe trusting exactly one hop. Phase 2's Definition of Done gains a `206 Partial Content` check.
 
 ### v1.3 — city-parameterised data pipeline
 
@@ -1119,4 +1143,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.3*
+*End of specification v1.4*
