@@ -13,13 +13,19 @@ Self-hosted on a Raspberry Pi, reachable at `https://tipsytrails.ahultsch.com` t
 What exists today: a pnpm monorepo (`packages/shared`, `packages/api`,
 `packages/web`); a Fastify API with a `GET /api/health` endpoint; SQLite
 (WAL) with an idempotent migration runner; admin-account seeding from
-environment variables; a placeholder React SPA shell; and a Docker Compose
-stack (Caddy in front of the API) that serves the SPA and proxies the API.
+environment variables; a placeholder React SPA shell; a Docker Compose
+stack (Caddy in front of the API) that serves the SPA and proxies the API;
+and a root `Dockerfile` building a single image where the API serves the SPA
+itself, for the Raspberry Pi's multi-site platform.
 
-The compose stack has not yet been built or run: the development environment
-has no Docker daemon, so `docker compose config` is validated but the images
-themselves are unproven. The first `docker compose up -d --build` on the Pi is
-the real test.
+No Docker image has been built yet: the development environment has no
+Docker daemon, so `docker compose config` is validated but the images
+themselves are unproven. What has been verified is the server itself, run
+from an assembled copy of the runtime image's file layout (compiled API,
+migrations, and built SPA under a `WEB_ROOT`) — it serves both the API and
+the SPA, and runs migrations and admin seeding against a real SQLite file.
+The first `docker compose up -d --build` and the first build of the root
+`Dockerfile` are the real tests, both still to happen on the Pi.
 
 [`SPEC.md`](SPEC.md) is the single source of truth: data model, game mechanics, API surface, design direction, and an eight-phase build plan with a Definition of Done per phase.
 
@@ -53,7 +59,25 @@ machine; the compose file has no Pi-specific assumptions.
 
 ## Deploying
 
-The Pi build happens on the Pi itself:
+There are two deployment paths.
+
+### The Pi (multi-site platform)
+
+The Raspberry Pi that hosts `tipsytrails.ahultsch.com` runs several
+unrelated projects, each as one container behind a single shared Caddy that
+the platform — not this repository — owns and routes. The root `Dockerfile`
+builds one image for that platform: the API serves the built SPA itself, on
+`PORT`. The platform clones this repository, builds the image from the root
+`Dockerfile`, and routes `tipsytrails.ahultsch.com` to the resulting
+container through its own Caddy.
+
+The container needs `PORT`, `DB_PATH`, `PUBLIC_ORIGIN`, and
+`SESSION_SECRET` from the environment, and optionally `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` to seed the admin account. `SESSION_SECRET` must be at
+least 32 characters, and the container refuses to start without
+`PUBLIC_ORIGIN` and `SESSION_SECRET` set.
+
+### Standalone (this repository's compose)
 
 ```
 git clone https://github.com/AlexanderHultsch/TipsyTrails.git

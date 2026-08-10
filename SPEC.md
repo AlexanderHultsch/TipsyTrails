@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.2.1
+**Version:** 1.2.2
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -1014,6 +1014,23 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.2.2 — single-container deployment path
+
+Section 4's architecture puts Caddy in front of a separate API container, one
+service per concern. The Raspberry Pi now also runs a small multi-site
+platform: several unrelated projects share the Pi, each as one container
+listening on `PORT` with its SQLite path at `DB_PATH`, sitting behind a single
+Caddy instance the platform owns rather than one this repository ships. That
+container can't run its own Caddy in front of itself, so the API serves the
+built SPA directly through `@fastify/static`, and the cache rules Section 4.1
+described for Caddy — immutable hashed assets, revalidated `index.html` — are
+reproduced in Fastify instead.
+
+The two-container arrangement in Section 4 is not replaced by this. It is
+still what `docker-compose.yml` and `caddy/Caddyfile` provide, and remains
+correct for anyone self-hosting the project outside the Pi's platform. The
+diagram in Section 4 describes that standalone path, not the Pi's.
 
 ### v1.2.1 — repository rename
 
