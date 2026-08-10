@@ -7,6 +7,7 @@
 // task report for what a human needs to check on a real device.
 import type { CustomLayerInterface, CustomRenderMethod, Map as MaplibreMap } from 'maplibre-gl';
 import type { GridParams } from '@tipsytrails/shared';
+import { CONFIG } from '@tipsytrails/shared';
 import { gridQuadCorners } from './grid-geometry.js';
 import {
   boundingTexelRect,
@@ -16,7 +17,7 @@ import {
   texelToCell,
 } from './grid-texture.js';
 import type { GridSize, TexelRect } from './grid-texture.js';
-import { fogTexelAt, revealProgress, FOG_REVEAL_ANIMATION_MS } from './reveal-animation.js';
+import { fogTexelAt, revealProgress } from './reveal-animation.js';
 
 // A muted, near-paper grey - "milky grey fog" (SPEC.md Section 8.1). Chosen
 // to sit close to ink-style.ts's PAPER (#f4efe6) / INK (#1c1a17) family
@@ -341,7 +342,7 @@ export class WebGLFogLayer implements CustomLayerInterface {
     // callback (see webgl-fog-layer.test.ts). Every following frame runs
     // only when that scheduler invokes it.
     const frame = () => {
-      const progress = revealProgress(this.now() - start, FOG_REVEAL_ANIMATION_MS, false);
+      const progress = revealProgress(this.now() - start, CONFIG.FOG_REVEAL_ANIMATION_MS, false);
       const buffer = new Uint8Array(rect.width * rect.height);
       for (let i = 0; i < buffer.length; i++) {
         const localX = i % rect.width;

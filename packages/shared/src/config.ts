@@ -2,6 +2,7 @@ export const CONFIG = {
   FOG_REVEAL_RADIUS_M: 100,
   FOG_MAX_SPEED_KMH: 30, // above this, no reveal
   FOG_MAX_ACCURACY_M: 200, // samples worse than this are discarded entirely
+  FOG_REVEAL_ANIMATION_MS: 600, // SPEC.md Section 7.3
 
   BAR_DISCOVERY_RADIUS_M: 100,
   BAR_ONSITE_RADIUS_M: 50,

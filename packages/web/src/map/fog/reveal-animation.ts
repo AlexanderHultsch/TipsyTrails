@@ -1,16 +1,3 @@
-// SPEC.md Section 7.3: "Newly revealed cells animate from opaque to clear
-// over 600 ms." Section 8.2: `prefers-reduced-motion` disables that
-// animation entirely - not "shortens it", so a reduced-motion caller must
-// receive the finished state on the very first frame, not an accelerated
-// transition.
-//
-// This constant is spec-normative (the "600 ms" above) and would ordinarily
-// live in packages/shared/src/config.ts alongside every other spec constant
-// (CLAUDE.md's constant rule) - it is defined here instead only because
-// this task's scope explicitly excludes touching packages/shared. See the
-// task report's NOTES.
-export const FOG_REVEAL_ANIMATION_MS = 600;
-
 /**
  * Fraction (0..1) of the reveal animation completed after `elapsedMs`.
  * Pure function of time, independent of any GL state, so it is testable

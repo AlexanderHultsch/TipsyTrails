@@ -1,20 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { fogTexelAt, FOG_REVEAL_ANIMATION_MS, revealProgress } from './reveal-animation.js';
+import { CONFIG } from '@tipsytrails/shared';
+import { fogTexelAt, revealProgress } from './reveal-animation.js';
 
 describe('revealProgress', () => {
   it('runs from 0 to 1 across the configured duration', () => {
-    expect(revealProgress(0, FOG_REVEAL_ANIMATION_MS, false)).toBe(0);
-    expect(revealProgress(FOG_REVEAL_ANIMATION_MS / 2, FOG_REVEAL_ANIMATION_MS, false)).toBe(0.5);
-    expect(revealProgress(FOG_REVEAL_ANIMATION_MS, FOG_REVEAL_ANIMATION_MS, false)).toBe(1);
+    expect(revealProgress(0, CONFIG.FOG_REVEAL_ANIMATION_MS, false)).toBe(0);
+    expect(
+      revealProgress(CONFIG.FOG_REVEAL_ANIMATION_MS / 2, CONFIG.FOG_REVEAL_ANIMATION_MS, false),
+    ).toBe(0.5);
+    expect(
+      revealProgress(CONFIG.FOG_REVEAL_ANIMATION_MS, CONFIG.FOG_REVEAL_ANIMATION_MS, false),
+    ).toBe(1);
   });
 
   it('clamps past the end of the duration', () => {
-    expect(revealProgress(FOG_REVEAL_ANIMATION_MS * 10, FOG_REVEAL_ANIMATION_MS, false)).toBe(1);
+    expect(
+      revealProgress(CONFIG.FOG_REVEAL_ANIMATION_MS * 10, CONFIG.FOG_REVEAL_ANIMATION_MS, false),
+    ).toBe(1);
   });
 
   it('jumps straight to 1 when prefers-reduced-motion is set, at any elapsed time', () => {
-    expect(revealProgress(0, FOG_REVEAL_ANIMATION_MS, true)).toBe(1);
-    expect(revealProgress(1, FOG_REVEAL_ANIMATION_MS, true)).toBe(1);
+    expect(revealProgress(0, CONFIG.FOG_REVEAL_ANIMATION_MS, true)).toBe(1);
+    expect(revealProgress(1, CONFIG.FOG_REVEAL_ANIMATION_MS, true)).toBe(1);
   });
 });
 

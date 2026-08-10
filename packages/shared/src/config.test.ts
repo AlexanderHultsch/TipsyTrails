@@ -53,3 +53,9 @@ describe('CONFIG radii', () => {
     expect(CONFIG.BAR_ONSITE_RADIUS_M).toBeLessThanOrEqual(CONFIG.BAR_DISCOVERY_RADIUS_M);
   });
 });
+
+describe('CONFIG.FOG_REVEAL_ANIMATION_MS', () => {
+  it('matches the spec value', () => {
+    expect(CONFIG.FOG_REVEAL_ANIMATION_MS).toBe(600);
+  });
+});
