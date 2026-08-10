@@ -34,6 +34,23 @@ let dbPath: string;
 let db: Database.Database;
 let app: FastifyInstance;
 
+function caseVariants(name: string): string[] {
+  return [
+    name.toLowerCase(),
+    name.toUpperCase(),
+    name[0].toUpperCase() + name.slice(1).toLowerCase(),
+  ];
+}
+
+// Every spelling an attacker could submit for the same underlying username:
+// the case variants above, plus a space-padded form. Registration's username
+// schema rejects anything outside [a-zA-Z0-9_-], so a stored username never
+// contains whitespace — the padded form must still resolve to the same
+// account (or the same decoy) as the others.
+function spellingVariants(name: string): string[] {
+  return [...caseVariants(name), `  ${name}  `];
+}
+
 function extractSessionCookie(response: LightMyRequestResponse): string {
   const setCookie = response.headers['set-cookie'];
   const cookieHeader = Array.isArray(setCookie) ? setCookie[0] : setCookie;
@@ -312,5 +329,357 @@ describe('rate limiting on auth endpoints', () => {
     const blocked = await app.inject({ method: 'POST', url: '/api/auth/login', payload });
 
     expect(blocked.statusCode).toBe(429);
+  });
+});
+
+describe('GET /api/auth/reset/question', () => {
+  it('returns the real question for a real user', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/auth/reset/question?username=${validRegisterBody.username}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ question: validRegisterBody.securityQuestion });
+  });
+
+  it('returns 200 with the same body shape and a non-empty question for an unknown username', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=no-such-user',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(Object.keys(body)).toEqual(['question']);
+    expect(typeof body.question).toBe('string');
+    expect(body.question.length).toBeGreaterThan(0);
+  });
+
+  it('returns a stable decoy for the same unknown username across requests', async () => {
+    const first = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=nobody-here',
+    });
+    const second = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=nobody-here',
+    });
+
+    expect(first.json().question).toBe(second.json().question);
+  });
+
+  it('returns different decoys for different unknown usernames', async () => {
+    const usernames = [
+      'ghost1',
+      'ghost2',
+      'ghost3',
+      'ghost4',
+      'ghost5',
+      'ghost6',
+      'ghost7',
+      'ghost8',
+    ];
+    const questions: string[] = [];
+
+    for (const username of usernames) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/auth/reset/question?username=${username}`,
+      });
+      questions.push(response.json().question);
+    }
+
+    expect(new Set(questions).size).toBeGreaterThan(1);
+  });
+
+  it('does not depend on whether other users exist', async () => {
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=still-unknown',
+    });
+
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=still-unknown',
+    });
+
+    expect(before.json().question).toBe(after.json().question);
+  });
+
+  it('returns the identical decoy for an unknown username across different casings', async () => {
+    const questions: string[] = [];
+
+    for (const username of caseVariants('ghostwriter')) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/auth/reset/question?username=${username}`,
+      });
+      questions.push(response.json().question);
+    }
+
+    expect(new Set(questions).size).toBe(1);
+  });
+
+  it('returns the identical decoy for an unknown username regardless of surrounding whitespace', async () => {
+    const bare = await app.inject({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=nobody-here',
+    });
+    const padded = await app.inject({
+      method: 'GET',
+      url: `/api/auth/reset/question?username=${encodeURIComponent('  nobody-here  ')}`,
+    });
+
+    expect(padded.json().question).toBe(bare.json().question);
+  });
+
+  it('returns the identical real question across the same casings that keep an unknown username indistinguishable', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const questions: string[] = [];
+
+    for (const username of caseVariants(validRegisterBody.username)) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/auth/reset/question?username=${username}`,
+      });
+      questions.push(response.json().question);
+    }
+
+    expect(new Set(questions).size).toBe(1);
+    expect(questions[0]).toBe(validRegisterBody.securityQuestion);
+  });
+
+  it('returns the same real question for every spelling of a real username, including space-padded', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const questions: string[] = [];
+
+    for (const username of spellingVariants(validRegisterBody.username)) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/auth/reset/question?username=${encodeURIComponent(username)}`,
+      });
+      questions.push(response.json().question);
+    }
+
+    expect(new Set(questions).size).toBe(1);
+    expect(questions[0]).toBe(validRegisterBody.securityQuestion);
+  });
+
+  it('returns the same decoy for every spelling of an unknown username, including space-padded', async () => {
+    const questions: string[] = [];
+
+    for (const username of spellingVariants('nobody-here')) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/auth/reset/question?username=${encodeURIComponent(username)}`,
+      });
+      questions.push(response.json().question);
+    }
+
+    expect(new Set(questions).size).toBe(1);
+  });
+});
+
+describe('POST /api/auth/reset', () => {
+  it('resets the password and invalidates every existing session for that user', async () => {
+    const registerResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
+    const cookie1 = extractSessionCookie(registerResponse);
+
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: validRegisterBody.password },
+    });
+    const cookie2 = extractSessionCookie(loginResponse);
+
+    expect(sessionsCount()).toBe(2);
+
+    const newPassword = 'brand-new-password-1';
+    const resetResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/reset',
+      payload: {
+        username: validRegisterBody.username,
+        securityAnswer: validRegisterBody.securityAnswer,
+        newPassword,
+      },
+    });
+
+    expect(resetResponse.statusCode).toBe(200);
+    expect(sessionsCount()).toBe(0);
+
+    const meWithCookie1 = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: cookie1 },
+    });
+    expect(meWithCookie1.statusCode).toBe(401);
+
+    const meWithCookie2 = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: cookie2 },
+    });
+    expect(meWithCookie2.statusCode).toBe(401);
+
+    const loginWithNewPassword = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: newPassword },
+    });
+    expect(loginWithNewPassword.statusCode).toBe(200);
+
+    const loginWithOldPassword = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: validRegisterBody.password },
+    });
+    expect(loginWithOldPassword.statusCode).toBe(401);
+  });
+
+  it('matches the answer case-insensitively and ignoring surrounding whitespace', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const newPassword = 'another-new-password-1';
+    const resetResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/reset',
+      payload: {
+        username: validRegisterBody.username,
+        securityAnswer: `  ${validRegisterBody.securityAnswer.toUpperCase()}  `,
+        newPassword,
+      },
+    });
+
+    expect(resetResponse.statusCode).toBe(200);
+
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: newPassword },
+    });
+    expect(loginResponse.statusCode).toBe(200);
+  });
+
+  it('returns byte-identical responses for a wrong answer and an unknown username', async () => {
+    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+
+    const wrongAnswer = await app.inject({
+      method: 'POST',
+      url: '/api/auth/reset',
+      payload: {
+        username: validRegisterBody.username,
+        securityAnswer: 'not-the-answer',
+        newPassword: 'some-new-password-1',
+      },
+    });
+    const unknownUsername = await app.inject({
+      method: 'POST',
+      url: '/api/auth/reset',
+      payload: {
+        username: 'no-such-user',
+        securityAnswer: 'whatever',
+        newPassword: 'some-new-password-1',
+      },
+    });
+
+    expect(wrongAnswer.statusCode).toBe(unknownUsername.statusCode);
+    expect(wrongAnswer.json()).toEqual(unknownUsername.json());
+  });
+});
+
+describe('POST /api/auth/change-password', () => {
+  it('requires authentication', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/change-password',
+      payload: { currentPassword: validRegisterBody.password, newPassword: 'brandnewpassword1' },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('rejects a wrong current password', async () => {
+    const registerResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
+    const cookie = extractSessionCookie(registerResponse);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/change-password',
+      headers: { cookie },
+      payload: { currentPassword: 'not-the-password', newPassword: 'brandnewpassword1' },
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('succeeds, clears must_change_password, keeps the calling session working, and invalidates other sessions', async () => {
+    const registerResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
+    const cookie1 = extractSessionCookie(registerResponse);
+
+    db.prepare('UPDATE users SET must_change_password = 1 WHERE username = ?').run(
+      validRegisterBody.username,
+    );
+
+    const loginResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: validRegisterBody.password },
+    });
+    const cookie2 = extractSessionCookie(loginResponse);
+
+    expect(sessionsCount()).toBe(2);
+
+    const newPassword = 'brandnewpassword1';
+    const changeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/auth/change-password',
+      headers: { cookie: cookie1 },
+      payload: { currentPassword: validRegisterBody.password, newPassword },
+    });
+    expect(changeResponse.statusCode).toBe(200);
+
+    const meWithCallingSession = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: cookie1 },
+    });
+    expect(meWithCallingSession.statusCode).toBe(200);
+    expect(meWithCallingSession.json().mustChangePassword).toBe(false);
+
+    const meWithOtherSession = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: cookie2 },
+    });
+    expect(meWithOtherSession.statusCode).toBe(401);
+
+    expect(sessionsCount()).toBe(1);
+
+    const loginWithNewPassword = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: validRegisterBody.username, password: newPassword },
+    });
+    expect(loginWithNewPassword.statusCode).toBe(200);
   });
 });

@@ -62,6 +62,14 @@ export function deleteSessionsForUser(db: Database.Database, userId: number): vo
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 }
 
+export function deleteOtherSessionsForUser(
+  db: Database.Database,
+  userId: number,
+  exceptSessionId: string,
+): void {
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(userId, exceptSessionId);
+}
+
 export function purgeExpiredSessions(db: Database.Database): number {
   const result = db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowSeconds());
   return result.changes;

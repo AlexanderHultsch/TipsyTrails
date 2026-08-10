@@ -1,10 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { CONFIG } from '@tipsytrails/shared';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requireAuth, setSessionCookie, SESSION_COOKIE_NAME } from '../auth/cookie.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { createSession, deleteSession } from '../auth/session.js';
+import {
+  createSession,
+  deleteOtherSessionsForUser,
+  deleteSession,
+  deleteSessionsForUser,
+} from '../auth/session.js';
 import type { Env } from '../env.js';
 import { createRateLimiter } from '../http/rate-limit.js';
 
@@ -21,9 +26,11 @@ const usernameSchema = z
   .max(CONFIG.USERNAME_MAX_LENGTH)
   .regex(/^[a-zA-Z0-9_-]+$/);
 
+const passwordSchema = z.string().min(CONFIG.PASSWORD_MIN_LENGTH);
+
 const registerSchema = z.object({
   username: usernameSchema,
-  password: z.string().min(CONFIG.PASSWORD_MIN_LENGTH),
+  password: passwordSchema,
   securityQuestion: z.string().min(1),
   securityAnswer: z.string().min(1),
   ageConfirmed: z.literal(true),
@@ -33,6 +40,60 @@ const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
 });
+
+const resetQuestionQuerySchema = z.object({
+  username: z.string().trim().min(1),
+});
+
+const resetSchema = z.object({
+  username: z.string().trim().min(1),
+  securityAnswer: z.string().min(1),
+  newPassword: passwordSchema,
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: passwordSchema,
+});
+
+// Fixed pool of plausible security questions used to answer
+// GET /api/auth/reset/question for usernames that do not exist. The index
+// into this list is derived deterministically from an HMAC of the username
+// (Section 9.5), so the same unknown username always gets the same decoy.
+const DECOY_SECURITY_QUESTIONS = [
+  'What was the name of your first pet?',
+  "What is your mother's maiden name?",
+  'What was the make and model of your first car?',
+  'What elementary school did you attend?',
+  'In what city were you born?',
+  'What was your childhood nickname?',
+  'What is the name of your favorite childhood teacher?',
+  'What street did you grow up on?',
+  'What was the first concert you attended?',
+  'What is the name of your favorite fictional character?',
+];
+
+// Expects a username already trimmed at the route boundary (Section 9.5),
+// the same value used for the database lookup, so the two can never
+// normalise differently.
+function decoySecurityQuestion(trimmedUsername: string, env: Env): string {
+  const normalized = trimmedUsername.toLowerCase();
+  const digest = createHmac('sha256', env.SESSION_SECRET).update(normalized).digest();
+  const index = digest.readUInt32BE(0) % DECOY_SECURITY_QUESTIONS.length;
+  return DECOY_SECURITY_QUESTIONS[index];
+}
+
+function usernameFromRequest(request: FastifyRequest): string {
+  const query = request.query as { username?: unknown };
+  if (typeof query?.username === 'string') {
+    return query.username;
+  }
+  const body = request.body as { username?: unknown } | undefined;
+  if (typeof body?.username === 'string') {
+    return body.username;
+  }
+  return '';
+}
 
 interface UserRow {
   id: number;
@@ -75,6 +136,14 @@ function sendInvalidCredentials(reply: FastifyReply): void {
   reply.code(401).send({ code: 'invalid_credentials', message: 'Invalid username or password.' });
 }
 
+function sendInvalidResetAnswer(reply: FastifyReply): void {
+  reply.code(401).send({ code: 'invalid_reset', message: 'Invalid username or security answer.' });
+}
+
+function sendInvalidCurrentPassword(reply: FastifyReply): void {
+  reply.code(401).send({ code: 'invalid_credentials', message: 'Current password is incorrect.' });
+}
+
 function sendUnauthenticated(reply: FastifyReply): void {
   reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
 }
@@ -82,6 +151,11 @@ function sendUnauthenticated(reply: FastifyReply): void {
 export function authRoutes(env: Env) {
   return async function authRoutesPlugin(app: FastifyInstance): Promise<void> {
     const authRateLimit = createRateLimiter('auth');
+    const resetByUserRateLimit = createRateLimiter('resetByUser', {
+      getUsername: usernameFromRequest,
+    });
+    const resetByIpRateLimit = createRateLimiter('resetByIp');
+    const resetRateLimits = [resetByUserRateLimit, resetByIpRateLimit];
 
     app.post('/api/auth/register', { preHandler: authRateLimit }, async (request, reply) => {
       const parsed = registerSchema.safeParse(request.body);
@@ -190,6 +264,102 @@ export function authRoutes(env: Env) {
       }
 
       return toPublicUser(row);
+    });
+
+    app.get('/api/auth/reset/question', { preHandler: resetRateLimits }, async (request, reply) => {
+      const parsed = resetQuestionQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        sendInvalidRequest(reply);
+        return;
+      }
+      const { username } = parsed.data;
+
+      const row = request.server.db
+        .prepare<[string], { security_question: string }>(
+          'SELECT security_question FROM users WHERE username = ?',
+        )
+        .get(username);
+
+      const question = row ? row.security_question : decoySecurityQuestion(username, env);
+      return { question };
+    });
+
+    app.post('/api/auth/reset', { preHandler: resetRateLimits }, async (request, reply) => {
+      const parsed = resetSchema.safeParse(request.body);
+      if (!parsed.success) {
+        sendInvalidRequest(reply);
+        return;
+      }
+      const { username, securityAnswer, newPassword } = parsed.data;
+
+      const row = request.server.db
+        .prepare<[string], { id: number; security_answer_hash: string }>(
+          'SELECT id, security_answer_hash FROM users WHERE username = ?',
+        )
+        .get(username);
+
+      const answerValid = await verifyPassword(
+        row ? row.security_answer_hash : DUMMY_PASSWORD_HASH,
+        securityAnswer.trim().toLowerCase(),
+      );
+
+      if (!row || !answerValid) {
+        sendInvalidResetAnswer(reply);
+        return;
+      }
+
+      const newPasswordHash = await hashPassword(newPassword);
+      request.server.db
+        .prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+        .run(newPasswordHash, row.id);
+      deleteSessionsForUser(request.server.db, row.id);
+
+      return { ok: true };
+    });
+
+    app.post('/api/auth/change-password', { preHandler: requireAuth }, async (request, reply) => {
+      if (request.userId == null) {
+        sendUnauthenticated(reply);
+        return;
+      }
+
+      const parsed = changePasswordSchema.safeParse(request.body);
+      if (!parsed.success) {
+        sendInvalidRequest(reply);
+        return;
+      }
+      const { currentPassword, newPassword } = parsed.data;
+
+      const row = request.server.db
+        .prepare<[number], { password_hash: string }>(
+          'SELECT password_hash FROM users WHERE id = ?',
+        )
+        .get(request.userId);
+      if (!row) {
+        sendUnauthenticated(reply);
+        return;
+      }
+
+      const currentValid = await verifyPassword(row.password_hash, currentPassword);
+      if (!currentValid) {
+        sendInvalidCurrentPassword(reply);
+        return;
+      }
+
+      const newPasswordHash = await hashPassword(newPassword);
+      request.server.db
+        .prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?')
+        .run(newPasswordHash, request.userId);
+
+      const cookieValue = request.cookies[SESSION_COOKIE_NAME];
+      if (cookieValue) {
+        const unsigned = request.unsignCookie(cookieValue);
+        if (unsigned.valid && unsigned.value) {
+          deleteOtherSessionsForUser(request.server.db, request.userId, unsigned.value);
+        }
+      }
+
+      return { ok: true };
     });
   };
 }
