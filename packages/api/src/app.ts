@@ -5,7 +5,10 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { mustChangePasswordGate } from './auth/password-gate.js';
 import type { Env } from './env.js';
+import { createOriginCheck } from './http/csrf.js';
+import { applySecurityHeaders } from './http/security-headers.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 
@@ -29,6 +32,15 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(fastifyCookie, {
     secret: env.SESSION_SECRET,
   });
+
+  app.addHook('onRequest', applySecurityHeaders);
+  app.addHook('onRequest', createOriginCheck(env));
+  // preHandler, not onRequest: it needs request.cookies, which @fastify/cookie
+  // populates in its own onRequest hook and whose relative order among
+  // several root-level onRequest hooks is not guaranteed. Every onRequest
+  // hook (including that one) always finishes before any preHandler hook
+  // runs, so this is guaranteed to see cookies already parsed.
+  app.addHook('preHandler', mustChangePasswordGate);
 
   app.addHook('onSend', async (request, reply, payload) => {
     if (request.url.startsWith('/api')) {

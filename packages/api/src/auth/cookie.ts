@@ -35,24 +35,34 @@ function sendUnauthenticated(reply: FastifyReply): void {
   reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
 }
 
-export async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+// Shared by requireAuth and the must-change-password gate: both need to know
+// which user (if any) a request's session cookie belongs to, resolved the
+// same way, so the two can never disagree about who is authenticated.
+export function resolveSessionUserId(request: FastifyRequest): number | null {
   const cookieValue = request.cookies[SESSION_COOKIE_NAME];
   if (!cookieValue) {
-    sendUnauthenticated(reply);
-    return;
+    return null;
   }
 
   const unsigned = request.unsignCookie(cookieValue);
   if (!unsigned.valid || !unsigned.value) {
-    sendUnauthenticated(reply);
-    return;
+    return null;
   }
 
   const session = getSession(request.server.db, unsigned.value);
   if (!session) {
+    return null;
+  }
+
+  return session.userId;
+}
+
+export async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const userId = resolveSessionUserId(request);
+  if (userId == null) {
     sendUnauthenticated(reply);
     return;
   }
 
-  request.userId = session.userId;
+  request.userId = userId;
 }

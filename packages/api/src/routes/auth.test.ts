@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
-import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
 import { verifyPassword } from '../auth/password.js';
@@ -60,6 +60,17 @@ function extractSessionCookie(response: LightMyRequestResponse): string {
   return cookieHeader.split(';')[0];
 }
 
+// The CSRF Origin check (Section 10.1) now runs in front of every route
+// exercised here. A real browser always sends this header on these methods
+// (see http/csrf.ts), so every call below carries the correct one by
+// default, exactly like a genuine same-origin request from the SPA would.
+function injectWithOrigin(options: InjectOptions): Promise<LightMyRequestResponse> {
+  return app.inject({
+    ...options,
+    headers: { origin: baseEnv.PUBLIC_ORIGIN, ...options.headers },
+  });
+}
+
 function usersCount(): number {
   return db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM users').get()?.count ?? 0;
 }
@@ -89,7 +100,7 @@ afterEach(() => {
 
 describe('POST /api/auth/register', () => {
   it('succeeds, sets a session cookie, and creates exactly one user row', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
@@ -101,7 +112,11 @@ describe('POST /api/auth/register', () => {
   });
 
   it('stores argon2id hashes for the password and security answer, and the plain security question', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
     const row = db
       .prepare<
@@ -118,7 +133,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('matches the stored security answer hash against the lower-cased, trimmed submission', async () => {
-    await app.inject({
+    await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, securityAnswer: '  ReX  ' },
@@ -135,7 +150,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects registration when ageConfirmed is missing and creates no user', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: {
@@ -151,7 +166,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects registration when ageConfirmed is false and creates no user', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, ageConfirmed: false },
@@ -162,7 +177,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects a username shorter than the minimum length', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, username: 'ab' },
@@ -172,7 +187,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects a username longer than the maximum length', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, username: 'a'.repeat(21) },
@@ -182,7 +197,7 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects a username with characters outside the allowed set', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, username: 'bad name!' },
@@ -192,9 +207,13 @@ describe('POST /api/auth/register', () => {
   });
 
   it('rejects a username differing only in case from an existing one with 409', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: { ...validRegisterBody, username: 'TrailWalker' },
@@ -208,11 +227,15 @@ describe('POST /api/auth/register', () => {
 
 describe('POST /api/auth/login', () => {
   beforeEach(async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
   });
 
   it('succeeds with correct credentials and sets a cookie', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: validRegisterBody.password },
@@ -223,12 +246,12 @@ describe('POST /api/auth/login', () => {
   });
 
   it('returns the same status and body for a wrong password and an unknown username', async () => {
-    const wrongPassword = await app.inject({
+    const wrongPassword = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: 'not-the-password' },
     });
-    const unknownUsername = await app.inject({
+    const unknownUsername = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: 'no-such-user', password: 'whatever12' },
@@ -241,7 +264,7 @@ describe('POST /api/auth/login', () => {
 
 describe('POST /api/auth/logout', () => {
   it('clears the session so the cookie no longer works and removes the sessions row', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
@@ -249,7 +272,7 @@ describe('POST /api/auth/logout', () => {
     const cookie = extractSessionCookie(registerResponse);
     expect(sessionsCount()).toBe(1);
 
-    const logoutResponse = await app.inject({
+    const logoutResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/logout',
       headers: { cookie },
@@ -257,7 +280,7 @@ describe('POST /api/auth/logout', () => {
     expect(logoutResponse.statusCode).toBe(200);
     expect(sessionsCount()).toBe(0);
 
-    const meResponse = await app.inject({
+    const meResponse = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie },
@@ -266,19 +289,19 @@ describe('POST /api/auth/logout', () => {
   });
 
   it('answers the same way whether or not a valid session was present', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
     });
     const cookie = extractSessionCookie(registerResponse);
 
-    const withSession = await app.inject({
+    const withSession = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/logout',
       headers: { cookie },
     });
-    const withoutSession = await app.inject({ method: 'POST', url: '/api/auth/logout' });
+    const withoutSession = await injectWithOrigin({ method: 'POST', url: '/api/auth/logout' });
 
     expect(withSession.statusCode).toBe(withoutSession.statusCode);
     expect(withSession.json()).toEqual(withoutSession.json());
@@ -287,20 +310,20 @@ describe('POST /api/auth/logout', () => {
 
 describe('GET /api/auth/me', () => {
   it('returns 401 without a cookie', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/auth/me' });
+    const response = await injectWithOrigin({ method: 'GET', url: '/api/auth/me' });
 
     expect(response.statusCode).toBe(401);
   });
 
   it('returns the current user without any hash field or the security question', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
     });
     const cookie = extractSessionCookie(registerResponse);
 
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie },
@@ -323,10 +346,10 @@ describe('rate limiting on auth endpoints', () => {
     const payload = { username: 'nobody', password: 'whatever12' };
 
     for (let i = 0; i < authLimit.limit; i++) {
-      await app.inject({ method: 'POST', url: '/api/auth/login', payload });
+      await injectWithOrigin({ method: 'POST', url: '/api/auth/login', payload });
     }
 
-    const blocked = await app.inject({ method: 'POST', url: '/api/auth/login', payload });
+    const blocked = await injectWithOrigin({ method: 'POST', url: '/api/auth/login', payload });
 
     expect(blocked.statusCode).toBe(429);
   });
@@ -334,9 +357,13 @@ describe('rate limiting on auth endpoints', () => {
 
 describe('GET /api/auth/reset/question', () => {
   it('returns the real question for a real user', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'GET',
       url: `/api/auth/reset/question?username=${validRegisterBody.username}`,
     });
@@ -346,7 +373,7 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('returns 200 with the same body shape and a non-empty question for an unknown username', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=no-such-user',
     });
@@ -359,11 +386,11 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('returns a stable decoy for the same unknown username across requests', async () => {
-    const first = await app.inject({
+    const first = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=nobody-here',
     });
-    const second = await app.inject({
+    const second = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=nobody-here',
     });
@@ -385,7 +412,7 @@ describe('GET /api/auth/reset/question', () => {
     const questions: string[] = [];
 
     for (const username of usernames) {
-      const response = await app.inject({
+      const response = await injectWithOrigin({
         method: 'GET',
         url: `/api/auth/reset/question?username=${username}`,
       });
@@ -396,14 +423,18 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('does not depend on whether other users exist', async () => {
-    const before = await app.inject({
+    const before = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=still-unknown',
     });
 
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
-    const after = await app.inject({
+    const after = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=still-unknown',
     });
@@ -415,7 +446,7 @@ describe('GET /api/auth/reset/question', () => {
     const questions: string[] = [];
 
     for (const username of caseVariants('ghostwriter')) {
-      const response = await app.inject({
+      const response = await injectWithOrigin({
         method: 'GET',
         url: `/api/auth/reset/question?username=${username}`,
       });
@@ -426,11 +457,11 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('returns the identical decoy for an unknown username regardless of surrounding whitespace', async () => {
-    const bare = await app.inject({
+    const bare = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/reset/question?username=nobody-here',
     });
-    const padded = await app.inject({
+    const padded = await injectWithOrigin({
       method: 'GET',
       url: `/api/auth/reset/question?username=${encodeURIComponent('  nobody-here  ')}`,
     });
@@ -439,12 +470,16 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('returns the identical real question across the same casings that keep an unknown username indistinguishable', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
     const questions: string[] = [];
 
     for (const username of caseVariants(validRegisterBody.username)) {
-      const response = await app.inject({
+      const response = await injectWithOrigin({
         method: 'GET',
         url: `/api/auth/reset/question?username=${username}`,
       });
@@ -456,12 +491,16 @@ describe('GET /api/auth/reset/question', () => {
   });
 
   it('returns the same real question for every spelling of a real username, including space-padded', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
     const questions: string[] = [];
 
     for (const username of spellingVariants(validRegisterBody.username)) {
-      const response = await app.inject({
+      const response = await injectWithOrigin({
         method: 'GET',
         url: `/api/auth/reset/question?username=${encodeURIComponent(username)}`,
       });
@@ -476,7 +515,7 @@ describe('GET /api/auth/reset/question', () => {
     const questions: string[] = [];
 
     for (const username of spellingVariants('nobody-here')) {
-      const response = await app.inject({
+      const response = await injectWithOrigin({
         method: 'GET',
         url: `/api/auth/reset/question?username=${encodeURIComponent(username)}`,
       });
@@ -489,14 +528,14 @@ describe('GET /api/auth/reset/question', () => {
 
 describe('POST /api/auth/reset', () => {
   it('resets the password and invalidates every existing session for that user', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
     });
     const cookie1 = extractSessionCookie(registerResponse);
 
-    const loginResponse = await app.inject({
+    const loginResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: validRegisterBody.password },
@@ -506,7 +545,7 @@ describe('POST /api/auth/reset', () => {
     expect(sessionsCount()).toBe(2);
 
     const newPassword = 'brand-new-password-1';
-    const resetResponse = await app.inject({
+    const resetResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/reset',
       payload: {
@@ -519,28 +558,28 @@ describe('POST /api/auth/reset', () => {
     expect(resetResponse.statusCode).toBe(200);
     expect(sessionsCount()).toBe(0);
 
-    const meWithCookie1 = await app.inject({
+    const meWithCookie1 = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie: cookie1 },
     });
     expect(meWithCookie1.statusCode).toBe(401);
 
-    const meWithCookie2 = await app.inject({
+    const meWithCookie2 = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie: cookie2 },
     });
     expect(meWithCookie2.statusCode).toBe(401);
 
-    const loginWithNewPassword = await app.inject({
+    const loginWithNewPassword = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: newPassword },
     });
     expect(loginWithNewPassword.statusCode).toBe(200);
 
-    const loginWithOldPassword = await app.inject({
+    const loginWithOldPassword = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: validRegisterBody.password },
@@ -549,10 +588,14 @@ describe('POST /api/auth/reset', () => {
   });
 
   it('matches the answer case-insensitively and ignoring surrounding whitespace', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
     const newPassword = 'another-new-password-1';
-    const resetResponse = await app.inject({
+    const resetResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/reset',
       payload: {
@@ -564,7 +607,7 @@ describe('POST /api/auth/reset', () => {
 
     expect(resetResponse.statusCode).toBe(200);
 
-    const loginResponse = await app.inject({
+    const loginResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: newPassword },
@@ -573,9 +616,13 @@ describe('POST /api/auth/reset', () => {
   });
 
   it('returns byte-identical responses for a wrong answer and an unknown username', async () => {
-    await app.inject({ method: 'POST', url: '/api/auth/register', payload: validRegisterBody });
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
 
-    const wrongAnswer = await app.inject({
+    const wrongAnswer = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/reset',
       payload: {
@@ -584,7 +631,7 @@ describe('POST /api/auth/reset', () => {
         newPassword: 'some-new-password-1',
       },
     });
-    const unknownUsername = await app.inject({
+    const unknownUsername = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/reset',
       payload: {
@@ -601,7 +648,7 @@ describe('POST /api/auth/reset', () => {
 
 describe('POST /api/auth/change-password', () => {
   it('requires authentication', async () => {
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/change-password',
       payload: { currentPassword: validRegisterBody.password, newPassword: 'brandnewpassword1' },
@@ -611,14 +658,14 @@ describe('POST /api/auth/change-password', () => {
   });
 
   it('rejects a wrong current password', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
     });
     const cookie = extractSessionCookie(registerResponse);
 
-    const response = await app.inject({
+    const response = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/change-password',
       headers: { cookie },
@@ -629,7 +676,7 @@ describe('POST /api/auth/change-password', () => {
   });
 
   it('succeeds, clears must_change_password, keeps the calling session working, and invalidates other sessions', async () => {
-    const registerResponse = await app.inject({
+    const registerResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/register',
       payload: validRegisterBody,
@@ -640,7 +687,7 @@ describe('POST /api/auth/change-password', () => {
       validRegisterBody.username,
     );
 
-    const loginResponse = await app.inject({
+    const loginResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: validRegisterBody.password },
@@ -650,7 +697,7 @@ describe('POST /api/auth/change-password', () => {
     expect(sessionsCount()).toBe(2);
 
     const newPassword = 'brandnewpassword1';
-    const changeResponse = await app.inject({
+    const changeResponse = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/change-password',
       headers: { cookie: cookie1 },
@@ -658,7 +705,7 @@ describe('POST /api/auth/change-password', () => {
     });
     expect(changeResponse.statusCode).toBe(200);
 
-    const meWithCallingSession = await app.inject({
+    const meWithCallingSession = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie: cookie1 },
@@ -666,7 +713,7 @@ describe('POST /api/auth/change-password', () => {
     expect(meWithCallingSession.statusCode).toBe(200);
     expect(meWithCallingSession.json().mustChangePassword).toBe(false);
 
-    const meWithOtherSession = await app.inject({
+    const meWithOtherSession = await injectWithOrigin({
       method: 'GET',
       url: '/api/auth/me',
       headers: { cookie: cookie2 },
@@ -675,7 +722,7 @@ describe('POST /api/auth/change-password', () => {
 
     expect(sessionsCount()).toBe(1);
 
-    const loginWithNewPassword = await app.inject({
+    const loginWithNewPassword = await injectWithOrigin({
       method: 'POST',
       url: '/api/auth/login',
       payload: { username: validRegisterBody.username, password: newPassword },
