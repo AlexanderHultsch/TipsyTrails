@@ -1,0 +1,142 @@
+{
+  "grid_width": 417,
+  "grid_height": 343,
+  "playable_cells": 68946,
+  "districts": [
+    {
+      "name": "Grötzingen",
+      "index": 0,
+      "playable_cells": 4503
+    },
+    {
+      "name": "Wolfartsweier",
+      "index": 1,
+      "playable_cells": 769
+    },
+    {
+      "name": "Oberreut",
+      "index": 2,
+      "playable_cells": 965
+    },
+    {
+      "name": "Grünwettersbach",
+      "index": 3,
+      "playable_cells": 2453
+    },
+    {
+      "name": "Rüppurr",
+      "index": 4,
+      "playable_cells": 2791
+    },
+    {
+      "name": "Palmbach",
+      "index": 5,
+      "playable_cells": 534
+    },
+    {
+      "name": "Hohenwettersbach",
+      "index": 6,
+      "playable_cells": 1634
+    },
+    {
+      "name": "Waldstadt",
+      "index": 7,
+      "playable_cells": 4150
+    },
+    {
+      "name": "Weststadt",
+      "index": 8,
+      "playable_cells": 684
+    },
+    {
+      "name": "Weiherfeld-Dammerstock",
+      "index": 9,
+      "playable_cells": 1192
+    },
+    {
+      "name": "Innenstadt-West",
+      "index": 10,
+      "playable_cells": 950
+    },
+    {
+      "name": "Nordstadt",
+      "index": 11,
+      "playable_cells": 1065
+    },
+    {
+      "name": "Daxlanden",
+      "index": 12,
+      "playable_cells": 4319
+    },
+    {
+      "name": "Nordweststadt",
+      "index": 13,
+      "playable_cells": 1389
+    },
+    {
+      "name": "Südstadt",
+      "index": 14,
+      "playable_cells": 850
+    },
+    {
+      "name": "Stupferich",
+      "index": 15,
+      "playable_cells": 2570
+    },
+    {
+      "name": "Mühlburg",
+      "index": 16,
+      "playable_cells": 2141
+    },
+    {
+      "name": "Rintheim",
+      "index": 17,
+      "playable_cells": 1381
+    },
+    {
+      "name": "Grünwinkel",
+      "index": 18,
+      "playable_cells": 1761
+    },
+    {
+      "name": "Knielingen",
+      "index": 19,
+      "playable_cells": 8187
+    },
+    {
+      "name": "Durlach",
+      "index": 20,
+      "playable_cells": 9101
+    },
+    {
+      "name": "Südweststadt",
+      "index": 21,
+      "playable_cells": 1193
+    },
+    {
+      "name": "Oststadt",
+      "index": 22,
+      "playable_cells": 2038
+    },
+    {
+      "name": "Beiertheim-Bulach",
+      "index": 23,
+      "playable_cells": 1143
+    },
+    {
+      "name": "Innenstadt-Ost",
+      "index": 24,
+      "playable_cells": 636
+    },
+    {
+      "name": "Neureut",
+      "index": 25,
+      "playable_cells": 7663
+    },
+    {
+      "name": "Hagsfeld",
+      "index": 26,
+      "playable_cells": 2884
+    }
+  ]
+}
