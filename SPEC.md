@@ -852,6 +852,8 @@ Every script takes a single `--city=<slug>` argument and reads everything else f
 
 `import-osm-bars.ts` joins this chain unchanged in behaviour — it still runs once, locally, offline from the running app (11.1) — except that it now also takes `--city` and reads its Overpass filter and output path from the city config instead of having Karlsruhe hard-coded.
 
+`fetch-boundaries.ts` also accepts `--input-city=<path>` and `--input-neighbours=<path>` to read a previously saved Overpass response from disk instead of querying, so the conversion can be run and re-run on a machine without a route to Overpass.
+
 **Output and what is committed.** GeoJSON produced by `fetch-boundaries.ts` and `import-osm-bars.ts` lands in `data/seed/<slug>/` and is committed, ODbL-licensed like every other OSM-derived artefact (13.1, 13.3). The PMTiles extract from `extract-tiles.sh` is **never** committed, for the reasons already given in Section 13.2 — the scripts must not tempt anyone to override that by writing it anywhere under a committed path. `data/seed/` is therefore per-city rather than the flat directory earlier drafts of this document showed; the tree in Section 4.2 reflects that.
 
 **Scripts fail loudly and leave nothing half-written.** A failed run must not leave a truncated GeoJSON file that a later script, or a human, would happily consume as if it were complete. Output is written to a temporary path and renamed into place only on success, or not written at all. Every script prints a summary of what it produced — feature counts, file sizes, the city slug — on exit.

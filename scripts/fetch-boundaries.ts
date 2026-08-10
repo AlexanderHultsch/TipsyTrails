@@ -10,6 +10,16 @@
 //   node scripts/fetch-boundaries.ts --city=karlsruhe
 //   node scripts/fetch-boundaries.ts --city=karlsruhe --dry-run
 //   node scripts/fetch-boundaries.ts --city=karlsruhe --overpass-url=https://overpass.example/api/interpreter
+//   node scripts/fetch-boundaries.ts --city=karlsruhe --input-city=./city.json --input-neighbours=./neighbours.json
+//
+// --input-city and --input-neighbours each read a previously saved Overpass
+// JSON response from disk instead of querying for it, so the two queries can
+// be run by hand (e.g. in a browser, from a machine that *can* reach
+// Overpass) and the conversion re-run here offline. Either flag may be given
+// on its own; whichever is omitted is still fetched over the network. When
+// both are given, this script makes no network request at all. Saved
+// responses go through the exact same validation and conversion as fetched
+// ones — there is no separate, laxer path for local files.
 //
 // Node 22 strips TypeScript types natively, so relative imports here use an
 // explicit `.ts` extension and resolve straight to source with no build
@@ -46,12 +56,16 @@ interface CliArgs {
   city: string;
   dryRun: boolean;
   overpassUrl: string;
+  inputCity?: string;
+  inputNeighbours?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   let city: string | undefined;
   let dryRun = false;
   let overpassUrl = DEFAULT_OVERPASS_URL;
+  let inputCity: string | undefined;
+  let inputNeighbours: string | undefined;
 
   for (const arg of argv) {
     if (arg === '--dry-run') {
@@ -60,9 +74,14 @@ function parseArgs(argv: string[]): CliArgs {
       city = arg.slice('--city='.length);
     } else if (arg.startsWith('--overpass-url=')) {
       overpassUrl = arg.slice('--overpass-url='.length);
+    } else if (arg.startsWith('--input-city=')) {
+      inputCity = arg.slice('--input-city='.length);
+    } else if (arg.startsWith('--input-neighbours=')) {
+      inputNeighbours = arg.slice('--input-neighbours='.length);
     } else {
       throw new Error(
-        `Unrecognised argument "${arg}". Expected --city=<slug> [--dry-run] [--overpass-url=<url>].`,
+        `Unrecognised argument "${arg}". Expected --city=<slug> [--dry-run] [--overpass-url=<url>] ` +
+          `[--input-city=<path>] [--input-neighbours=<path>].`,
       );
     }
   }
@@ -71,7 +90,7 @@ function parseArgs(argv: string[]): CliArgs {
     throw new Error('Missing required --city=<slug> argument.');
   }
 
-  return { city, dryRun, overpassUrl };
+  return { city, dryRun, overpassUrl, inputCity, inputNeighbours };
 }
 
 function loadCityConfig(repoRoot: string, slug: string): CityConfig {
@@ -140,6 +159,37 @@ async function queryOverpass(
   return parseOverpassPayload(body, response.headers.get('content-type') ?? undefined);
 }
 
+/**
+ * Reads a previously saved Overpass response from disk and runs it through
+ * the exact same `parseOverpassPayload` validation as a fetched response —
+ * the same HTML-error-page rejection, the same "elements" shape check.
+ * There is no content type to pass (there is no HTTP response here), which
+ * `parseOverpassPayload` already tolerates for the HTML check via the body
+ * itself.
+ */
+function loadOverpassResponseFromFile(path: string, flagName: string): OverpassResponse {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    throw new Error(
+      `No file found at "${path}" (given via ${flagName}). Expected a saved Overpass "out geom" JSON ` +
+        `response.`,
+      { cause: err },
+    );
+  }
+
+  try {
+    return parseOverpassPayload(raw, undefined);
+  } catch (err) {
+    throw new Error(
+      `"${path}" (given via ${flagName}) does not contain a usable Overpass response: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+}
+
 function writeAtomic(targetPath: string, contents: string): number {
   const tmpPath = `${targetPath}.tmp-${randomBytes(6).toString('hex')}`;
   writeFileSync(tmpPath, contents, 'utf-8');
@@ -165,9 +215,19 @@ async function main(): Promise<void> {
   if (args.dryRun) {
     console.log('--- city + districts query ---');
     console.log(cityDistrictsQuery);
+    console.log(
+      args.inputCity
+        ? `Source: file ${args.inputCity} (no network request)`
+        : `Source: network query to ${args.overpassUrl}`,
+    );
     console.log();
     console.log('--- neighbours query ---');
     console.log(neighboursQuery);
+    console.log(
+      args.inputNeighbours
+        ? `Source: file ${args.inputNeighbours} (no network request)`
+        : `Source: network query to ${args.overpassUrl}`,
+    );
     console.log();
     console.log('Would write:');
     console.log(`  ${outputPaths.city}`);
@@ -176,20 +236,33 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log(`Querying ${args.overpassUrl} for "${config.name}"...`);
-  const cityDistrictsResponse = await queryOverpass(
-    args.overpassUrl,
-    cityDistrictsQuery,
-    DEFAULT_OVERPASS_TIMEOUT_S,
-  );
+  let cityDistrictsResponse: OverpassResponse;
+  if (args.inputCity) {
+    console.log(`Reading city + districts response from ${args.inputCity}...`);
+    cityDistrictsResponse = loadOverpassResponseFromFile(args.inputCity, '--input-city');
+  } else {
+    console.log(`Querying ${args.overpassUrl} for "${config.name}" (city + districts)...`);
+    cityDistrictsResponse = await queryOverpass(
+      args.overpassUrl,
+      cityDistrictsQuery,
+      DEFAULT_OVERPASS_TIMEOUT_S,
+    );
+  }
   const cityRelation = findCityRelation(cityDistrictsResponse, config);
   const districtRelations = findDistrictRelations(cityDistrictsResponse, config, cityRelation.id);
 
-  const neighboursResponse = await queryOverpass(
-    args.overpassUrl,
-    neighboursQuery,
-    DEFAULT_OVERPASS_TIMEOUT_S,
-  );
+  let neighboursResponse: OverpassResponse;
+  if (args.inputNeighbours) {
+    console.log(`Reading neighbours response from ${args.inputNeighbours}...`);
+    neighboursResponse = loadOverpassResponseFromFile(args.inputNeighbours, '--input-neighbours');
+  } else {
+    console.log(`Querying ${args.overpassUrl} for "${config.name}" (neighbours)...`);
+    neighboursResponse = await queryOverpass(
+      args.overpassUrl,
+      neighboursQuery,
+      DEFAULT_OVERPASS_TIMEOUT_S,
+    );
+  }
   const neighbourRelations = findNeighbourRelations(neighboursResponse, cityRelation.id);
 
   // Build every output document in memory first. Nothing is written until
