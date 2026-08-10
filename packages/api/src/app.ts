@@ -6,6 +6,7 @@ import fastifyStatic from '@fastify/static';
 import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './env.js';
+import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
 
 declare module 'fastify' {
@@ -37,6 +38,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   });
 
   app.register(healthRoutes);
+  app.register(authRoutes(env));
 
   const webRoot = env.WEB_ROOT ?? defaultWebRoot;
   if (existsSync(webRoot)) {
