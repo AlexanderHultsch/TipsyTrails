@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getCity, getFogMask } from './client.js';
+import {
+  ApiError,
+  getCity,
+  getFogMask,
+  getVapidPublicKey,
+  subscribePush,
+  unsubscribePush,
+} from './client.js';
 
 function stubFetchOnce(response: Response) {
   vi.stubGlobal(
@@ -112,5 +119,61 @@ describe('getCity', () => {
     const city = await getCity();
     expect(city.gridWidth).toBe(417);
     expect(city.gridHeight).toBe(343);
+  });
+});
+
+describe('getVapidPublicKey', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns null when the server has push disabled', async () => {
+    stubFetchOnce(jsonResponse(200, { publicKey: null }));
+
+    expect(await getVapidPublicKey()).toEqual({ publicKey: null });
+  });
+
+  it('returns the configured public key', async () => {
+    stubFetchOnce(jsonResponse(200, { publicKey: 'abc' }));
+
+    expect(await getVapidPublicKey()).toEqual({ publicKey: 'abc' });
+  });
+});
+
+describe('subscribePush / unsubscribePush', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts the subscription payload to POST /api/push/subscribe', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await subscribePush({
+      endpoint: 'https://push.example/abc',
+      keys: { p256dh: 'p', auth: 'a' },
+    });
+
+    expect(result).toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/push/subscribe');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      endpoint: 'https://push.example/abc',
+      keys: { p256dh: 'p', auth: 'a' },
+    });
+  });
+
+  it('sends the endpoint to DELETE /api/push/subscribe', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await unsubscribePush({ endpoint: 'https://push.example/abc' });
+
+    expect(result).toEqual({ ok: true });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/push/subscribe');
+    expect(init.method).toBe('DELETE');
+    expect(JSON.parse(init.body as string)).toEqual({ endpoint: 'https://push.example/abc' });
   });
 });

@@ -10,6 +10,7 @@ import type {
   Sample,
   SamplesResponse,
   User,
+  VapidPublicKeyResponse,
   VisitSummary,
 } from './types.js';
 
@@ -227,6 +228,35 @@ export function checkIn(input: { barId: number }): Promise<VisitSummary> {
 // visits, for the persistent banner (Section 7.5).
 export function getPendingVisits(): Promise<PendingVisitsResponse> {
   return request<PendingVisitsResponse>('/api/visits/pending');
+}
+
+// GET /api/push/vapid-public-key (Section 9.2/Phase 5 step 5): the key
+// tracking/usePushSubscription.ts needs to call `pushManager.subscribe()` -
+// null when the server has no VAPID_* configuration.
+export function getVapidPublicKey(): Promise<VapidPublicKeyResponse> {
+  return request<VapidPublicKeyResponse>('/api/push/vapid-public-key');
+}
+
+// POST /api/push/subscribe (Section 5.9/9.2): stores or updates the
+// caller's push subscription; re-subscribing with an endpoint that already
+// exists must not error (task Section B), so this is always safe to call
+// again with the same PushSubscription.
+export function subscribePush(input: {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}): Promise<{ ok: true }> {
+  return request<{ ok: true }>('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+// DELETE /api/push/subscribe (Section 5.9/9.2).
+export function unsubscribePush(input: { endpoint: string }): Promise<{ ok: true }> {
+  return request<{ ok: true }>('/api/push/subscribe', {
+    method: 'DELETE',
+    body: JSON.stringify(input),
+  });
 }
 
 export function updateSettings(input: { isAnonymous: boolean }): Promise<User> {

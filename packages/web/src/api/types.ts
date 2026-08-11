@@ -92,3 +92,11 @@ export interface VisitSummary {
 export interface PendingVisitsResponse {
   visits: VisitSummary[];
 }
+
+// GET /api/push/vapid-public-key response shape (packages/api/src/routes/push.ts,
+// Phase 5 step 5): null when the server has no VAPID_* configuration at all
+// (push disabled), never an error - see that route's own comment for why
+// this exists outside SPEC.md Section 9.2's original endpoint table.
+export interface VapidPublicKeyResponse {
+  publicKey: string | null;
+}

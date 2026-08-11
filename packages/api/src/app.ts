@@ -12,12 +12,15 @@ import type { Env } from './env.js';
 import { loadDistrictIdByGridIndex } from './fog/district-index.js';
 import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
+import { resolveVapidConfig } from './push/config.js';
+import { createWebPushSender, type PushSender } from './push/sender.js';
 import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
 import { fogRoutes, type AcceptedPosition } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
+import { pushRoutes } from './routes/push.js';
 import { resolveSeedDir, staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
 import { visitsRoutes } from './routes/visits.js';
@@ -36,6 +39,13 @@ declare module 'fastify' {
     // (SPEC.md Section 5.2), loaded alongside `grid` from the same seed
     // directory. Null under the same conditions `grid` is null.
     districtIdByGridIndex: Map<number, number> | null;
+    // SPEC.md Sections 5.9, 7.9, Phase 5 step 5: resolved once at boot from
+    // the VAPID_* env vars (push/config.ts). Null means push is disabled —
+    // absent config, incomplete config, or config `webpush.setVapidDetails`
+    // itself rejected — and maintenance.ts's dispatch step is a no-op the
+    // same way the grid/tiles routes above answer with a clear error rather
+    // than crashing when their own optional input is missing.
+    pushSender: PushSender | null;
   }
 }
 
@@ -104,6 +114,27 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   // cannot see.
   const lastAccepted = new Map<number, AcceptedPosition>();
 
+  // Section 5.9/7.9/Phase 5 step 5: push is an enhancement (task brief) —
+  // PUBLIC_ORIGIN and SESSION_SECRET above remain the only variables that
+  // stop the app from booting. Absent VAPID_* config is the ordinary,
+  // silent-at-info-level case; some but not all three set almost certainly
+  // means a typo, so it gets a warning — either way `pushSender` ends up
+  // null and every push feature degrades to "disabled" rather than the
+  // container refusing to start.
+  const vapid = resolveVapidConfig(env);
+  let pushSender: PushSender | null = null;
+  if (vapid.status === 'disabled') {
+    app.log.info('Web Push is not configured (VAPID_* env vars absent); push reminders are off.');
+  } else if (vapid.status === 'misconfigured') {
+    app.log.warn(
+      `Web Push is misconfigured: ${vapid.missing.join(', ')} not set. Set all three VAPID_* ` +
+        'variables to enable push, or none to leave it disabled. Push reminders are off.',
+    );
+  } else {
+    pushSender = createWebPushSender(vapid.config, app.log);
+  }
+  app.decorate('pushSender', pushSender);
+
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
@@ -111,6 +142,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(fogRoutes(lastAccepted));
   app.register(barsRoutes);
   app.register(visitsRoutes(lastAccepted));
+  app.register(pushRoutes(vapid.status === 'enabled' ? vapid.config.publicKey : null));
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
   const tilesAvailable = existsSync(tilesPath);

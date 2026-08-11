@@ -165,6 +165,34 @@ describe('loadEnv', () => {
     expect(env.API_PORT).toBe(3000);
   });
 
+  it('leaves the three VAPID_* variables undefined when absent, without throwing', () => {
+    const env = loadEnv(validEnv);
+
+    expect(env.VAPID_PUBLIC_KEY).toBeUndefined();
+    expect(env.VAPID_PRIVATE_KEY).toBeUndefined();
+    expect(env.VAPID_SUBJECT).toBeUndefined();
+  });
+
+  it('preserves real VAPID_* values unchanged', () => {
+    const env = loadEnv({
+      ...validEnv,
+      VAPID_PUBLIC_KEY: 'public-key',
+      VAPID_PRIVATE_KEY: 'private-key',
+      VAPID_SUBJECT: 'mailto:admin@example.com',
+    });
+
+    expect(env.VAPID_PUBLIC_KEY).toBe('public-key');
+    expect(env.VAPID_PRIVATE_KEY).toBe('private-key');
+    expect(env.VAPID_SUBJECT).toBe('mailto:admin@example.com');
+  });
+
+  it('treats an empty or whitespace-only VAPID_* variable as absent', () => {
+    const env = loadEnv({ ...validEnv, VAPID_PUBLIC_KEY: '', VAPID_SUBJECT: '   ' });
+
+    expect(env.VAPID_PUBLIC_KEY).toBeUndefined();
+    expect(env.VAPID_SUBJECT).toBeUndefined();
+  });
+
   it('falls back to DATABASE_PATH when DB_PATH is empty and DATABASE_PATH is set', () => {
     const env = loadEnv({ ...validEnv, DB_PATH: '' });
 

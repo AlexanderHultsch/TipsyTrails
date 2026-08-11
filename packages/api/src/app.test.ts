@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
+import webpush from 'web-push';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { openDatabase } from './db/index.js';
@@ -192,5 +193,58 @@ describe('grid.bin loaded at boot', () => {
     const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
     expect(healthResponse.statusCode).toBe(200);
     expect(healthResponse.json()).toEqual({ status: 'ok' });
+  });
+});
+
+describe('pushSender decoration (SPEC.md Sections 5.9, 7.9, Phase 5 step 5)', () => {
+  it('is null and the app still boots when no VAPID_* variable is set', async () => {
+    const app = buildApp(testEnv, db);
+
+    expect(app.pushSender).toBeNull();
+
+    const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(healthResponse.statusCode).toBe(200);
+  });
+
+  it('is null and the app still boots when only some VAPID_* variables are set', async () => {
+    const app = buildApp({ ...testEnv, VAPID_PUBLIC_KEY: 'only-the-public-key' }, db);
+
+    expect(app.pushSender).toBeNull();
+
+    const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(healthResponse.statusCode).toBe(200);
+  });
+
+  it('is a working sender when all three VAPID_* variables are well-formed', async () => {
+    const keys = webpush.generateVAPIDKeys();
+    const app = buildApp(
+      {
+        ...testEnv,
+        VAPID_PUBLIC_KEY: keys.publicKey,
+        VAPID_PRIVATE_KEY: keys.privateKey,
+        VAPID_SUBJECT: 'mailto:admin@example.com',
+      },
+      db,
+    );
+
+    expect(app.pushSender).not.toBeNull();
+  });
+
+  it('is null and the app still boots when VAPID_SUBJECT is not mailto: or https:', async () => {
+    const keys = webpush.generateVAPIDKeys();
+    const app = buildApp(
+      {
+        ...testEnv,
+        VAPID_PUBLIC_KEY: keys.publicKey,
+        VAPID_PRIVATE_KEY: keys.privateKey,
+        VAPID_SUBJECT: 'not-a-valid-subject',
+      },
+      db,
+    );
+
+    expect(app.pushSender).toBeNull();
+
+    const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(healthResponse.statusCode).toBe(200);
   });
 });
