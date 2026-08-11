@@ -70,7 +70,7 @@ export function deleteOtherSessionsForUser(
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(userId, exceptSessionId);
 }
 
-export function purgeExpiredSessions(db: Database.Database): number {
-  const result = db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowSeconds());
+export function purgeExpiredSessions(db: Database.Database, nowS: number): number {
+  const result = db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowS);
   return result.changes;
 }

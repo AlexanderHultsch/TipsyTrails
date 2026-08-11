@@ -175,7 +175,7 @@ describe('purgeExpiredSessions', () => {
       expiredB.id,
     );
 
-    const purged = purgeExpiredSessions(db);
+    const purged = purgeExpiredSessions(db, nowSeconds());
 
     expect(purged).toBe(2);
     expect(getSession(db, live.id)).not.toBeNull();
@@ -183,6 +183,19 @@ describe('purgeExpiredSessions', () => {
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM sessions')
       .get();
     expect(remaining?.count).toBe(1);
+  });
+
+  it('purges a session whose expires_at exactly equals nowS, the same instant getSession already treats as expired', () => {
+    const now = nowSeconds();
+    const session = createSession(db, 1);
+    db.prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(now, session.id);
+
+    expect(getSession(db, session.id)).toBeNull();
+
+    const purged = purgeExpiredSessions(db, now);
+
+    expect(purged).toBe(1);
+    expect(getExpiresAt(session.id)).toBeUndefined();
   });
 });
 
