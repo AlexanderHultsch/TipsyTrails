@@ -136,7 +136,7 @@ describe('POST /api/samples', () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body).toEqual({ newCells: expect.any(Number), newBars: [] });
+    expect(body).toEqual({ newCells: expect.any(Number), newBars: [], visitUpdates: [] });
     expect(body.newCells).toBeGreaterThanOrEqual(9);
     expect(body.newCells).toBeLessThanOrEqual(17);
   });
@@ -149,7 +149,7 @@ describe('POST /api/samples', () => {
     const response = await postSamples(cookie, [goodSample({ speed: 10 })]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [] });
+    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
   });
 
   it('discards a sample with accuracy worse than FOG_MAX_ACCURACY_M entirely', async () => {
@@ -159,7 +159,7 @@ describe('POST /api/samples', () => {
     const response = await postSamples(cookie, [goodSample({ accuracy: badAccuracy })]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [] });
+    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
   });
 
   it('discards a sample outside the active city bounding box', async () => {
@@ -170,7 +170,7 @@ describe('POST /api/samples', () => {
     ]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [] });
+    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
   });
 
   it('rejects a teleport between two accepted samples', async () => {
@@ -185,7 +185,7 @@ describe('POST /api/samples', () => {
     const secondResponse = await postSamples(cookie, [teleported]);
 
     expect(secondResponse.statusCode).toBe(200);
-    expect(secondResponse.json()).toEqual({ newCells: 0, newBars: [] });
+    expect(secondResponse.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
   });
 
   it('does not double-count revealing the same cell twice', async () => {
@@ -196,7 +196,7 @@ describe('POST /api/samples', () => {
     expect(firstNewCells).toBeGreaterThan(0);
 
     const second = await postSamples(cookie, [goodSample({ timestamp: Date.now() })]);
-    expect(second.json()).toEqual({ newCells: 0, newBars: [] });
+    expect(second.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
 
     const fogResponse = await injectWithOrigin({
       method: 'GET',

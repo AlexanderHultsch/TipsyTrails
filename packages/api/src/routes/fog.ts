@@ -2,7 +2,11 @@ import {
   berlinDateString,
   CONFIG,
   haversineDistanceM,
+  isOnSite,
+  isVisitComplete,
+  isVisitExpired,
   NO_DISTRICT,
+  onsiteRadiusM,
   toCell,
 } from '@tipsytrails/shared';
 import type { GridParams, LatLon } from '@tipsytrails/shared';
@@ -14,6 +18,7 @@ import { cellsWithinRevealRadius } from '../fog/reveal.js';
 import { isBitSet, maskByteLength, setBit } from '../fog/mask.js';
 import { createRateLimiter } from '../http/rate-limit.js';
 import { toBarSummary, type BarSummary, type DiscoveredBarRow } from './bars.js';
+import { toVisitSummary, type VisitSummary } from './visits.js';
 
 // SPEC.md Section 5.5/7.3/7.6/9.2: fog-of-war state (GET /api/fog,
 // POST /api/samples) and the progress it derives (GET /api/progress). Kept
@@ -146,6 +151,36 @@ interface ActiveBarRow {
   lon: number;
 }
 
+interface PendingVisitRow {
+  id: number;
+  bar_id: number;
+  bar_name: string;
+  bar_lat: number;
+  bar_lon: number;
+  started_at: number;
+  last_sample_at: number;
+  onsite_samples: number;
+  confirmed_s: number;
+}
+
+// SPEC.md Section 7.5 steps 3-4: one entry per pending visit this request
+// touched, accumulated across the sample loop and written to `visits` (and
+// reported in `visitUpdates`) once, after the loop — the same
+// accumulate-then-write shape `applyDiscoveries`/`applyReveal` use below.
+interface VisitProgress {
+  id: number;
+  barId: number;
+  barName: string;
+  bar: LatLon;
+  startedAt: number;
+  lastSampleAt: number;
+  onsiteSamples: number;
+  confirmedS: number;
+  status: 'pending' | 'completed' | 'expired';
+  completedAt: number | null;
+  touched: boolean;
+}
+
 // SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation
 // rule: "the previous accepted position lives in memory only ... discarded
 // on restart." A plain in-memory Map, recreated every time this plugin is
@@ -248,6 +283,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         const grid = toGridParams(city);
         const userId = request.userId;
         const nowMs = Date.now();
+        const nowS = Math.floor(nowMs / 1000);
 
         // "Ordering within a batch is by client timestamp" (Section 7.2 step 2).
         const sorted = [...parsed.data.samples].sort((a, b) => a.timestamp - b.timestamp);
@@ -266,6 +302,40 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           )
           .all(city.id);
         const discoveryCandidateIds = new Set<number>();
+
+        // SPEC.md Section 7.5 steps 3-4: the caller's own open pending
+        // visits, loaded once per request the same way `activeBars` is above.
+        // Keyed by bar id, since `idx_visits_one_pending` allows at most one
+        // pending visit per (user, bar).
+        const pendingVisitRows = db
+          .prepare<[number], PendingVisitRow>(
+            `SELECT visits.id AS id, visits.bar_id AS bar_id, bars.name AS bar_name,
+                    bars.lat AS bar_lat, bars.lon AS bar_lon,
+                    visits.started_at AS started_at, visits.last_sample_at AS last_sample_at,
+                    visits.onsite_samples AS onsite_samples, visits.confirmed_s AS confirmed_s
+             FROM visits
+             JOIN bars ON bars.id = visits.bar_id
+             WHERE visits.user_id = ? AND visits.status = 'pending'`,
+          )
+          .all(userId);
+        const visitProgressByBarId = new Map<number, VisitProgress>(
+          pendingVisitRows.map((row) => [
+            row.bar_id,
+            {
+              id: row.id,
+              barId: row.bar_id,
+              barName: row.bar_name,
+              bar: { lat: row.bar_lat, lon: row.bar_lon },
+              startedAt: row.started_at,
+              lastSampleAt: row.last_sample_at,
+              onsiteSamples: row.onsite_samples,
+              confirmedS: row.confirmed_s,
+              status: 'pending',
+              completedAt: null,
+              touched: false,
+            },
+          ]),
+        );
 
         for (const sample of sorted) {
           // 1. accuracy
@@ -300,6 +370,35 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           for (const bar of activeBars) {
             if (haversineDistanceM(sample, bar) <= CONFIG.BAR_DISCOVERY_RADIUS_M) {
               discoveryCandidateIds.add(bar.id);
+            }
+          }
+
+          // SPEC.md Section 7.5 steps 3-4: like discovery above, and unlike
+          // the reveal-speed gate below, this runs for every accepted sample
+          // regardless of speed — someone standing still at a bar produces
+          // samples with no meaningful speed. The radius uses this sample's
+          // own accuracy (`onsiteRadiusM`), not `LAST_ACCEPTED_ONSITE_RADIUS_M`
+          // (routes/visits.ts's separate, no-accuracy case).
+          const sampleOnsiteRadiusM = onsiteRadiusM(sample.accuracy);
+          for (const visit of visitProgressByBarId.values()) {
+            if (visit.status !== 'pending') {
+              continue;
+            }
+            if (!isOnSite(sample, visit.bar, sampleOnsiteRadiusM)) {
+              continue;
+            }
+            if (isVisitExpired(nowS, visit.lastSampleAt)) {
+              visit.status = 'expired';
+              visit.touched = true;
+              continue;
+            }
+            visit.onsiteSamples += 1;
+            visit.lastSampleAt = nowS;
+            visit.confirmedS = nowS - visit.startedAt;
+            visit.touched = true;
+            if (isVisitComplete(visit.confirmedS, visit.onsiteSamples)) {
+              visit.status = 'completed';
+              visit.completedAt = nowS;
             }
           }
 
@@ -351,8 +450,52 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         });
         const newBars = discoveryCandidateIds.size > 0 ? applyDiscoveries() : [];
 
+        // SPEC.md Section 7.5 steps 3-4: persists every pending visit this
+        // batch touched — updated, completed, or (a late sample on an
+        // already-stale visit) expired — in one transaction. A visit that
+        // expires here is written but, like `GET /api/visits/pending`'s own
+        // lazily-expired rows, not reported back as a "visit update".
+        const applyVisitUpdates = db.transaction((): VisitSummary[] => {
+          const updates: VisitSummary[] = [];
+          for (const visit of visitProgressByBarId.values()) {
+            if (!visit.touched) {
+              continue;
+            }
+            if (visit.status === 'expired') {
+              db.prepare(`UPDATE visits SET status = 'expired' WHERE id = ?`).run(visit.id);
+              continue;
+            }
+            db.prepare(
+              `UPDATE visits SET last_sample_at = ?, onsite_samples = ?, confirmed_s = ?, status = ?, completed_at = ?
+               WHERE id = ?`,
+            ).run(
+              visit.lastSampleAt,
+              visit.onsiteSamples,
+              visit.confirmedS,
+              visit.status,
+              visit.completedAt,
+              visit.id,
+            );
+            updates.push(
+              toVisitSummary({
+                id: visit.id,
+                bar_id: visit.barId,
+                bar_name: visit.barName,
+                started_at: visit.startedAt,
+                last_sample_at: visit.lastSampleAt,
+                onsite_samples: visit.onsiteSamples,
+                confirmed_s: visit.confirmedS,
+                status: visit.status,
+              }),
+            );
+          }
+          return updates;
+        });
+        const anyVisitTouched = Array.from(visitProgressByBarId.values()).some((v) => v.touched);
+        const visitUpdates = anyVisitTouched ? applyVisitUpdates() : [];
+
         if (revealCandidates.size === 0) {
-          return { newCells: 0, newBars };
+          return { newCells: 0, newBars, visitUpdates };
         }
 
         const applyReveal = db.transaction((): number => {
@@ -421,10 +564,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         });
 
         const newCells = applyReveal();
-        // Section 9.2's full shape is { newCells, newBars, visitUpdates };
-        // visitUpdates (Phase 5) is not built yet and is deliberately omitted
-        // rather than sent as a fabricated value.
-        return { newCells, newBars };
+        return { newCells, newBars, visitUpdates };
       },
     );
 
