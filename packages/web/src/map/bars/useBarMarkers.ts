@@ -1,10 +1,9 @@
 // Wires Section 8.1/8.3's bar markers into the map screen: fetches the
 // discovered bars (GET /api/bars) once the map exists, mounts a BarMarkers
-// instance, and refetches whenever `revealVersion` advances - the exact same
-// signal map/fog/useFogLayer.ts already uses to notice "a reveal just
-// happened" and refetch the fog mask (see that file's own comment, and
-// useSampleTracking.ts's comment on revealVersion, for why that field and
-// not lastNewCells is the one to key off). Reusing it here means a bar
+// instance, and refetches whenever `discoveryVersion` advances (see
+// useSampleTracking.ts's own comment on that field: it tracks newly
+// discovered bars specifically, not revealed cells, since a bar can be
+// discovered inside fog the player has already revealed). This means a bar
 // discovered by POST /api/samples' `newBars` (Section 9.2) shows up without
 // a page reload, with no second polling or event mechanism added alongside
 // the one useFogLayer already established.
@@ -16,7 +15,7 @@ import { BarMarkers } from './bar-markers.js';
 
 export function useBarMarkers(
   map: MaplibreMap | null,
-  revealVersion: number,
+  discoveryVersion: number,
   onSelect: (bar: Bar) => void,
 ): void {
   const markersRef = useRef<BarMarkers | null>(null);
@@ -53,7 +52,7 @@ export function useBarMarkers(
   }, [map]);
 
   useEffect(() => {
-    if (revealVersion === 0 || !markersRef.current) {
+    if (discoveryVersion === 0 || !markersRef.current) {
       return;
     }
     let cancelled = false;
@@ -65,10 +64,10 @@ export function useBarMarkers(
       })
       .catch(() => {
         // A failed refetch leaves the markers as they were; the next
-        // successful reveal (or the next mount) brings them back in sync.
+        // successful discovery (or the next mount) brings them back in sync.
       });
     return () => {
       cancelled = true;
     };
-  }, [revealVersion]);
+  }, [discoveryVersion]);
 }

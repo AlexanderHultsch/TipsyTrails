@@ -60,7 +60,7 @@ export function MapScreen() {
   const trackingState = useSampleTracking();
   useFogLayer(mapInstance, trackingState.revealVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
-  useBarMarkers(mapInstance, trackingState.revealVersion, (bar) => navigate(`/bars/${bar.id}`));
+  useBarMarkers(mapInstance, trackingState.discoveryVersion, (bar) => navigate(`/bars/${bar.id}`));
 
   useEffect(() => {
     let cancelled = false;

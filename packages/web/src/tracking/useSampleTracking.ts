@@ -21,6 +21,12 @@ export interface SampleTrackingState {
   // just happened" and refetch the mask (see that file's own comment on
   // why GET /api/fog is refetched rather than diffed some cleverer way).
   revealVersion: number;
+  // Increments once per successful POST /api/samples that reported a newly
+  // discovered bar (result.newBars.length > 0). Kept separate from
+  // revealVersion: a bar found inside fog the player has already revealed
+  // produces newBars with newCells: 0, so a signal tied to revealed cells
+  // would never fire for it. map/bars/useBarMarkers.ts is the consumer.
+  discoveryVersion: number;
 }
 
 // Section 7.2 + 8.6: watches position via watchPosition while the map
@@ -42,6 +48,7 @@ export function useSampleTracking(): SampleTrackingState {
   const [lastNewCells, setLastNewCells] = useState<number | null>(null);
   const [postError, setPostError] = useState<string | null>(null);
   const [revealVersion, setRevealVersion] = useState(0);
+  const [discoveryVersion, setDiscoveryVersion] = useState(0);
 
   useEffect(() => {
     function scheduleStaleCheck() {
@@ -128,6 +135,9 @@ export function useSampleTracking(): SampleTrackingState {
         if (result.newCells > 0) {
           setRevealVersion((version) => version + 1);
         }
+        if ((result.newBars?.length ?? 0) > 0) {
+          setDiscoveryVersion((version) => version + 1);
+        }
         setPostError(null);
       } catch (err) {
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
@@ -188,5 +198,6 @@ export function useSampleTracking(): SampleTrackingState {
     lastNewCells,
     postError,
     revealVersion,
+    discoveryVersion,
   };
 }

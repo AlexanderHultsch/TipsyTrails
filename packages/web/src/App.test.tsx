@@ -1307,6 +1307,60 @@ describe('App', () => {
       ).not.toBeNull();
     });
 
+    // Regression: a bar can be discovered inside fog the player has already
+    // revealed (Section 7.4's discovery radius and reveal radius happen to
+    // match today, but nothing guarantees that, and Phase 7's community
+    // submissions will typically land in already-walked areas). Such a post
+    // reports `newBars` with `newCells: 0` - the marker layer must still
+    // refetch on that, not only on a reveal.
+    it('shows a bar newly reported by POST /api/samples even when it reveals no new fog', async () => {
+      const newBar = bar({ id: 9, name: 'New Find', source: 'community' });
+      let barsCallCount = 0;
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0, newBars: [newBar] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      const geo = stubGeolocation();
+      stubWakeLock();
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(0);
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(1);
+      expect(
+        markerContainer().querySelector('button.bar-marker[aria-label="New Find"]'),
+      ).not.toBeNull();
+    });
+
     it('opens the bar detail screen from a marker', async () => {
       const discovered = bar({ id: 9, name: 'Navigate Bar', address: 'Somewhere 1' });
       stubFetch((url) => {
@@ -1428,6 +1482,135 @@ describe('App', () => {
       expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(2);
       expect(container.textContent).not.toMatch(/\d+\s*(of|\/)\s*\d+/i);
       expect(container.querySelector('.bar-count')).toBeNull();
+    });
+  });
+
+  // The fog layer and the bar markers each refetch on their own signal now
+  // (revealVersion vs. discoveryVersion in tracking/useSampleTracking.ts) -
+  // these two tests cover the other halves of the split the regression test
+  // above exercises: a reveal with no discovery still refetches the fog, and
+  // a post with neither refetches nothing.
+  describe('fog and bar marker refetch signals', () => {
+    function cityFixtureResponse() {
+      return jsonResponse(200, {
+        slug: 'karlsruhe',
+        name: 'Karlsruhe',
+        originLat: 48.94,
+        originLon: 8.275,
+        gridWidth: 3,
+        gridHeight: 3,
+        cellSizeM: 50,
+        playableCells: 9,
+        districts: [],
+      });
+    }
+
+    it('refetches the fog mask when a post reports newCells but no new bars', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let fogCallCount = 0;
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/city') {
+          return cityFixtureResponse();
+        }
+        if (url === '/api/fog') {
+          fogCallCount++;
+          return fogResponse(new Uint8Array(2), {
+            revealedCells: 0,
+            playableCells: 9,
+            districts: [],
+          });
+        }
+        if (url === '/api/bars') {
+          return jsonResponse(200, { bars: [] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 1, newBars: [] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fogCallCount).toBe(1);
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fogCallCount).toBe(2);
+    });
+
+    it('refetches neither the fog mask nor the bar markers when a post reports nothing new', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let fogCallCount = 0;
+      let barsCallCount = 0;
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/city') {
+          return cityFixtureResponse();
+        }
+        if (url === '/api/fog') {
+          fogCallCount++;
+          return fogResponse(new Uint8Array(2), {
+            revealedCells: 0,
+            playableCells: 9,
+            districts: [],
+          });
+        }
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, { bars: [] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0, newBars: [] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fogCallCount).toBe(1);
+      expect(barsCallCount).toBe(1);
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(fogCallCount).toBe(1);
+      expect(barsCallCount).toBe(1);
     });
   });
 });
