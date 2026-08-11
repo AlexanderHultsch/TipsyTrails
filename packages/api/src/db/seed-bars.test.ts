@@ -193,14 +193,56 @@ describe('seedBars against the real committed grid with a synthetic bars.json fi
   });
 });
 
-describe('seedBars with no bars.json present', () => {
-  it('logs and leaves the database working instead of failing the boot', () => {
+describe('seedBars against the committed data/seed/karlsruhe/bars.json', () => {
+  it('imports every row with a resolved district_id, cell_index and city_id', () => {
     const env = loadEnv({ ...baseEnv, SEED_DIR: REAL_SEED_DIR });
     seedCity(db, env);
-    expect(existsSync(join(REAL_SEED_DIR, 'karlsruhe', 'bars.json'))).toBe(false);
 
     expect(() => seedBars(db, env)).not.toThrow();
-    expect(barRows()).toHaveLength(0);
+
+    const committedBars = JSON.parse(
+      readFileSync(join(REAL_SEED_DIR, 'karlsruhe', 'bars.json'), 'utf-8'),
+    ) as unknown[];
+    const bars = barRows();
+    expect(bars).toHaveLength(committedBars.length);
+
+    const city = db
+      .prepare<[string], { id: number }>('SELECT id FROM cities WHERE slug = ?')
+      .get('karlsruhe');
+    expect(city).toBeDefined();
+
+    for (const bar of bars) {
+      expect(bar.district_id).not.toBeNull();
+      expect(bar.cell_index).not.toBeNull();
+      expect(bar.city_id).toBe(city!.id);
+    }
+  });
+});
+
+describe('seedBars with no bars.json present', () => {
+  it('logs and leaves the database working instead of failing the boot', () => {
+    const tempRoot = join(tmpdir(), `tipsytrails-seed-bars-nobars-${randomUUID()}`);
+    try {
+      mkdirSync(join(tempRoot, 'cities'), { recursive: true });
+      cpSync(join(REAL_CITIES_DIR, 'karlsruhe.json'), join(tempRoot, 'cities', 'karlsruhe.json'));
+      mkdirSync(join(tempRoot, 'seed', 'karlsruhe'), { recursive: true });
+      cpSync(
+        join(REAL_SEED_DIR, 'karlsruhe', 'grid-meta.json'),
+        join(tempRoot, 'seed', 'karlsruhe', 'grid-meta.json'),
+      );
+      cpSync(
+        join(REAL_SEED_DIR, 'karlsruhe', 'grid.bin'),
+        join(tempRoot, 'seed', 'karlsruhe', 'grid.bin'),
+      );
+
+      const env = loadEnv({ ...baseEnv, SEED_DIR: join(tempRoot, 'seed') });
+      seedCity(db, env);
+
+      expect(() => seedBars(db, env)).not.toThrow();
+      expect(barRows()).toHaveLength(0);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('leaves district_id NULL when the grid is unavailable', () => {

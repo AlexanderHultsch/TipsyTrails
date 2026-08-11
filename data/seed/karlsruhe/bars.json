@@ -1,0 +1,1532 @@
+[
+  {
+    "osm_id": "node/29990270",
+    "name": "Spalato",
+    "address": null,
+    "lat": 49.0085599,
+    "lon": 8.3931649,
+    "cell_index": 63139,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/29990272",
+    "name": "An Sibin",
+    "address": "Amalienstraße 32a, 76133 Karlsruhe",
+    "lat": 49.0091469,
+    "lon": 8.3915269,
+    "cell_index": 63554,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/30030245",
+    "name": "Die Pinte",
+    "address": "Leopoldstraße 15, 76133 Karlsruhe",
+    "lat": 49.0079222,
+    "lon": 8.3897145,
+    "cell_index": 62717,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/30030247",
+    "name": "Heilige Sophie",
+    "address": null,
+    "lat": 49.006858,
+    "lon": 8.3912945,
+    "cell_index": 61469,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/30030257",
+    "name": "Café-Bar 59",
+    "address": "Gartenstraße, Karlsruhe",
+    "lat": 49.0041641,
+    "lon": 8.3950523,
+    "cell_index": 58972,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/30030274",
+    "name": "IUNO",
+    "address": "Werderstraße 49, 76137 Karlsruhe",
+    "lat": 49.0016558,
+    "lon": 8.4076669,
+    "cell_index": 56906,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/30119974",
+    "name": "Bierhäusle",
+    "address": null,
+    "lat": 48.9676689,
+    "lon": 8.3991574,
+    "cell_index": 25618,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/31261883",
+    "name": "Petticoat",
+    "address": null,
+    "lat": 49.0089934,
+    "lon": 8.4320765,
+    "cell_index": 63613,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/54732961",
+    "name": "Traube",
+    "address": null,
+    "lat": 48.9988391,
+    "lon": 8.4734095,
+    "cell_index": 54500,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/69119734",
+    "name": "Alter Brauhof",
+    "address": null,
+    "lat": 49.0014062,
+    "lon": 8.397165,
+    "cell_index": 56473,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/69119869",
+    "name": "Napoleon",
+    "address": "Kreuzstraße, 76133 Karlsruhe",
+    "lat": 49.0098358,
+    "lon": 8.4053966,
+    "cell_index": 64408,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/83854933",
+    "name": "AKK-Biergarten",
+    "address": null,
+    "lat": 49.0111098,
+    "lon": 8.4154011,
+    "cell_index": 65674,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/96039209",
+    "name": "Le Journal",
+    "address": "Karlstraße 46a, 76133 Karlsruhe",
+    "lat": 49.004952,
+    "lon": 8.3943905,
+    "cell_index": 59805,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/96039223",
+    "name": "Santo's Cocktail Bar",
+    "address": "Karlstraße 69, 76137 Karlsruhe",
+    "lat": 49.0009877,
+    "lon": 8.394287,
+    "cell_index": 56052,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/98044008",
+    "name": "Café Saloon",
+    "address": null,
+    "lat": 48.9926117,
+    "lon": 8.393078,
+    "cell_index": 48544,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/108793480",
+    "name": "kap",
+    "address": "Kapellenstraße 68, 76131 Karlsruhe",
+    "lat": 49.0068708,
+    "lon": 8.4122986,
+    "cell_index": 61499,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/115564781",
+    "name": "Substage",
+    "address": "Alter Schlachthof 19, 76131 Karlsruhe",
+    "lat": 49.0052734,
+    "lon": 8.4297309,
+    "cell_index": 60274,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/129532713",
+    "name": "Dr. Bier",
+    "address": "Dreikönigstraße 13, 76187 Karlsruhe",
+    "lat": 49.0336946,
+    "lon": 8.3351728,
+    "cell_index": 86406,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/132233854",
+    "name": "Kaisers Biergärtle",
+    "address": null,
+    "lat": 49.0534098,
+    "lon": 8.3838878,
+    "cell_index": 104409,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/132747721",
+    "name": "NaN20 Bar",
+    "address": "Nancystraße 20, 76187 Karlsruhe",
+    "lat": 49.0209409,
+    "lon": 8.3706102,
+    "cell_index": 74365,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/151387743",
+    "name": "Bierseidel",
+    "address": "Karl-Leopold-Straße 2, 76229 Karlsruhe",
+    "lat": 49.0108481,
+    "lon": 8.4948434,
+    "cell_index": 65373,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/248953635",
+    "name": "Taverne",
+    "address": null,
+    "lat": 49.0228809,
+    "lon": 8.3737999,
+    "cell_index": 76455,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/249173359",
+    "name": "L6",
+    "address": "Lameystraße 6, 76185 Karlsruhe",
+    "lat": 49.0109641,
+    "lon": 8.3584514,
+    "cell_index": 65174,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/251473146",
+    "name": "Bierakademie",
+    "address": null,
+    "lat": 49.0107673,
+    "lon": 8.3933915,
+    "cell_index": 65225,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/255108283",
+    "name": "Beim Schupi",
+    "address": null,
+    "lat": 49.0075459,
+    "lon": 8.3560434,
+    "cell_index": 62251,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/261893140",
+    "name": "Studentenzentrum Z10 e.V.",
+    "address": "Zähringerstraße 10, 76131 Karlsruhe",
+    "lat": 49.0085647,
+    "lon": 8.4140799,
+    "cell_index": 63170,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/289245159",
+    "name": "Café Bleu",
+    "address": null,
+    "lat": 49.0100016,
+    "lon": 8.3845385,
+    "cell_index": 64378,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/296295004",
+    "name": "W21",
+    "address": null,
+    "lat": 49.0014787,
+    "lon": 8.405301,
+    "cell_index": 56485,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/302513611",
+    "name": "La Cage",
+    "address": "Blumenstraße 25, 76133 Karlsruhe",
+    "lat": 49.0085195,
+    "lon": 8.3959814,
+    "cell_index": 63143,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/302513778",
+    "name": "Krokokeller",
+    "address": null,
+    "lat": 49.0081241,
+    "lon": 8.3958647,
+    "cell_index": 62726,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/302629446",
+    "name": "Johnny's Pub",
+    "address": "Baumeisterstraße 34, 76137 Karlsruhe",
+    "lat": 49.0039961,
+    "lon": 8.4075316,
+    "cell_index": 58990,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/304549322",
+    "name": "Hubertus 2.0",
+    "address": "Schneidemühler Straße 23d, 76139 Karlsruhe",
+    "lat": 49.0358681,
+    "lon": 8.4363731,
+    "cell_index": 88639,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/304952071",
+    "name": "Prinz S",
+    "address": null,
+    "lat": 49.0084418,
+    "lon": 8.4128485,
+    "cell_index": 63168,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/305529620",
+    "name": "Karlsruher Altstadt",
+    "address": "Kaiserstraße 1, 76131 Karlsruhe",
+    "lat": 49.0088233,
+    "lon": 8.416176,
+    "cell_index": 63590,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/310200315",
+    "name": "Bar Milano",
+    "address": "Marienstraße 34, 76137 Karlsruhe",
+    "lat": 49.0022802,
+    "lon": 8.4079374,
+    "cell_index": 57323,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/312799444",
+    "name": "Erste Fracht Torfabrik",
+    "address": "Bahnhofplatz 6, 76137 Karlsruhe",
+    "lat": 48.9948682,
+    "lon": 8.4002307,
+    "cell_index": 50640,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/317821979",
+    "name": "Topsy Turvy",
+    "address": null,
+    "lat": 49.008273,
+    "lon": 8.3914405,
+    "cell_index": 62720,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/336489099",
+    "name": "der Vogelbräu",
+    "address": null,
+    "lat": 48.9984453,
+    "lon": 8.465575,
+    "cell_index": 54071,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/350178487",
+    "name": "Burggarten",
+    "address": "Haid-und-Neu-Straße 30, 76131 Karlsruhe",
+    "lat": 49.0129317,
+    "lon": 8.4279065,
+    "cell_index": 67360,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/430499282",
+    "name": "Südwest Treff",
+    "address": "Ebertstraße 18a, 76137 Karlsruhe",
+    "lat": 48.9948665,
+    "lon": 8.3932719,
+    "cell_index": 50629,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/440742322",
+    "name": "BOKA BAR",
+    "address": "Ludwig-Wilhelm-Straße 3, 76131 Karlsruhe",
+    "lat": 49.0094199,
+    "lon": 8.4203113,
+    "cell_index": 64013,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/454987514",
+    "name": "Pilskarussel",
+    "address": null,
+    "lat": 49.0009575,
+    "lon": 8.4103301,
+    "cell_index": 56075,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/454994656",
+    "name": "uBu",
+    "address": "Karlstraße 6",
+    "lat": 49.0115178,
+    "lon": 8.3950232,
+    "cell_index": 66061,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/457366581",
+    "name": "Nachtwerk Musikclub",
+    "address": "Pfannkuchstraße 16, 76185 Karlsruhe",
+    "lat": 49.0109307,
+    "lon": 8.3482522,
+    "cell_index": 65159,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/473920833",
+    "name": "BAR 1900",
+    "address": "Goethestraße 45, 76135 Karlsruhe",
+    "lat": 49.0093154,
+    "lon": 8.3755025,
+    "cell_index": 63947,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/524555515",
+    "name": "City Treff",
+    "address": "Kreuzstraße 3, 76133 Karlsruhe",
+    "lat": 49.0100633,
+    "lon": 8.4052574,
+    "cell_index": 64408,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/524555517",
+    "name": "Zirkel-Treff",
+    "address": null,
+    "lat": 49.0104047,
+    "lon": 8.4069326,
+    "cell_index": 64827,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/538160948",
+    "name": "Wirtshaus zum Pfannestiel",
+    "address": "Am Künstlerhaus 53, 76131 Karlsruhe",
+    "lat": 49.0077758,
+    "lon": 8.4136871,
+    "cell_index": 62335,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/567474357",
+    "name": "Kozan",
+    "address": "Augartenstraße",
+    "lat": 48.999026,
+    "lon": 8.4078993,
+    "cell_index": 54404,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/609218941",
+    "name": "Sette Colli",
+    "address": "Auer Straße 74, 76227",
+    "lat": 48.9930868,
+    "lon": 8.4611571,
+    "cell_index": 49061,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/656234582",
+    "name": "Erdbeermund",
+    "address": "Baumeisterstraße 54, 76137 Karlsruhe",
+    "lat": 49.0042596,
+    "lon": 8.409693,
+    "cell_index": 59410,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/656261848",
+    "name": "Agostea",
+    "address": "Rüppurrer Straße 1, 76137 Karlsruhe",
+    "lat": 49.00544,
+    "lon": 8.411916,
+    "cell_index": 60248,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/819154360",
+    "name": "Tipico Sportsbar",
+    "address": "Kaiserstraße 57, 76131 Karlsruhe",
+    "lat": 49.0091003,
+    "lon": 8.4117902,
+    "cell_index": 63584,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/834380069",
+    "name": "Klimbim",
+    "address": "Rheinstraße 38, 76185 Karlsruhe",
+    "lat": 49.0116326,
+    "lon": 8.359308,
+    "cell_index": 66009,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/840619154",
+    "name": "Gärtner Hütt",
+    "address": null,
+    "lat": 49.0191363,
+    "lon": 8.3772075,
+    "cell_index": 73124,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/841782761",
+    "name": "Winzereck",
+    "address": null,
+    "lat": 49.012634,
+    "lon": 8.3637414,
+    "cell_index": 66849,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/844038942",
+    "name": "Mühlburger Hof",
+    "address": null,
+    "lat": 49.0124389,
+    "lon": 8.363919,
+    "cell_index": 66850,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/910156687",
+    "name": "Il Vino",
+    "address": null,
+    "lat": 49.0066167,
+    "lon": 8.402668,
+    "cell_index": 61485,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/912372352",
+    "name": "Datscha",
+    "address": null,
+    "lat": 49.0116185,
+    "lon": 8.3579481,
+    "cell_index": 66007,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/926563990",
+    "name": "Comics",
+    "address": null,
+    "lat": 49.0307434,
+    "lon": 8.4581786,
+    "cell_index": 83667,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/932192833",
+    "name": "Sportsbar \"Tower\"",
+    "address": null,
+    "lat": 49.0470418,
+    "lon": 8.3824712,
+    "cell_index": 98569,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/980003417",
+    "name": "Pyramide",
+    "address": "Kriegsstraße 78, Karlsruhe",
+    "lat": 49.0059699,
+    "lon": 8.4083523,
+    "cell_index": 60660,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/989948613",
+    "name": "Bunte Kuh",
+    "address": null,
+    "lat": 49.0441377,
+    "lon": 8.3738643,
+    "cell_index": 96054,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1051381586",
+    "name": "Kippe 23",
+    "address": "Gottesauer Straße 23, 76131 Karlsruhe",
+    "lat": 49.0074933,
+    "lon": 8.4193622,
+    "cell_index": 62344,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1052594628",
+    "name": "Die Stadtmitte",
+    "address": "Baumeisterstraße 3, 76137 Karlsruhe",
+    "lat": 49.0040289,
+    "lon": 8.4042393,
+    "cell_index": 58986,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1231696078",
+    "name": "Phono",
+    "address": "Karl-Wilhelm-Straße 6, 76131 Karlsruhe",
+    "lat": 49.0099929,
+    "lon": 8.4202188,
+    "cell_index": 64430,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1280786500",
+    "name": "Hexenstüble",
+    "address": null,
+    "lat": 49.0103803,
+    "lon": 8.4231882,
+    "cell_index": 64851,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1285176374",
+    "name": "Gotec Club+",
+    "address": null,
+    "lat": 49.0241452,
+    "lon": 8.3528222,
+    "cell_index": 77675,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1344602227",
+    "name": "heimspiel.",
+    "address": "Lärchenallee 3, 76131 Karlsruhe",
+    "lat": 49.0179692,
+    "lon": 8.4142029,
+    "cell_index": 71927,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1447845499",
+    "name": "Kranz",
+    "address": null,
+    "lat": 48.9991404,
+    "lon": 8.4703829,
+    "cell_index": 54495,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1447845917",
+    "name": "Traube",
+    "address": null,
+    "lat": 48.9986991,
+    "lon": 8.4731355,
+    "cell_index": 54082,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1447845921",
+    "name": "Typic",
+    "address": null,
+    "lat": 48.9993312,
+    "lon": 8.4677487,
+    "cell_index": 54908,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1480609287",
+    "name": "Skandal",
+    "address": "Bahnhofplatz 6, 76137 Karlsruhe",
+    "lat": 48.9943924,
+    "lon": 8.4004404,
+    "cell_index": 50223,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/1529476400",
+    "name": "ROTAG Garten",
+    "address": "Hardeckstraße 2a, 76185 Karlsruhe",
+    "lat": 49.0015785,
+    "lon": 8.3619851,
+    "cell_index": 56839,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1589010439",
+    "name": "Linden's Irish Pubs",
+    "address": "Hirschstraße 70, 76133 Karlsruhe",
+    "lat": 49.0047077,
+    "lon": 8.3910329,
+    "cell_index": 59800,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1635428791",
+    "name": "Schwarzer Adler",
+    "address": null,
+    "lat": 49.0061637,
+    "lon": 8.3262727,
+    "cell_index": 60956,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1659568848",
+    "name": "Alte Hackerei",
+    "address": "Alter Schlachthof 11, 76131 Karlsruhe",
+    "lat": 49.0058987,
+    "lon": 8.4292332,
+    "cell_index": 60690,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1669073010",
+    "name": "nun Kaffeehaus",
+    "address": "Gottesauer Straße 35, 76131 Karlsruhe",
+    "lat": 49.0068065,
+    "lon": 8.4207765,
+    "cell_index": 61512,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1702275119",
+    "name": "C2 Ost",
+    "address": "Essenweinstraße 9, 76131 Karlsruhe",
+    "lat": 49.0103724,
+    "lon": 8.4247815,
+    "cell_index": 64854,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1743158338",
+    "name": "Vagabund Bar",
+    "address": null,
+    "lat": 49.0074812,
+    "lon": 8.4068903,
+    "cell_index": 62325,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1744036525",
+    "name": "Scruffy's Irish Pub",
+    "address": null,
+    "lat": 49.0116504,
+    "lon": 8.3950291,
+    "cell_index": 66061,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1761375568",
+    "name": "Zur Vesperhütte",
+    "address": null,
+    "lat": 49.0048183,
+    "lon": 8.3816335,
+    "cell_index": 59786,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/1987974416",
+    "name": "Heimat",
+    "address": null,
+    "lat": 48.9943752,
+    "lon": 8.4010172,
+    "cell_index": 50224,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2060633784",
+    "name": "Bergbräustube",
+    "address": "Schillerstraße 25, 76135 Karlsruhe",
+    "lat": 49.008886,
+    "lon": 8.3796654,
+    "cell_index": 63537,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2062749519",
+    "name": "Hemingway Lounge",
+    "address": "Uhlandstraße 26, 76135 Karlsruhe",
+    "lat": 49.0092744,
+    "lon": 8.3747702,
+    "cell_index": 63946,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2131864967",
+    "name": "RooK",
+    "address": null,
+    "lat": 49.0054327,
+    "lon": 8.4112207,
+    "cell_index": 60247,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2235106314",
+    "name": "Soul",
+    "address": "Marienstraße 18, 76137 Karlsruhe",
+    "lat": 49.0031423,
+    "lon": 8.4078768,
+    "cell_index": 58157,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2277745408",
+    "name": "En Vogue",
+    "address": "Blumenstraße 10, 76133 Karlsruhe",
+    "lat": 49.0086219,
+    "lon": 8.3961003,
+    "cell_index": 63144,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2334081402",
+    "name": "Oxford Pub",
+    "address": "Fasanenstraße 6, 76131 Karlsruhe",
+    "lat": 49.0086149,
+    "lon": 8.4129781,
+    "cell_index": 63168,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2504115868",
+    "name": "Venus Bar",
+    "address": null,
+    "lat": 49.0103806,
+    "lon": 8.3961828,
+    "cell_index": 64812,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2634365535",
+    "name": "Fantastico",
+    "address": null,
+    "lat": 48.9991036,
+    "lon": 8.4059371,
+    "cell_index": 54401,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2726790178",
+    "name": "Jazzclub Karlsruhe",
+    "address": "Kaiserpassage 6, 76133 Karlsruhe",
+    "lat": 49.0105065,
+    "lon": 8.3969181,
+    "cell_index": 64813,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2818047350",
+    "name": "ECU",
+    "address": "Kelterstraße 12, 76227 Karlsruhe",
+    "lat": 48.9986092,
+    "lon": 8.4684878,
+    "cell_index": 54075,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/2891638365",
+    "name": "Simple Bar",
+    "address": "Morgenstraße 31, 76137 Karlsruhe",
+    "lat": 49.0008574,
+    "lon": 8.4133509,
+    "cell_index": 56080,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3073766794",
+    "name": "Old School",
+    "address": "Am Künstlerhaus 45, 76131 Karlsruhe",
+    "lat": 49.0079955,
+    "lon": 8.4141942,
+    "cell_index": 62753,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3073822097",
+    "name": "Skandal in der roten Laterne",
+    "address": null,
+    "lat": 49.0087667,
+    "lon": 8.4156475,
+    "cell_index": 63589,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3182793202",
+    "name": "Kofferraum",
+    "address": "Hirschstraße 17, 76133 Karlsruhe",
+    "lat": 49.0082667,
+    "lon": 8.3916813,
+    "cell_index": 62720,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3186215065",
+    "name": "Henderson's Irish Pub",
+    "address": "Karl-Wilhelm-Straße 10, 76131 Karlsruhe",
+    "lat": 49.0101831,
+    "lon": 8.4207158,
+    "cell_index": 64848,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3235316928",
+    "name": "Schlossbar",
+    "address": null,
+    "lat": 48.9953434,
+    "lon": 8.4021715,
+    "cell_index": 51059,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3286183047",
+    "name": "Schützenhaus",
+    "address": null,
+    "lat": 48.9945869,
+    "lon": 8.4936021,
+    "cell_index": 50359,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3366486176",
+    "name": "AMISTAD Café und Bar",
+    "address": null,
+    "lat": 49.0115808,
+    "lon": 8.3594318,
+    "cell_index": 66009,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3368478798",
+    "name": "Music Club 77",
+    "address": null,
+    "lat": 49.0118862,
+    "lon": 8.3581088,
+    "cell_index": 66007,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3368478803",
+    "name": "Die Bier Bar",
+    "address": null,
+    "lat": 49.0112883,
+    "lon": 8.3596234,
+    "cell_index": 65592,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3378341046",
+    "name": "Mühlburger Treff",
+    "address": null,
+    "lat": 49.0117756,
+    "lon": 8.3584703,
+    "cell_index": 66008,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3384576938",
+    "name": "Gardaslar Raucherlokal",
+    "address": "Rüppurrer Straße 24a, 76137 Karlsruhe",
+    "lat": 49.0025237,
+    "lon": 8.4102219,
+    "cell_index": 57743,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3415427466",
+    "name": "Vanguarde",
+    "address": "Hardtstraße 37a, 76185 Karlsruhe",
+    "lat": 49.0138534,
+    "lon": 8.3577817,
+    "cell_index": 68092,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3506705163",
+    "name": "Selvi Selection Café Lounge Bar",
+    "address": "Ludwig-Erhard-Allee 6, 76131 Karlsruhe",
+    "lat": 49.0047899,
+    "lon": 8.4158917,
+    "cell_index": 59837,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3574764032",
+    "name": "Lillet",
+    "address": "Kaiserpassage 10, 76133 Karlsruhe",
+    "lat": 49.0108359,
+    "lon": 8.3966273,
+    "cell_index": 65229,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3581700276",
+    "name": "Bar Napoli",
+    "address": null,
+    "lat": 49.00227,
+    "lon": 8.4075677,
+    "cell_index": 57322,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3646813781",
+    "name": "Schmidt's Katze",
+    "address": "Zähringerstraße 16, 76131 Karlsruhe",
+    "lat": 49.008577,
+    "lon": 8.4136287,
+    "cell_index": 63169,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3708646419",
+    "name": "Warsteiner Seminar",
+    "address": "Kaiserstraße 65, 76131 Karlsruhe",
+    "lat": 49.0091338,
+    "lon": 8.411242,
+    "cell_index": 63583,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3708709768",
+    "name": "Gaststätte Oberer See",
+    "address": null,
+    "lat": 49.0171428,
+    "lon": 8.3608864,
+    "cell_index": 71015,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3710198782",
+    "name": "Kropsburg 2/15",
+    "address": "Hertzstraße 15, 76187 Karlsruhe",
+    "lat": 49.0207983,
+    "lon": 8.3653105,
+    "cell_index": 74358,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3748617228",
+    "name": "Otto",
+    "address": "Yorckstraße 8, 76185 Karlsruhe",
+    "lat": 49.0101906,
+    "lon": 8.3740457,
+    "cell_index": 64779,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3755867496",
+    "name": "Gottesauer Eck",
+    "address": "Wolfartsweierer Straße 1, 76131 Karlsruhe",
+    "lat": 49.0072839,
+    "lon": 8.4246057,
+    "cell_index": 61934,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3875368557",
+    "name": "Shotz",
+    "address": "Blumenstraße 23, 76133 Karlsruhe",
+    "lat": 49.00847,
+    "lon": 8.3961,
+    "cell_index": 63144,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/3922497457",
+    "name": "Die Weinstube",
+    "address": null,
+    "lat": 49.0087113,
+    "lon": 8.4219892,
+    "cell_index": 63181,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/4214144382",
+    "name": "Cen Club",
+    "address": "Waldstraße 32, 76133 Karlsruhe",
+    "lat": 49.0101635,
+    "lon": 8.3976485,
+    "cell_index": 64814,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/4243339790",
+    "name": "The Old Chapel Pub",
+    "address": null,
+    "lat": 49.0076215,
+    "lon": 8.4145189,
+    "cell_index": 62337,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/4511255179",
+    "name": "Jack'n'Jill Lounge",
+    "address": "Durmersheimer Straße 159, 76189 Karlsruhe",
+    "lat": 48.9945982,
+    "lon": 8.34449,
+    "cell_index": 50141,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/4968220580",
+    "name": "Gold Bar",
+    "address": "Sophienstraße 82, 76135 Karlsruhe",
+    "lat": 49.0078449,
+    "lon": 8.3849492,
+    "cell_index": 62710,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5075975976",
+    "name": "Fettschmelze",
+    "address": "Alter Schlachthof 25, 76131 Karlsruhe",
+    "lat": 49.0045932,
+    "lon": 8.4290774,
+    "cell_index": 59439,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5203146368",
+    "name": "Jean Claude Cocktail Bar",
+    "address": "Blumenstraße 23, 76133 Karlsruhe",
+    "lat": 49.0083897,
+    "lon": 8.3962542,
+    "cell_index": 63144,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5203146370",
+    "name": "Studio 83",
+    "address": "Blumenstraße 27, 76133 Karlsruhe",
+    "lat": 49.0085533,
+    "lon": 8.3959137,
+    "cell_index": 63143,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5203259241",
+    "name": "P10",
+    "address": "Zähringerstraße 69, 76133 Karlsruhe",
+    "lat": 49.0087772,
+    "lon": 8.4017012,
+    "cell_index": 63569,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5205110795",
+    "name": "La Vida Loca",
+    "address": "Lammstraße 12, 76133 Karlsruhe",
+    "lat": 49.0085239,
+    "lon": 8.4020083,
+    "cell_index": 63152,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5209292891",
+    "name": "PAP",
+    "address": null,
+    "lat": 49.0101293,
+    "lon": 8.4065084,
+    "cell_index": 64827,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5216348648",
+    "name": "Central Bar Afrobar by Tatcha",
+    "address": null,
+    "lat": 49.0090711,
+    "lon": 8.4070087,
+    "cell_index": 63577,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5366931618",
+    "name": "Clubhaus",
+    "address": "Kanalweg 2, 76131 Karlsruhe",
+    "lat": 49.0243136,
+    "lon": 8.4186025,
+    "cell_index": 77772,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5385163883",
+    "name": "Kommödchen Kaffee- und Weinbar",
+    "address": null,
+    "lat": 49.0040658,
+    "lon": 8.4080573,
+    "cell_index": 58991,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5408199821",
+    "name": "Fettschmelze",
+    "address": "Alter Schlachthof 25, 76131 Karlsruhe",
+    "lat": 49.0046399,
+    "lon": 8.4290321,
+    "cell_index": 59439,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5641892653",
+    "name": "Café Mixbar",
+    "address": null,
+    "lat": 49.0086327,
+    "lon": 8.3914987,
+    "cell_index": 63137,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5641892654",
+    "name": "Karisma Cafe Lounge",
+    "address": null,
+    "lat": 49.0087288,
+    "lon": 8.3915105,
+    "cell_index": 63137,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5777454381",
+    "name": "Hellers Tea Bar",
+    "address": null,
+    "lat": 49.0093411,
+    "lon": 8.4027466,
+    "cell_index": 63987,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5876422319",
+    "name": "Lagune",
+    "address": null,
+    "lat": 49.0044799,
+    "lon": 8.3358589,
+    "cell_index": 59303,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/5976417528",
+    "name": "Diamond",
+    "address": null,
+    "lat": 49.0091299,
+    "lon": 8.3907808,
+    "cell_index": 63553,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6126666530",
+    "name": "Gaststätte Endstation",
+    "address": null,
+    "lat": 49.0019456,
+    "lon": 8.4627601,
+    "cell_index": 56986,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6200349476",
+    "name": "Aura Lounge",
+    "address": null,
+    "lat": 49.0112966,
+    "lon": 8.3569841,
+    "cell_index": 65588,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6699067888",
+    "name": "Coll-Hill's",
+    "address": "Kaiserpassage 16, 76133 Karlsruhe",
+    "lat": 49.0109487,
+    "lon": 8.3965884,
+    "cell_index": 65229,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6699176407",
+    "name": "Orient Tal",
+    "address": null,
+    "lat": 49.0109441,
+    "lon": 8.3971676,
+    "cell_index": 65230,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6700852649",
+    "name": "Times",
+    "address": null,
+    "lat": 49.0094164,
+    "lon": 8.4050963,
+    "cell_index": 63991,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6700852653",
+    "name": "Dreamz Lounge",
+    "address": null,
+    "lat": 49.0101877,
+    "lon": 8.3938506,
+    "cell_index": 64808,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6848833437",
+    "name": "Europabar",
+    "address": "Willy-Andreas-Allee 15, 76131 Karlsruhe",
+    "lat": 49.0164373,
+    "lon": 8.3932369,
+    "cell_index": 70645,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/6852152744",
+    "name": "Sportsbar A8",
+    "address": null,
+    "lat": 49.0053234,
+    "lon": 8.3813017,
+    "cell_index": 60203,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/7126109486",
+    "name": "The Door - Liquid Kitchen and Highballs",
+    "address": "Hirschstraße 17, 76133",
+    "lat": 49.0082866,
+    "lon": 8.3919379,
+    "cell_index": 63138,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/7223335010",
+    "name": "PS Lounge & Cocktail Bar",
+    "address": "Kaiserallee 1, 76133 Karlsruhe",
+    "lat": 49.0099869,
+    "lon": 8.3871668,
+    "cell_index": 64382,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/7223335011",
+    "name": "K1 Die Sportsbar",
+    "address": "Kaiserallee 1, 76133 Karlsruhe",
+    "lat": 49.0101983,
+    "lon": 8.3869928,
+    "cell_index": 64798,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/7261003139",
+    "name": "Bärenstüble",
+    "address": "Georg-Büchner-Straße 18, 76149 Karlsruhe",
+    "lat": 49.0477728,
+    "lon": 8.3789746,
+    "cell_index": 99398,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/8168165164",
+    "name": "Benny & Rocky",
+    "address": null,
+    "lat": 49.0022002,
+    "lon": 8.4057416,
+    "cell_index": 57320,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/8241770833",
+    "name": "Queens Pub",
+    "address": "Pfinztalstraße 8, 76227 Karlsruhe",
+    "lat": 48.9993937,
+    "lon": 8.4750061,
+    "cell_index": 54919,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/9201025002",
+    "name": "Café Stern",
+    "address": null,
+    "lat": 49.0078145,
+    "lon": 8.395743,
+    "cell_index": 62309,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/9202934765",
+    "name": "Guts & Glory",
+    "address": null,
+    "lat": 49.0104731,
+    "lon": 8.3925005,
+    "cell_index": 64806,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/9212022750",
+    "name": "Salon Ruppel",
+    "address": "Amalienstraße 49, 76133 Karlsruhe",
+    "lat": 49.0086831,
+    "lon": 8.3917382,
+    "cell_index": 63137,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/9421623653",
+    "name": "Bürgerstüble",
+    "address": null,
+    "lat": 48.9857073,
+    "lon": 8.3632522,
+    "cell_index": 42246,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/9787853448",
+    "name": "B17",
+    "address": "Blumenstraße 17, 76133 Karlsruhe",
+    "lat": 49.0081504,
+    "lon": 8.3967562,
+    "cell_index": 62728,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/10204889315",
+    "name": "Cohiba Night Bar",
+    "address": "Kapellenstraße 28, 76131 Karlsruhe",
+    "lat": 49.0078913,
+    "lon": 8.4150091,
+    "cell_index": 62754,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/10220298562",
+    "name": "SIN",
+    "address": null,
+    "lat": 49.0103128,
+    "lon": 8.3978402,
+    "cell_index": 64814,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/10898654430",
+    "name": "SQUASH-Treff",
+    "address": "Bannwaldallee 38",
+    "lat": 49.0004162,
+    "lon": 8.3684428,
+    "cell_index": 55597,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/11688718182",
+    "name": "Coffe&Cake",
+    "address": null,
+    "lat": 49.0189731,
+    "lon": 8.4652449,
+    "cell_index": 72836,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/11733962353",
+    "name": "Bar 137",
+    "address": "Luisenstraße 57, 76137 Karlsruhe",
+    "lat": 49.0009037,
+    "lon": 8.4082601,
+    "cell_index": 56072,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/11821145283",
+    "name": "La Collina",
+    "address": null,
+    "lat": 49.0000337,
+    "lon": 8.4789839,
+    "cell_index": 55342,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/11880894816",
+    "name": "Havanna Star",
+    "address": "Bannwaldallee 14, 76185 Karlsruhe",
+    "lat": 49.0023995,
+    "lon": 8.365796,
+    "cell_index": 57261,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12565852168",
+    "name": "Casa Nova",
+    "address": "Karlstraße 53, 76133 Karlsruhe",
+    "lat": 49.003964,
+    "lon": 8.3947141,
+    "cell_index": 58972,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12591635701",
+    "name": "Happy wrong",
+    "address": "Hirschhof 2, 76133 Karlsruhe",
+    "lat": 49.0104852,
+    "lon": 8.3923172,
+    "cell_index": 64806,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12593315869",
+    "name": "La Louve Karlsruhe",
+    "address": "Hirschhof, 76133 Karlsruhe",
+    "lat": 49.0104383,
+    "lon": 8.3923099,
+    "cell_index": 64806,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12830337445",
+    "name": "Port of Senses",
+    "address": "Hansastraße 29a, 76189 Karlsruhe",
+    "lat": 49.0122834,
+    "lon": 8.3259783,
+    "cell_index": 66377,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12830337446",
+    "name": "House of O",
+    "address": "Hansastraße 29, 76189 Karlsruhe",
+    "lat": 49.0121088,
+    "lon": 8.3258565,
+    "cell_index": 66377,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/12997812149",
+    "name": "Fächerbräu-Biergarten",
+    "address": null,
+    "lat": 49.0367514,
+    "lon": 8.3499125,
+    "cell_index": 88930,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/13633080061",
+    "name": "Rooftop One Bar",
+    "address": "Kriegsstraße 25, 76133 Karlsruhe",
+    "lat": 49.0052102,
+    "lon": 8.3999333,
+    "cell_index": 60230,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/14041391202",
+    "name": "Der Zauberkessel",
+    "address": "Memeler Straße 1",
+    "lat": 48.9893188,
+    "lon": 8.4573969,
+    "cell_index": 45719,
+    "source": "osm"
+  }
+]
