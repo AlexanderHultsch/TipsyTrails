@@ -8,6 +8,7 @@ import {
   RequireAuthOnly,
 } from './auth/route-guards.js';
 import { AppHome } from './screens/AppHome.js';
+import { BarDetail } from './screens/BarDetail.js';
 import { ChangePassword } from './screens/ChangePassword.js';
 import { CityOverview } from './screens/CityOverview.js';
 import { DistrictOverview } from './screens/DistrictOverview.js';
@@ -108,6 +109,14 @@ export function App() {
               <Suspense fallback={null}>
                 <MapScreen />
               </Suspense>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/bars/:id"
+          element={
+            <RequireAuth>
+              <BarDetail />
             </RequireAuth>
           }
         />

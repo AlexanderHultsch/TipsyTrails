@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
+import { useBarMarkers } from '../map/bars/useBarMarkers.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
 import { useSampleTracking } from '../tracking/useSampleTracking.js';
@@ -55,8 +56,11 @@ export function MapScreen() {
   // ref update alone would not schedule one.
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const trackingState = useSampleTracking();
   useFogLayer(mapInstance, trackingState.revealVersion);
+  // Section 8.3: "opening a marker leads to the [bar] detail" screen.
+  useBarMarkers(mapInstance, trackingState.revealVersion, (bar) => navigate(`/bars/${bar.id}`));
 
   useEffect(() => {
     let cancelled = false;

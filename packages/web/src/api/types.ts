@@ -17,11 +17,31 @@ export interface Sample {
 }
 
 // POST /api/samples response shape (packages/api/src/routes/fog.ts). Section
-// 9.2 defines the full { newCells, newBars, visitUpdates } shape, but newBars
-// (Phase 4) and visitUpdates (Phase 5) aren't built yet and the route omits
-// them rather than sending fabricated zeros - so only newCells is here.
+// 9.2 defines the full { newCells, newBars, visitUpdates } shape; visitUpdates
+// (Phase 5) isn't built yet and the route omits it rather than sending a
+// fabricated value - so only newCells and newBars are here.
 export interface SamplesResponse {
   newCells: number;
+  newBars: Bar[];
+}
+
+// GET /api/bars, GET /api/bars/:id, and the `newBars` field above all share
+// this shape - packages/api/src/routes/bars.ts's `toBarSummary` (reused by
+// routes/fog.ts for `newBars`) is the one place a `bars` row becomes
+// client-facing JSON, so the three surfaces can never drift apart.
+export interface Bar {
+  id: number;
+  districtId: number | null;
+  name: string;
+  address: string | null;
+  lat: number;
+  lon: number;
+  source: string;
+  discoveredAt: number;
+}
+
+export interface BarsResponse {
+  bars: Bar[];
 }
 
 // GET /api/city response shape (packages/api/src/routes/city.ts). What the

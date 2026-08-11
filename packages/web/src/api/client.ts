@@ -1,6 +1,8 @@
 import { ACTIVE_CITY_SLUG } from './city.js';
 import type { BoundaryFeatureCollection } from './geo-types.js';
 import type {
+  Bar,
+  BarsResponse,
   CityMeta,
   FogMaskResponse,
   FogProgress,
@@ -193,6 +195,20 @@ export async function getFogMask(): Promise<FogMaskResponse> {
 
   const buffer = await response.arrayBuffer();
   return { mask: new Uint8Array(buffer), progress };
+}
+
+// GET /api/bars (Section 9.2): bars discovered by the current user only
+// (Section 7.4) - the API never sends anything else, so there is nothing
+// further to filter here.
+export function getBars(): Promise<BarsResponse> {
+  return request<BarsResponse>('/api/bars');
+}
+
+// GET /api/bars/:id (Section 9.5): an identical 404 for "does not exist" and
+// "not discovered by you" - the caller renders whatever ApiError.message
+// comes back rather than distinguishing the two.
+export function getBar(id: string): Promise<Bar> {
+  return request<Bar>(`/api/bars/${encodeURIComponent(id)}`);
 }
 
 export function updateSettings(input: { isAnonymous: boolean }): Promise<User> {

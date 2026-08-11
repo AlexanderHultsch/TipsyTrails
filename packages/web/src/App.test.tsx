@@ -61,6 +61,12 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     removeLayer = vi.fn();
     getLayer = vi.fn();
     loaded = vi.fn(() => true);
+    // map/bars/bar-markers.ts's only other dependency on the real map
+    // beyond on/off/getContainer above - an arbitrary fixed point is fine
+    // since these tests assert marker presence and behaviour, not screen
+    // position (map/bars/bar-markers.test.ts covers real reprojection
+    // against its own hand-built fake map).
+    project = vi.fn(() => ({ x: 0, y: 0 }));
     container = document.createElement('div');
     getContainer = () => this.container;
     constructor() {
@@ -1171,6 +1177,257 @@ describe('App', () => {
       const panel = container.querySelector('.tracking-indicator__panel');
       expect(panel).not.toBeNull();
       expect(panel?.textContent).toContain('Foreground tracking');
+    });
+  });
+
+  describe('bar markers and the bar detail screen', () => {
+    function bar(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 1,
+        districtId: null,
+        name: 'The Fox',
+        address: 'Kaiserstraße 1',
+        lat: 49.007,
+        lon: 8.404,
+        source: 'osm',
+        discoveredAt: 1_700_000_000,
+        ...overrides,
+      };
+    }
+
+    function stubMapFetchWithBars(bars: unknown[], handler?: FetchHandler) {
+      return stubFetch((url, init) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/bars') {
+          return jsonResponse(200, { bars });
+        }
+        if (handler) {
+          return handler(url, init);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+    }
+
+    // BarMarkers (map/bars/bar-markers.ts) appends its buttons to
+    // map.getContainer() - MockMap's own `container` field, a detached div
+    // that is never itself part of the React tree (it stands in for the
+    // real MapLibre-owned DOM MapLibre would otherwise create). Reading
+    // markers back out means going through that field, exactly as the
+    // existing "renders the 2D canvas fallback" test above does for the fog
+    // layer's canvas.
+    function markerContainer(): HTMLElement {
+      return mapInstances[0].container;
+    }
+
+    it('fetches discovered bars on entering the map and renders a marker for each', async () => {
+      stubMapFetchWithBars([bar({ id: 1, name: 'The Fox' }), bar({ id: 2, name: 'Anchor Bar' })]);
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+      await flushLazyMapScreen();
+
+      const markers = markerContainer().querySelectorAll('button.bar-marker');
+      expect(markers).toHaveLength(2);
+      expect(
+        markerContainer().querySelector('button.bar-marker[aria-label="The Fox"]'),
+      ).not.toBeNull();
+      expect(
+        markerContainer().querySelector('button.bar-marker[aria-label="Anchor Bar"]'),
+      ).not.toBeNull();
+    });
+
+    it('renders markers as real, keyboard-reachable 44px buttons', async () => {
+      stubMapFetchWithBars([bar()]);
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+      await flushLazyMapScreen();
+
+      const marker = markerContainer().querySelector('button.bar-marker') as HTMLButtonElement;
+      expect(marker).not.toBeNull();
+      expect(marker.tagName).toBe('BUTTON');
+      expect(marker.tabIndex).toBe(0);
+      expect(marker.classList.contains('bar-marker')).toBe(true);
+    });
+
+    it('shows a bar newly reported by POST /api/samples without a reload', async () => {
+      const newBar = bar({ id: 9, name: 'New Find', source: 'community' });
+      let barsCallCount = 0;
+      // GET /api/bars is stubbed directly (not via stubMapFetchWithBars,
+      // whose own fixed-list branch would shadow this call-count logic) so
+      // its second call - triggered by the reveal below - reflects the
+      // server having recorded the discovery the first call predates.
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 1, newBars: [newBar] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      const geo = stubGeolocation();
+      stubWakeLock();
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(0);
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(1);
+      expect(
+        markerContainer().querySelector('button.bar-marker[aria-label="New Find"]'),
+      ).not.toBeNull();
+    });
+
+    it('opens the bar detail screen from a marker', async () => {
+      const discovered = bar({ id: 9, name: 'Navigate Bar', address: 'Somewhere 1' });
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/bars') {
+          return jsonResponse(200, { bars: [discovered] });
+        }
+        if (url === '/api/bars/9') {
+          return jsonResponse(200, discovered);
+        }
+        if (url === '/api/city') {
+          return jsonResponse(200, {
+            slug: 'karlsruhe',
+            name: 'Karlsruhe',
+            originLat: 48.94,
+            originLon: 8.275,
+            gridWidth: 3,
+            gridHeight: 3,
+            cellSizeM: 50,
+            playableCells: 9,
+            districts: [],
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+      await flushLazyMapScreen();
+
+      const marker = markerContainer().querySelector('button.bar-marker') as HTMLButtonElement;
+      expect(marker).not.toBeNull();
+
+      await act(async () => {
+        marker.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(container.querySelector('.bar-detail')).not.toBeNull();
+      expect(container.textContent).toContain('Navigate Bar');
+      expect(container.textContent).toContain('Somewhere 1');
+    });
+
+    it('renders the bar detail screen with name, address and district from the response', async () => {
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url === '/api/bars/7') {
+          return jsonResponse(
+            200,
+            bar({ id: 7, name: 'The Fox', address: 'Kaiserstraße 1', districtId: 3 }),
+          );
+        }
+        if (url === '/api/city') {
+          return jsonResponse(200, {
+            slug: 'karlsruhe',
+            name: 'Karlsruhe',
+            originLat: 48.94,
+            originLon: 8.275,
+            gridWidth: 3,
+            gridHeight: 3,
+            cellSizeM: 50,
+            playableCells: 9,
+            districts: [{ id: 3, name: 'Innenstadt-West', playableCells: 100 }],
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/bars/7');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(container.textContent).toContain('The Fox');
+      expect(container.textContent).toContain('Kaiserstraße 1');
+      expect(container.textContent).toContain('Innenstadt-West');
+    });
+
+    it('shows a sensible message, not a broken frame, for a bar that is undiscovered or does not exist', async () => {
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url === '/api/bars/99') {
+          return jsonResponse(404, {
+            code: 'bar_not_found',
+            message: 'That bar does not exist.',
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/bars/99');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(container.textContent).toContain('That bar does not exist.');
+      expect(container.querySelector('.bar-detail h1')).toBeNull();
+    });
+
+    it('never renders a count of undiscovered bars anywhere on the map screen', async () => {
+      stubMapFetchWithBars([bar({ id: 1, name: 'The Fox' }), bar({ id: 2, name: 'Anchor Bar' })]);
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+      await flushLazyMapScreen();
+
+      expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(2);
+      expect(container.textContent).not.toMatch(/\d+\s*(of|\/)\s*\d+/i);
+      expect(container.querySelector('.bar-count')).toBeNull();
     });
   });
 });
