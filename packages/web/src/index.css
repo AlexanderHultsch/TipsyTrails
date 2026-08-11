@@ -394,6 +394,86 @@ a {
   margin: 0;
 }
 
+.map-toast--mastered p {
+  font-weight: 600;
+}
+
+.map-toast--mastered p + p {
+  margin-top: 0.25rem;
+  font-weight: 400;
+}
+
+/* Section 7.5's transparency requirements: the pending-visit banner, shown
+   persistently at the top of the screen. Full-width, below the burger menu
+   and tracking indicator rows (Section 8.4/8.6) rather than overlapping
+   them. */
+.pending-visit-banner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 6;
+  padding: 4rem 1rem 0.75rem;
+  background: rgba(244, 239, 230, 0.95);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.pending-visit-banner__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pending-visit-banner__bar {
+  font-weight: 600;
+  margin: 0;
+}
+
+.pending-visit-banner__time {
+  font-size: 0.9375rem;
+  margin: 0.125rem 0 0;
+}
+
+.pending-visit-banner__out-of-range {
+  margin: 0.25rem 0 0;
+}
+
+.pending-visit-banner__hint {
+  font-size: 0.8125rem;
+  margin: 0.75rem 0 0;
+}
+
+/* Section 7.5 step 1 / Section 8.2: the check-in affordance, bottom-anchored
+   for thumb reach - offered for every discovered bar within
+   onsiteRadiusM(accuracy) of the current position (tracking/useVisits.ts). */
+.check-in-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(244, 239, 230, 0.95);
+  border-top: 1px solid var(--color-border);
+}
+
+.check-in-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.check-in-panel__button {
+  width: 100%;
+}
+
 /* Section 8.1/8.3: bar markers - solid black pictograms, no gradient,
    shadow, or outline. The accent colour only ever shows up as the
    focus-visible ring below (the same treatment .field input gets above),
@@ -455,6 +535,20 @@ a {
   border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 0.875rem;
+}
+
+/* How mastering works (Section 7.5): explanatory prose, left-aligned like
+   .bar-detail rather than .screen__content's centred default. */
+.how-it-works {
+  text-align: left;
+}
+
+.how-it-works p {
+  margin: 1rem 0 0;
+}
+
+.how-it-works p:first-of-type {
+  margin-top: 0;
 }
 
 /* City and district overview screens (Section 8.3): schematic inline-SVG

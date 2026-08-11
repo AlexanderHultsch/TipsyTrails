@@ -5,11 +5,19 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BurgerMenu } from '../components/BurgerMenu.js';
+import { CheckInPanel } from '../components/CheckInPanel.js';
+import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
+import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
+import {
+  hasSeenMasteringExplainer,
+  markMasteringExplainerSeen,
+} from '../tracking/masteringExplainer.js';
 import { useSampleTracking } from '../tracking/useSampleTracking.js';
+import { useVisits } from '../tracking/useVisits.js';
 
 const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 
@@ -59,8 +67,28 @@ export function MapScreen() {
   const navigate = useNavigate();
   const trackingState = useSampleTracking();
   useFogLayer(mapInstance, trackingState.revealVersion);
+  const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
-  useBarMarkers(mapInstance, trackingState.discoveryVersion, (bar) => navigate(`/bars/${bar.id}`));
+  useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));
+  const visits = useVisits(
+    discoveredBars,
+    trackingState.visitUpdates,
+    trackingState.visitVersion,
+    trackingState.lastPosition,
+  );
+  const outOfRangeVisitIds = new Set(visits.outOfRangeVisits.map((visit) => visit.id));
+
+  // Section 7.5: the new pending visit appears in the banner immediately
+  // (useVisits.ts's own state update), and the explainer is shown once,
+  // automatically, right after the first successful check-in
+  // (tracking/masteringExplainer.ts) - not on a failed one.
+  async function handleCheckIn(barId: number) {
+    const success = await visits.checkIn(barId);
+    if (success && !hasSeenMasteringExplainer()) {
+      markMasteringExplainerSeen();
+      navigate('/how-it-works');
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -104,6 +132,13 @@ export function MapScreen() {
       <BurgerMenu />
       <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
+      <PendingVisitBanner visits={visits.pendingVisits} outOfRangeVisitIds={outOfRangeVisitIds} />
+      <CheckInPanel
+        candidates={visits.checkInCandidates}
+        onCheckIn={(barId) => void handleCheckIn(barId)}
+        checkingIn={visits.checkingIn}
+        checkInError={visits.checkInError}
+      />
       {tilesUnavailable && (
         <div className="map-notice" role="status">
           <p>
@@ -118,6 +153,12 @@ export function MapScreen() {
             Revealed {trackingState.lastNewCells} new area
             {trackingState.lastNewCells === 1 ? '' : 's'}.
           </p>
+        </div>
+      )}
+      {visits.justMastered.length > 0 && (
+        <div className="map-toast map-toast--mastered" role="status">
+          <p>{visits.justMastered.join(', ')} mastered.</p>
+          <p>Mastering is permanent - it stays even if a later visit expires.</p>
         </div>
       )}
       <a

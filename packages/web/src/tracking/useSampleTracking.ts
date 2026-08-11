@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
-import type { Sample } from '../api/types.js';
+import type { Sample, VisitSummary } from '../api/types.js';
 import { computeConnectionStatus, computeGpsStatus } from './status.js';
 import type { ConnectionStatus, GpsStatus } from './status.js';
 
 const SYNC_ERROR_MESSAGE = 'Could not sync your position. Your samples stay queued and will retry.';
+
+// The most recent position accepted from the Geolocation API and its
+// accuracy - in-memory only (Section 10.2 forbids persisting it), used by
+// tracking/useVisits.ts to compute which discovered bars are currently
+// within onsiteRadiusM(accuracy) (Section 7.5 step 1).
+export interface LastAcceptedPosition {
+  lat: number;
+  lon: number;
+  accuracy: number;
+}
 
 export interface SampleTrackingState {
   gpsStatus: GpsStatus;
@@ -27,6 +37,20 @@ export interface SampleTrackingState {
   // produces newBars with newCells: 0, so a signal tied to revealed cells
   // would never fire for it. map/bars/useBarMarkers.ts is the consumer.
   discoveryVersion: number;
+  // The visitUpdates array of the latest successful POST /api/samples
+  // (Section 7.5 steps 3-4), replaced on every successful post - including
+  // an empty one, unlike visitVersion below. tracking/useVisits.ts pairs
+  // this with visitVersion to know both *what* changed and *when*.
+  visitUpdates: VisitSummary[];
+  // Increments once per successful POST /api/samples that reported any
+  // visitUpdates. A third, independent signal from revealVersion and
+  // discoveryVersion for the same reason those two are independent of each
+  // other: a visit can be touched by a sample that reveals no fog and
+  // discovers no bar. Never folded into either.
+  visitVersion: number;
+  // The most recently accepted position and its accuracy - see
+  // LastAcceptedPosition above.
+  lastPosition: LastAcceptedPosition | null;
 }
 
 // Section 7.2 + 8.6: watches position via watchPosition while the map
@@ -49,6 +73,9 @@ export function useSampleTracking(): SampleTrackingState {
   const [postError, setPostError] = useState<string | null>(null);
   const [revealVersion, setRevealVersion] = useState(0);
   const [discoveryVersion, setDiscoveryVersion] = useState(0);
+  const [visitUpdates, setVisitUpdates] = useState<VisitSummary[]>([]);
+  const [visitVersion, setVisitVersion] = useState(0);
+  const [lastPosition, setLastPosition] = useState<LastAcceptedPosition | null>(null);
 
   useEffect(() => {
     function scheduleStaleCheck() {
@@ -72,6 +99,7 @@ export function useSampleTracking(): SampleTrackingState {
       setQueueDepth(queueRef.current.length);
       const now = Date.now();
       setGpsStatus(computeGpsStatus({ accuracy: sample.accuracy, receivedAt: now }, now));
+      setLastPosition({ lat: sample.lat, lon: sample.lon, accuracy: sample.accuracy });
       scheduleStaleCheck();
     }
 
@@ -138,6 +166,10 @@ export function useSampleTracking(): SampleTrackingState {
         if ((result.newBars?.length ?? 0) > 0) {
           setDiscoveryVersion((version) => version + 1);
         }
+        setVisitUpdates(result.visitUpdates ?? []);
+        if ((result.visitUpdates?.length ?? 0) > 0) {
+          setVisitVersion((version) => version + 1);
+        }
         setPostError(null);
       } catch (err) {
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
@@ -199,5 +231,8 @@ export function useSampleTracking(): SampleTrackingState {
     postError,
     revealVersion,
     discoveryVersion,
+    visitUpdates,
+    visitVersion,
+    lastPosition,
   };
 }

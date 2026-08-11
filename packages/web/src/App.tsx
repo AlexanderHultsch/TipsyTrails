@@ -12,6 +12,7 @@ import { BarDetail } from './screens/BarDetail.js';
 import { ChangePassword } from './screens/ChangePassword.js';
 import { CityOverview } from './screens/CityOverview.js';
 import { DistrictOverview } from './screens/DistrictOverview.js';
+import { HowMasteringWorks } from './screens/HowMasteringWorks.js';
 import { Landing } from './screens/Landing.js';
 import { Login } from './screens/Login.js';
 import { Register } from './screens/Register.js';
@@ -117,6 +118,14 @@ export function App() {
           element={
             <RequireAuth>
               <BarDetail />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/how-it-works"
+          element={
+            <RequireAuth>
+              <HowMasteringWorks />
             </RequireAuth>
           }
         />

@@ -6,9 +6,11 @@ import type {
   CityMeta,
   FogMaskResponse,
   FogProgress,
+  PendingVisitsResponse,
   Sample,
   SamplesResponse,
   User,
+  VisitSummary,
 } from './types.js';
 
 // Thrown for both API-reported failures (server JSON with a stable `code`)
@@ -209,6 +211,22 @@ export function getBars(): Promise<BarsResponse> {
 // comes back rather than distinguishing the two.
 export function getBar(id: string): Promise<Bar> {
   return request<Bar>(`/api/bars/${encodeURIComponent(id)}`);
+}
+
+// POST /api/visits (Section 9.2/7.5 step 2): creates the pending visit, or
+// returns the existing one if this bar already has one open (Section 5.7) -
+// the caller renders whatever VisitSummary comes back either way.
+export function checkIn(input: { barId: number }): Promise<VisitSummary> {
+  return request<VisitSummary>('/api/visits', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+// GET /api/visits/pending (Section 9.2): the caller's active pending
+// visits, for the persistent banner (Section 7.5).
+export function getPendingVisits(): Promise<PendingVisitsResponse> {
+  return request<PendingVisitsResponse>('/api/visits/pending');
 }
 
 export function updateSettings(input: { isAnonymous: boolean }): Promise<User> {

@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom';
 import { useLogout } from '../auth/useLogout.js';
 
 // Single burger menu, top right, on every authenticated screen (Section
-// 8.4). Phase 2 adds Map, City and Districts; the rest arrive with their
-// own screens in later phases.
+// 8.4). Phase 2 adds Map, City and Districts; Phase 5 adds "How mastering
+// works" (Section 7.5: reachable from here regardless of the auto-shown
+// explainer); the rest arrive with their own screens in later phases.
 export function BurgerMenu() {
   const [open, setOpen] = useState(false);
   const handleLogout = useLogout();
@@ -55,6 +56,11 @@ export function BurgerMenu() {
           <li>
             <Link to="/districts" onClick={() => setOpen(false)}>
               Districts
+            </Link>
+          </li>
+          <li>
+            <Link to="/how-it-works" onClick={() => setOpen(false)}>
+              How mastering works
             </Link>
           </li>
           <li>

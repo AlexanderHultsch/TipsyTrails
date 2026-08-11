@@ -1,0 +1,138 @@
+// Section 7.5's check-in and mastering mechanic, client side: the check-in
+// affordance's candidates (step 1), the persistent pending banner and its
+// out-of-range message (the transparency requirements), and the mastering
+// message (step 4) all derive from the same two lists - discovered bars
+// (for position and name lookups; VisitSummary itself carries neither,
+// passed in from screens/Map.tsx's useDiscoveredBars.ts rather than fetched
+// again here - see that file for why) and the caller's pending visits.
+// `onsiteCandidates`/`isOnSite`/`onsiteRadiusM` are the shared rule from
+// Section 7.5 step 1 (packages/shared/src/visits.ts) and must not be
+// reimplemented here.
+import { useEffect, useMemo, useState } from 'react';
+import { isOnSite, onsiteCandidates, onsiteRadiusM } from '@tipsytrails/shared';
+import type { OnsiteCandidate } from '@tipsytrails/shared';
+import { ApiError, checkIn as postCheckIn, getPendingVisits } from '../api/client.js';
+import type { Bar, VisitSummary } from '../api/types.js';
+import type { LastAcceptedPosition } from './useSampleTracking.js';
+
+export interface UseVisitsResult {
+  pendingVisits: VisitSummary[];
+  checkInCandidates: OnsiteCandidate<Bar>[];
+  outOfRangeVisits: VisitSummary[];
+  justMastered: string[];
+  checkingIn: boolean;
+  checkInError: string | null;
+  checkIn: (barId: number) => Promise<boolean>;
+}
+
+export function useVisits(
+  bars: Bar[],
+  visitUpdates: VisitSummary[],
+  visitVersion: number,
+  position: LastAcceptedPosition | null,
+): UseVisitsResult {
+  const [pendingVisits, setPendingVisits] = useState<VisitSummary[]>([]);
+  const [justMastered, setJustMastered] = useState<string[]>([]);
+  const [checkingIn, setCheckingIn] = useState(false);
+  const [checkInError, setCheckInError] = useState<string | null>(null);
+
+  // GET /api/visits/pending (Section 9.2): the banner's starting state, for
+  // visits that were already pending before this mount (e.g. a reload).
+  useEffect(() => {
+    let cancelled = false;
+    getPendingVisits()
+      .then((result) => {
+        if (!cancelled) {
+          setPendingVisits(result.visits);
+        }
+      })
+      .catch(() => {
+        // Same posture as the bars fetch above - the banner starts empty
+        // rather than blocking the map.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Section 7.5 steps 3-4: merges the latest batch of visitUpdates into the
+  // pending list - updated in place for 'pending', dropped (and its name
+  // remembered for the mastering message) for 'completed'. routes/fog.ts's
+  // applyVisitUpdates never reports 'expired' here, only writes it, so
+  // there is no third case to handle. Keyed on visitVersion
+  // (useSampleTracking.ts), not visitUpdates itself, so a later post that
+  // touches nothing does not re-run this.
+  useEffect(() => {
+    if (visitVersion === 0) {
+      return;
+    }
+    // Computed directly from visitUpdates, not accumulated inside the
+    // setPendingVisits updater below - a functional updater is not
+    // guaranteed to run synchronously, so mutating a closed-over array from
+    // inside it and reading that array right after is unreliable.
+    const completedNames = visitUpdates
+      .filter((update) => update.status === 'completed')
+      .map((update) => update.barName);
+    setPendingVisits((current) => {
+      const byId = new Map(current.map((visit) => [visit.id, visit]));
+      for (const update of visitUpdates) {
+        if (update.status === 'completed') {
+          byId.delete(update.id);
+        } else {
+          byId.set(update.id, update);
+        }
+      }
+      return Array.from(byId.values());
+    });
+    if (completedNames.length > 0) {
+      setJustMastered(completedNames);
+    }
+    // Deliberately keyed on visitVersion only - see the comment above.
+  }, [visitVersion]);
+
+  const checkInCandidates = useMemo<OnsiteCandidate<Bar>[]>(() => {
+    if (!position) {
+      return [];
+    }
+    return onsiteCandidates(position, position.accuracy, bars);
+  }, [position, bars]);
+
+  const outOfRangeVisits = useMemo<VisitSummary[]>(() => {
+    if (!position) {
+      return [];
+    }
+    const barsById = new Map(bars.map((bar) => [bar.id, bar]));
+    const radiusM = onsiteRadiusM(position.accuracy);
+    return pendingVisits.filter((visit) => {
+      const bar = barsById.get(visit.barId);
+      return bar != null && !isOnSite(position, bar, radiusM);
+    });
+  }, [position, bars, pendingVisits]);
+
+  async function checkIn(barId: number): Promise<boolean> {
+    setCheckingIn(true);
+    setCheckInError(null);
+    try {
+      const visit = await postCheckIn({ barId });
+      setPendingVisits((current) => [...current.filter((v) => v.id !== visit.id), visit]);
+      return true;
+    } catch (err) {
+      setCheckInError(
+        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
+      );
+      return false;
+    } finally {
+      setCheckingIn(false);
+    }
+  }
+
+  return {
+    pendingVisits,
+    checkInCandidates,
+    outOfRangeVisits,
+    justMastered,
+    checkingIn,
+    checkInError,
+    checkIn,
+  };
+}

@@ -1,21 +1,18 @@
-// Wires Section 8.1/8.3's bar markers into the map screen: fetches the
-// discovered bars (GET /api/bars) once the map exists, mounts a BarMarkers
-// instance, and refetches whenever `discoveryVersion` advances (see
-// useSampleTracking.ts's own comment on that field: it tracks newly
-// discovered bars specifically, not revealed cells, since a bar can be
-// discovered inside fog the player has already revealed). This means a bar
-// discovered by POST /api/samples' `newBars` (Section 9.2) shows up without
-// a page reload, with no second polling or event mechanism added alongside
-// the one useFogLayer already established.
+// Wires Section 8.1/8.3's bar markers into the map screen: mounts a
+// BarMarkers instance once the map exists, and keeps it in sync with
+// `bars` (screens/Map.tsx, via useDiscoveredBars.ts - shared with
+// tracking/useVisits.ts so the two do not each fetch GET /api/bars on
+// their own). This means a bar discovered by POST /api/samples' `newBars`
+// (Section 9.2) shows up without a page reload, with no second polling or
+// event mechanism added alongside the one useFogLayer already established.
 import { useEffect, useRef } from 'react';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { getBars } from '../../api/client.js';
 import type { Bar } from '../../api/types.js';
 import { BarMarkers } from './bar-markers.js';
 
 export function useBarMarkers(
   map: MaplibreMap | null,
-  discoveryVersion: number,
+  bars: Bar[],
   onSelect: (bar: Bar) => void,
 ): void {
   const markersRef = useRef<BarMarkers | null>(null);
@@ -28,22 +25,8 @@ export function useBarMarkers(
     }
     const markers = new BarMarkers({ map, onSelect: (bar) => onSelectRef.current(bar) });
     markersRef.current = markers;
-    let cancelled = false;
-
-    getBars()
-      .then((result) => {
-        if (!cancelled) {
-          markers.setBars(result.bars);
-        }
-      })
-      .catch(() => {
-        // The map still works without markers - same posture as the tile
-        // availability probe and useFogLayer's own background fetch in
-        // screens/Map.tsx.
-      });
 
     return () => {
-      cancelled = true;
       markers.destroy();
       markersRef.current = null;
     };
@@ -52,22 +35,6 @@ export function useBarMarkers(
   }, [map]);
 
   useEffect(() => {
-    if (discoveryVersion === 0 || !markersRef.current) {
-      return;
-    }
-    let cancelled = false;
-    getBars()
-      .then((result) => {
-        if (!cancelled) {
-          markersRef.current?.setBars(result.bars);
-        }
-      })
-      .catch(() => {
-        // A failed refetch leaves the markers as they were; the next
-        // successful discovery (or the next mount) brings them back in sync.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [discoveryVersion]);
+    markersRef.current?.setBars(bars);
+  }, [bars]);
 }

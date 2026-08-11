@@ -17,12 +17,11 @@ export interface Sample {
 }
 
 // POST /api/samples response shape (packages/api/src/routes/fog.ts). Section
-// 9.2 defines the full { newCells, newBars, visitUpdates } shape; visitUpdates
-// (Phase 5) isn't built yet and the route omits it rather than sending a
-// fabricated value - so only newCells and newBars are here.
+// 9.2 defines the full { newCells, newBars, visitUpdates } shape.
 export interface SamplesResponse {
   newCells: number;
   newBars: Bar[];
+  visitUpdates: VisitSummary[];
 }
 
 // GET /api/bars, GET /api/bars/:id, and the `newBars` field above all share
@@ -71,4 +70,25 @@ export interface FogProgress {
 export interface FogMaskResponse {
   mask: Uint8Array;
   progress: FogProgress;
+}
+
+// Mirrors packages/api/src/routes/visits.ts's VisitSummary (SPEC.md Sections
+// 5.7/7.5/9.2) - the client-facing shape of a visit, shared by POST
+// /api/visits, GET /api/visits/pending, and POST /api/samples's
+// visitUpdates above, exactly like Bar is shared across GET /api/bars(/:id)
+// and newBars.
+export interface VisitSummary {
+  id: number;
+  barId: number;
+  barName: string;
+  startedAt: number;
+  lastSampleAt: number;
+  onsiteSamples: number;
+  confirmedS: number;
+  remainingS: number;
+  status: string;
+}
+
+export interface PendingVisitsResponse {
+  visits: VisitSummary[];
 }
