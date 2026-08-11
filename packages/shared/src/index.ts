@@ -5,3 +5,11 @@ export type { CityConfig, CityBoundingBox, CityOsmAdminFilter } from './city.js'
 export { cellCenter, cellCenterXY, haversineDistanceM, NO_DISTRICT, toCell } from './grid.js';
 export type { GridParams, LatLon } from './grid.js';
 export { berlinDateString } from './berlin-time.js';
+export {
+  isOnSite,
+  isVisitComplete,
+  isVisitExpired,
+  onsiteCandidates,
+  onsiteRadiusM,
+} from './visits.js';
+export type { OnsiteCandidate } from './visits.js';

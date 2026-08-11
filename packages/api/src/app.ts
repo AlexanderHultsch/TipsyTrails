@@ -16,10 +16,11 @@ import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
-import { fogRoutes } from './routes/fog.js';
+import { fogRoutes, type AcceptedPosition } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
 import { resolveSeedDir, staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
+import { visitsRoutes } from './routes/visits.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -96,12 +97,20 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
     app.decorate('districtIdByGridIndex', null);
   }
 
+  // Section 7.2's teleport guard and Section 7.5 step 2's check-in
+  // proximity check read the same in-memory "last accepted sample" state
+  // (Section 10.2: memory-only, never persisted), so both plugins share the
+  // one Map created here rather than fogRoutes owning a copy visits.ts
+  // cannot see.
+  const lastAccepted = new Map<number, AcceptedPosition>();
+
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
   app.register(cityRoutes);
-  app.register(fogRoutes);
+  app.register(fogRoutes(lastAccepted));
   app.register(barsRoutes);
+  app.register(visitsRoutes(lastAccepted));
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);
   const tilesAvailable = existsSync(tilesPath);

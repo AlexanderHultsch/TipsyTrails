@@ -46,8 +46,11 @@ export function toBarSummary(row: DiscoveredBarRow): BarSummary {
 }
 
 // SPEC.md Section 9.5: identical for "does not exist" and "not discovered by
-// you" — a 403 would confirm existence and defeat Section 7.4.
-function sendBarNotFound(reply: FastifyReply): void {
+// you" — a 403 would confirm existence and defeat Section 7.4. Exported so
+// routes/visits.ts can send the exact same body for the same reason
+// (Sections 7.4, 9.5: a check-in attempt must not become an existence
+// oracle either) rather than duplicating it.
+export function sendBarNotFound(reply: FastifyReply): void {
   reply.code(404).send({ code: 'bar_not_found', message: 'That bar does not exist.' });
 }
 
