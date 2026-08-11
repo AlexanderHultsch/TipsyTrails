@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -715,8 +715,11 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/profile/:handle` | Public profile + badges — see 9.5 |
 | PATCH | `/api/settings` | `{ isAnonymous }` |
 | DELETE | `/api/account` | `{ password }` required; hard delete, cascades everywhere |
+| GET | `/api/push/vapid-public-key` | `{ publicKey: string \| null }` — `null` when push is not configured |
 | POST | `/api/push/subscribe` | Web Push subscription |
 | DELETE | `/api/push/subscribe` | `{ endpoint }` — removes it |
+
+`GET /api/push/vapid-public-key` exists because `pushManager.subscribe()` cannot be called without the VAPID public key, and that key is a deployment fact rather than a build-time one. Baking it into the bundle would tie one image to one deployment; returning it from an unrelated response would overload that response's meaning. The key is not secret — only `VAPID_PRIVATE_KEY` is — so serving it costs nothing. It requires auth like every other `/api/*` route, and answers `null` rather than failing when push is unconfigured, so the client can simply not offer notifications.
 
 ### 9.3 Admin
 
@@ -943,16 +946,19 @@ Seed import, bar storage, discovery at 100 m, permanent visibility, bar markers,
 Visit creation, presence evaluation, 20-minute rule, expiry, pending banner, maintenance tick, Web Push, explainer.
 
 **Definition of Done**
-- [ ] Check-in is only offered within the on-site radius, is server-re-validated, and lists multiple candidates by distance
-- [ ] Two samples ≥ 20 minutes apart complete the visit — verified with the app closed in between
-- [ ] A second check-in at a bar with an open pending visit returns the existing visit, not a duplicate
-- [ ] The pending banner shows confirmed and remaining time accurately at all times
-- [ ] The push notification fires once at 21 minutes on Android and on an installed iOS PWA, and not at all if the visit already completed
-- [ ] Moving out of range shows the explicit "still pending" message
-- [ ] A visit expires after 6 hours and the user can immediately check in again
-- [ ] Expiry is correct after an API restart that skipped several maintenance ticks
-- [ ] Mastered status is permanent and survives visit expiry of later visits
-- [ ] The explainer is reachable from the burger menu and appears once after the first check-in
+
+`[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the part that needs a real device named — no browser, no GPU, no push service and no phone here, so those cannot be ticked and must not be.
+
+- [x] Check-in is only offered within the on-site radius, is server-re-validated, and lists multiple candidates by distance
+- [~] Two samples ≥ 20 minutes apart complete the visit — covered end to end against the API with nothing sent in between; "with the app closed" itself needs a phone
+- [x] A second check-in at a bar with an open pending visit returns the existing visit, not a duplicate
+- [x] The pending banner shows confirmed and remaining time accurately at all times
+- [~] The push notification fires once at 21 minutes, and not at all if the visit already completed — the once-only guarantee, the not-while-completed rule and the 404/410 deletion are tested with the sender faked at a seam; **delivery on Android and on an installed iOS PWA is unverified**
+- [x] Moving out of range shows the explicit "still pending" message
+- [x] A visit expires after 6 hours and the user can immediately check in again
+- [x] Expiry is correct after an API restart that skipped several maintenance ticks
+- [x] Mastered status is permanent and survives visit expiry of later visits
+- [x] The explainer is reachable from the burger menu and appears once after the first check-in
 
 ### Phase 6 — Progress, Leaderboard, Badges
 
@@ -1072,6 +1078,18 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.5 — check-in, mastering, and optional push
+
+Recorded after Phase 5 was built. Four decisions the earlier text did not settle.
+
+Section 9.2 gains `GET /api/push/vapid-public-key`, with the reasoning stated beside the table. It is a genuine addition to the endpoint surface rather than a clarification of one, so it is listed here as such.
+
+**The three `VAPID_*` variables are optional.** A deployment that does not set them boots normally, logs once that push is off, and runs every other feature. `PUBLIC_ORIGIN` and `SESSION_SECRET` remain the only variables the container refuses to start without. Push is an enhancement; making it a boot requirement would take down registration and the map over a notification. A partial configuration — some of the three but not all — is treated as a misconfiguration and warned about rather than left as a silent half-state, because it is far likelier to be a typo than an intent.
+
+**`purgeExpiredSessions` now takes an explicit `nowS`.** It previously read the clock itself and had no production caller at all. The maintenance tick (Section 7.9) needs the same statement against a time it controls, and re-deriving the query there would have left two copies of an auth-critical `DELETE` with the dead one easier to find. One statement, one caller, the time passed in.
+
+**`runMaintenanceTick` is asynchronous.** Push dispatch is network I/O, and the tick owns it. It still takes `nowS` as a parameter and still never reads the clock itself, which is what keeps it drivable across hours in a test without faking timers, and what makes it a pass over current state rather than a step forward from the last run — the property Section 7.9 relies on for a missed tick to be self-healing.
 
 ### v1.4 — tile serving in the single-container deployment
 

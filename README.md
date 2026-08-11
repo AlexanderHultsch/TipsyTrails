@@ -8,7 +8,7 @@ Self-hosted on a Raspberry Pi, reachable at `https://tipsytrails.ahultsch.com` t
 
 ## Status
 
-**Phases 0–4 are implemented.** Phases 5–8 are not built yet.
+**Phases 0–5 are implemented.** Phases 6–8 are not built yet.
 
 What exists today: a pnpm monorepo (`packages/shared`, `packages/api`,
 `packages/web`); a Fastify API on SQLite (WAL) with an idempotent migration
@@ -19,14 +19,24 @@ bitmask revealed by walking, a WebGL layer with a 2D canvas fallback, and
 per-district and per-day progress; and bars — 170 of them imported from
 OpenStreetMap, discovered at 100 m, permanently visible once found.
 
-Check-in and mastering (Phase 5) are specified but not built.
+Mastering works like this: standing at a bar you have found, you check in.
+Twenty minutes later, open the app again while you are still there and the bar
+is yours for good. That is the whole mechanic — two moments twenty minutes
+apart, not a stopwatch you have to babysit, because a browser cannot follow
+you in the background and pretending otherwise would punish anyone whose phone
+went to sleep. A banner shows how long is confirmed and how long is left; if
+you wander off it says so rather than failing quietly; and a notification at
+twenty-one minutes reminds you, once, if you asked for it.
 
 Three things are verified only as far as this development environment allows,
 and are called out rather than glossed: the map extract has not been generated,
 so nothing has rendered against real tiles; the fog shader has never been
 compiled, because there is no GPU here — its layer class is tested against a
 fake WebGL context, which proves the call sequence and nothing about the GLSL;
-and no Docker image has been built, because there is no Docker daemon. What
+no push notification has ever been delivered, because there is no browser and
+no push service — the once-only, not-while-completed and dead-endpoint rules
+are tested against a faked sender, the wire is not; and no Docker image has
+been built, because there is no Docker daemon. What
 *has* been verified is the server itself, booted from a hand-assembled copy of
 the runtime image's file layout — it serves the API and the SPA, runs
 migrations, seeds the admin account and the city data, and imports all 170 bars
