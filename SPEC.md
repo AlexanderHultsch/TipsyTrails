@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -114,7 +114,7 @@ Cache aggressively at the Cloudflare edge so the Pi handles almost no repeat tra
 | Path | Cache-Control | Notes |
 |---|---|---|
 | `/assets/*` (hashed) | `public, max-age=31536000, immutable` | Vite content hashing |
-| `/tiles/karlsruhe.<version>.pmtiles` | `public, max-age=2592000` | Range requests must be allowed; ~30–80 MB, fetched in small ranges |
+| `/tiles/karlsruhe.<version>.pmtiles` | `public, max-age=2592000` | Range requests must be allowed; 9.4 MB measured for Karlsruhe, fetched in small ranges |
 | `/static/districts.json` | `public, max-age=86400` | District polygons, simplified |
 | `/index.html`, `/manifest.json` | `public, max-age=0, must-revalidate` | |
 | `/api/*` | `private, no-store` | Never cached |
@@ -124,7 +124,7 @@ Two things Cloudflare does not do by default and that must be configured explici
 - **The tile file must be cached by a Cache Rule.** Cloudflare's default cache does not include `.pmtiles`. Without a rule matching `/tiles/*`, every range request reaches the Pi and the Phase 2 `cf-cache-status: HIT` check will never pass.
 - **The tile filename carries a version segment** (`karlsruhe.2026-08.pmtiles`), because a 30-day immutable-ish cache on a stable filename makes regenerated tiles unreachable for a month. The current filename lives in `config.ts` and is referenced by both the Caddyfile and the client.
 
-Range requests on the tile path are not an optimisation; they are mandatory. PMTiles works by fetching small byte ranges out of one large file — a server that ignores the `Range` header forces the client to download the whole 30–80 MB extract on every map view, which defeats the point of the format. Whatever serves `/tiles/*` must answer `206 Partial Content` to a ranged request, and this is verified directly (Section 12, Phase 2 Definition of Done), not inferred from the serving library.
+Range requests on the tile path are not an optimisation; they are mandatory. PMTiles works by fetching small byte ranges out of one large file — a server that ignores the `Range` header forces the client to download the whole extract on every map view, which defeats the point of the format. Whatever serves `/tiles/*` must answer `206 Partial Content` to a ranged request, and this is verified directly (Section 12, Phase 2 Definition of Done), not inferred from the serving library.
 
 Which component sets the `Cache-Control` value in the table above depends on the deployment (Section 4.3). In the standalone two-container path, Caddy sets it when serving the file from disk, as the diagram in Section 4 shows. In the single-container deployment that actually runs on the Pi (v1.2.2), there is no Caddy in front of the API; the API sets `Cache-Control: public, max-age=2592000` itself on `/tiles/*` responses, the same way it already sets headers for hashed assets and `index.html` in `packages/api/src/app.ts`. The value is unchanged either way — only who applies it differs. The Cloudflare Cache Rule below is edge configuration and is required in both deployments regardless of which origin component sets the header.
 
@@ -175,7 +175,7 @@ Build happens on the Pi. Push to `main` → SSH to Pi → `git pull && docker co
 
 Multi-stage Dockerfiles; the frontend build stage runs on the Pi (arm64).
 
-**Tile serving.** The extract is not in the image — Section 13.1 forbids committing it, and at 30–80 MB it does not belong in a build layer either. The platform mounts a persistent data volume for the container, the same one `DATABASE_PATH` lives under, so the extract lives there too, under a directory named by the `TILES_DIR` environment variable (default `/data/tiles`, mirroring the `/data/db/tipsy.db` default for `DATABASE_PATH` in `packages/api/src/env.ts`). The path the API reads is `${TILES_DIR}/${CONFIG.TILES_FILENAME}`. In the single-container deployment the API serves `/tiles/*` from that path itself, including range-request support (Section 4.1); in the standalone two-container path, Caddy serves it from the same mounted location per `caddy/Caddyfile`, unchanged. Startup and missing-file behaviour differ between the two deployments — see Section 13.2.
+**Tile serving.** The extract is not in the image — Section 13.1 forbids committing it, and a regenerated extract must not require rebuilding the image either. The platform mounts a persistent data volume for the container, the same one `DATABASE_PATH` lives under, so the extract lives there too, under a directory named by the `TILES_DIR` environment variable (default `/data/tiles`, mirroring the `/data/db/tipsy.db` default for `DATABASE_PATH` in `packages/api/src/env.ts`). The path the API reads is `${TILES_DIR}/${CONFIG.TILES_FILENAME}`. In the single-container deployment the API serves `/tiles/*` from that path itself, including range-request support (Section 4.1); in the standalone two-container path, Caddy serves it from the same mounted location per `caddy/Caddyfile`, unchanged. Startup and missing-file behaviour differ between the two deployments — see Section 13.2.
 
 A Vite + MapLibre build on a 4 GB Pi is close to the memory ceiling. The web Dockerfile sets `NODE_OPTIONS=--max-old-space-size=1536` in the build stage, and the README documents that at least 2 GB of swap must be configured on the Pi. If build time exceeds ~5 minutes, the documented upgrade path is GitHub Actions building an arm64 image to GHCR and the Pi pulling the image instead. Do not implement this in v1.
 
@@ -966,17 +966,20 @@ Visit creation, presence evaluation, 20-minute rule, expiry, pending banner, mai
 Profile, badge shelf, leaderboard with metric and period switching, anonymity toggle, badge evaluation job.
 
 **Definition of Done**
-- [ ] The leaderboard ranks correctly on both metrics and all periods, with stable tie-breaking
-- [ ] Week/month area figures come from `fog_daily_progress` and match a hand-computed reference
-- [ ] A bar mastered twice counts once, in the period of its first completion
-- [ ] Toggling anonymous masks the name immediately while preserving rank and statistics
-- [ ] An anonymous user's profile is unreachable by username and reachable by handle
-- [ ] Badges are awarded at or above the configured thresholds, verified with seeded test data
-- [ ] A user who registered but never moved receives no badge for the period
-- [ ] Multiple users can hold the same badge for the same period
-- [ ] Badges are visible on profiles and inline in leaderboard rows
-- [ ] Current-period progress toward each threshold is shown on the profile
-- [ ] The evaluation job is idempotent — running it twice awards nothing twice — and catches up a period missed while the Pi was off
+
+`[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the missing part named. Phase 6 has no device-dependent items, so `[~]` is unused here.
+
+- [x] The leaderboard ranks correctly on both metrics and all periods, with stable tie-breaking — `packages/api/src/routes/leaderboard.test.ts`, describe blocks `ranking — area metric`, `ranking — bars metric`, and `stable tie-breaking` (`breaks a value tie by earliest achievement, and repeats the same order on a second call`, `falls back to users.id when value and achievement instant both tie`)
+- [x] Week/month area figures come from `fog_daily_progress` and match a hand-computed reference — `packages/api/src/routes/leaderboard.test.ts`: `week: sums fog_daily_progress over the current ISO week only, matching a hand-computed percent`, `month: sums fog_daily_progress over the current month only, matching a hand-computed percent`
+- [x] A bar mastered twice counts once, in the period of its first completion — `packages/api/src/badges.test.ts`: `a bar mastered twice counts once, in the period of its first completion`, `fails the "mastered twice" DoD item if the earliest-completion rule is replaced by a plain count`; `packages/api/src/routes/leaderboard.test.ts`: `a bar mastered twice counts once, at the leaderboard level, in the period of its first completion`
+- [x] Toggling anonymous masks the name immediately while preserving rank and statistics — `packages/api/src/routes/leaderboard.test.ts`: `toggling isAnonymous changes the displayed name on the very next read, without changing rank or statistics`
+- [x] An anonymous user's profile is unreachable by username and reachable by handle — `packages/api/src/routes/profile.test.ts`, describe `an anonymous user`: `404s by username`, `resolves by handle, masked, with badges shown against the masked handle`
+- [x] Badges are awarded at or above the configured thresholds, verified with seeded test data — `packages/api/src/badges.test.ts`: `awards a user at exactly the week threshold` (explorer and barfly), `does not award a user just below the threshold`
+- [x] A user who registered but never moved receives no badge for the period — `packages/api/src/badges.test.ts`: `a user who registered but never moved receives nothing`
+- [x] Multiple users can hold the same badge for the same period — `packages/api/src/badges.test.ts`: `multiple users hold the same badge for the same period (badges are not exclusive)`
+- [x] Badges are visible on profiles and inline in leaderboard rows — `packages/api/src/routes/profile.test.ts`: `surfaces the badge shelf (all badges ever awarded)`; `packages/api/src/routes/leaderboard.test.ts`: `are ranked and counted, with identity masked but badges present`; `packages/web/src/App.leaderboard.test.tsx`: `shows an anonymous row masked, still ranked, with its badges`
+- [x] Current-period progress toward each threshold is shown on the profile — `packages/api/src/badges.test.ts`, describe `currentBadgeProgress`: `computes live progress from the same values evaluateBadges would award`; `packages/web/src/App.leaderboard.test.tsx`: `renders the badge shelf and current-period progress toward each threshold`
+- [x] The evaluation job is idempotent — running it twice awards nothing twice — and catches up a period missed while the Pi was off — `packages/api/src/badges.test.ts`: `running the evaluation twice awards nothing the second time and does not change value or awarded_at`; describe `runBadgeCatchUp`: `evaluates a period that closed while the process was down, and does not re-evaluate one already done`
 
 ### Phase 7 — Community Submissions and Admin
 
@@ -1035,9 +1038,9 @@ The repository is public. Everything required to build, run, and self-host the p
 
 ### 13.2 Map tiles
 
-The tile extract is roughly 30–80 MB. GitHub rejects files over 100 MB and warns above 50 MB, and Git LFS bandwidth on a public repository is exhausted quickly.
+The tile extract was estimated at 30–80 MB when this section was written. Karlsruhe's, built for the Section 6.2 bounding box at zoom 0–14, measures **9.4 MB** — the first time the figure was measured rather than assumed. GitHub's 100 MB hard limit and 50 MB warning are therefore not the binding constraint they were taken to be.
 
-It is therefore published as a **GitHub Release asset**, not a tracked file. This keeps it freely downloadable — the project stays fully open — without bloating clone size. `scripts/extract-tiles.sh` regenerates it from a public Geofabrik extract, so the artefact is reproducible even without the release.
+It is nonetheless published as a **GitHub Release asset**, not a tracked file. Every regeneration produces a new file under a new versioned name (Section 4.1), so committing them would accumulate binaries in history that no revision ever needs again, and the extract is ODbL-derived rather than MIT (13.1, 13.3). Keeping it out of the tree also keeps clones small for anyone who only wants the code. The premise changed; the decision stands, and the reasons above are the ones that carry it. `scripts/extract-tiles.sh` is meant to regenerate it from a public Geofabrik extract so the artefact is reproducible without the release — that script does not exist yet, and Karlsruhe's extract was produced by invoking `planetiler` by hand.
 
 `docker compose up` fails with a clear, actionable error if the tiles file is absent, naming both the download URL and the regeneration script. The expected filename comes from `CONFIG.TILES_FILENAME`, so a regenerated extract is published under a new versioned name and the edge cache is bypassed automatically (Section 4.1). This holds for the standalone two-container path (Section 4), where Compose can check for the file before anything else starts.
 
@@ -1079,6 +1082,22 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.6 — progress, leaderboard, and badges
+
+Recorded after Phase 6 was built. Four decisions the earlier text did not settle.
+
+**`BADGE_EVAL_INTERVAL_MS` joined Section 7.1's `CONFIG` block.** Section 7.7 specifies the badge job's cadence only in words ("shortly after each period closes") and names no evaluation interval, so CLAUDE.md's guardrail — every constant lives in `config.ts`, never inlined at a call site — admitted two readings: the constant is not "defined in the spec", but the same rule forbids inlining a timeout next to the `setInterval` that reads it, and `MAINTENANCE_INTERVAL_MS` was already sitting in the block for exactly the tick it serves. It lives in `config.ts` beside that sibling constant and is mirrored into this section, above. The value is hourly, and that is a decision worth recording rather than leaving as a bare number: the catch-up entry point (Section 7.9) is already idempotent and already knows, from the `UNIQUE` constraint, whether a given period was evaluated, so running it once an hour and re-running it on a period it already covered costs nothing extra — no cron parser or precise-boundary scheduling is needed to satisfy "shortly after".
+
+**Section 7.8's tie-break needed a reading.** "Earliest achievement" is well defined for a one-off event but not for a running total — a user's area percentage or bar count does not have a single instant it was "achieved" the way a badge award does. The adopted meaning, applied identically in `packages/api/src/badges.ts` and `routes/leaderboard.ts`: the instant a user's value last rose to what it now is. Concretely, `fog_state.updated_at` for all-time area (the mask's last write is the last time `revealed_cells` changed); the latest day among those summed into the period total for week/month area; and the completion that pushed a user's mastered-bar count to its current total for the bars metric. Users who never scored on a metric carry no achievement instant at all and fall through to the `users.id` tie-break, same as a genuine tie. This is recorded here as the normative reading so a future change does not re-derive a different one for the same words.
+
+**`GET /api/profile/:handle` resolves the `player-{id}` form for every user, not only anonymous ones.** Section 9.5, read literally, restricts only the *username* form for an anonymous user ("the username form returns 404 and only the handle form resolves, masked") and says nothing against the handle form also resolving a non-anonymous user. It does: a bare username still resolves only a non-anonymous user, so an anonymous user stays unreachable by their real username, but `player-{id}` now works for anyone. This discloses nothing the ranked list does not already — Section 7.8's leaderboard shows masked and unmasked entries side by side on the same page, so which numeric ids belong to real accounts is public by design there. What Section 9.5 actually protects is the path from a *known username* to a profile; that path stays closed for anonymous users exactly as written, and the byte-identical 404 (unknown user, anonymous-by-username, malformed handle) still holds.
+
+**The verification chain gained `pretest` and `pretypecheck`.** `packages/api` and `packages/web` resolve `@tipsytrails/shared` through a gitignored `dist`, and neither `pnpm test` nor `pnpm typecheck` rebuilt it — only the `prepare` hook did, and `prepare` covers installing, not editing. A signature-preserving break to a shared rule (`isVisitExpired`, changed to a threshold ten times too large) left `pnpm typecheck` at zero errors and the api suite covering visit expiry green, 26 of 26, because a behaviour change that keeps its signature produces no type error and the stale `dist` on disk was still the old, correct build. Stated plainly: for as long as this held, the four commands CLAUDE.md makes authoritative were testing the *previous* build of `packages/shared`, not the one on disk. `package.json` now runs the `shared` build as `pretest` and `pretypecheck`, so `pnpm test` and `pnpm typecheck` from the repository root are correct again. One gap is accepted rather than closed: a single package's tests invoked directly, as `pnpm --filter @tipsytrails/api test`, still bypasses both hooks and can read a stale `dist`. The four root commands remain the authoritative ones for exactly this reason.
+
+**The tile extract's size was measured, not estimated.** Sections 4.1, 4.3 and 13.2 all quoted "30–80 MB", a figure nobody had ever produced a file to check. Karlsruhe's extract, built for the Section 6.2 bounding box at zoom 0–14, is **9.4 MB**. The numbers are corrected where they informed a decision, and 13.2's reasoning is restated: GitHub's file-size limits were never the real argument for publishing the extract as a Release asset, so the decision now rests on the reasons that actually carry it — a new versioned file per regeneration, ODbL rather than MIT, and clone size. The v1.4 entry below keeps its original wording; it is a record of what was decided then.
+
+**`scripts/extract-tiles.sh` does not exist.** Section 4.2 lists it and `packages/api/src/app.ts` names it in the startup error logged when the extract is missing, but it was never written — Karlsruhe's extract was produced by invoking `planetiler` by hand. Recorded here rather than quietly dropped from the tree, because the error message currently points an operator at a file they cannot find.
 
 ### v1.5 — check-in, mastering, and optional push
 
@@ -1166,4 +1185,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.4*
+*End of specification v1.6*

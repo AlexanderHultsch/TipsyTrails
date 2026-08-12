@@ -1,11 +1,11 @@
-# Handover — state of play before Phase 6
+# Handover — state of play before Phase 7
 
-For the next Claude Code session. Written at the end of the session that
-completed Phase 5.
+For the next Claude Code session. Written after the session that completed
+Phase 6.
 
 `SPEC.md` is the source of truth; `CLAUDE.md` holds the guardrails. This file
 only records where things stand, what is deliberately unfinished, and what to
-do first. Replace it when Phase 6 is done — it is a note between sessions, not
+do first. Replace it when Phase 7 is done — it is a note between sessions, not
 project documentation.
 
 ---
@@ -16,10 +16,10 @@ project documentation.
 | --------------------- | ---------------------------------------------------------- |
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
-| Phases complete       | 0–5 (with the gaps in §3, which need the owner)            |
-| Phase 6               | not started                                                |
-| Tests                 | 504 green — shared 117, api 258, web 129                   |
-| Spec version          | 1.5                                                        |
+| Phases complete       | 0–6 (with the gaps in §3, which need the owner)            |
+| Phase 7               | not started                                                |
+| Tests                 | 568 green — shared 137, api 296, web 135                   |
+| Spec version          | 1.6                                                        |
 
 Everything is committed and pushed. The working tree was clean at handover.
 
@@ -33,58 +33,46 @@ pnpm test
 ```
 
 `pnpm install` runs a `prepare` hook that builds `packages/shared`. Do not
-remove it: `packages/api` imports `@tipsytrails/shared`, which resolves to a
-gitignored `dist`. Without the hook a fresh clone silently runs a subset of the
-api package's tests while still printing a passing summary.
+remove it: `packages/api` and `packages/web` import `@tipsytrails/shared`,
+which resolves to a gitignored `dist`. Without the hook a fresh clone
+silently runs a subset of the api package's tests while still printing a
+passing summary. `pnpm test` and `pnpm typecheck` also each carry their own
+`pretest`/`pretypecheck` rebuild of `packages/shared` now (§6, §7) — `prepare`
+covers a fresh clone, the two `pre*` hooks cover an edit mid-session. Running
+a single package's tests directly (`pnpm --filter @tipsytrails/api test`)
+still bypasses both and can read a stale `dist`; that gap is accepted, not
+missed.
 
 ---
 
-## 2. What Phase 5 built
+## 2. What needs the owner, not an agent
 
-Check-in and mastering, in five parts: the Section 7.5 rules as a pure module
-in `packages/shared/src/visits.ts`; `POST /api/visits` and
-`GET /api/visits/pending`; visit evaluation inside `POST /api/samples`, which
-now returns `visitUpdates`; the maintenance tick in
-`packages/api/src/maintenance.ts`; and the web UI — check-in affordance,
-pending banner, out-of-range message, explainer, mastered confirmation.
-
-Three things are worth knowing before you touch any of it.
-
-- **`confirmed_s` is measured from `started_at`**, not between successive
-  samples. Section 5.7 says so in as many words. It is derived from
-  request-arrival time rather than each sample's client timestamp, because
-  Section 7.2 mandates server time for persisted timestamps;
-  `SAMPLE_MAX_AGE_MS` bounds the resulting slack at ten minutes, well inside
-  the leave-and-return trade-off Section 7.5 already accepts in writing.
-- **`isVisitComplete`'s `onsite_samples` condition is unreachable through the
-  sample handler.** Check-in seeds the row with 1 and the increment always
-  precedes the check, so the count is at least 2 at every evaluation. The
-  api-level test that covers it drives the row into that state directly and is
-  therefore defence-in-depth against a future second writer or a raised
-  `VISIT_MIN_ONSITE_SAMPLES` — not coverage of anything a client can reach. The
-  rule itself is tested where it lives, in `packages/shared/src/visits.test.ts`.
-  Do not mistake "unreachable" for "untested", or the reverse.
-- **The pending banner's countdown is wall-clock-derived**, not taken from the
-  server's last reported `confirmed_s`, which would freeze between sample
-  posts. The two diverge only while the player is out of range or offline — and
-  the out-of-range case says so on the same row.
-
-Push is optional and off unless configured; see §3.
-
----
-
-## 3. What needs the owner, not an agent
-
-None of this can be closed from the sandbox. Carried forward, all still open.
+None of this can be closed from the sandbox. Carried forward from the Phase 5
+handover, with two updates from this session marked below.
 
 | Item                                                            | Blocked on                                                              |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Karlsruhe renders in the ink style on a mid-range Android phone | the PMTiles extract, and a phone                                        |
+| Karlsruhe renders in the ink style on a mid-range Android phone | copying the built extract to the Pi (see below), and a phone            |
 | Pan and zoom hold ≥ 50 fps; the fog layer holds ≥ 50 fps        | same — unmeasurable in this sandbox                                     |
 | Tiles cached at the edge (`cf-cache-status: HIT`)               | the Cloudflare Cache Rule for `/tiles/*` (Section 4.1), not yet created |
 | The 2D canvas fallback renders correctly with WebGL2 disabled   | no GPU/WebGL here; the fog shader has **never been compiled**           |
 | Push delivery on Android and on an installed iOS PWA            | no browser, no push service, no device                                  |
 | The first real `docker build`                                   | no Docker daemon here                                                   |
+
+**Updated this session — the tile extract build step is done.** The PMTiles
+extract has been built and sits on the owner's laptop as
+`karlsruhe.2026-08.pmtiles`. What remains is copying it to the Pi's
+`TILES_DIR` and re-testing the map screens there — not building it. And it is
+**9.4 MB**, not the 30–80 MB `SPEC.md` estimated: that figure was never
+measured before now, only guessed at, and the real number should replace the
+estimate wherever it matters for planning (it does not need to reach
+`SPEC.md` itself, which states the estimate as an estimate).
+
+**`scripts/extract-tiles.sh` does not exist.** `packages/api/src/app.ts`
+names it in its startup error and Section 4.2 lists it in the repository
+tree, but the extract above was produced by invoking `planetiler` by hand,
+not by running this script. Tracked in §6 (deliberate debts) rather than
+written now — writing it was not this session's task.
 
 **Push configuration.** Three optional variables in the Pi's
 `apps/tipsy-trails/.env`: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
@@ -94,27 +82,6 @@ configuration. **Never write a key value into this file, `.env.example`, a
 test, or a comment** — `.env` is gitignored and `.env.example` documents names
 and shapes only (CLAUDE.md). Generate a keypair with `web-push`'s
 `generateVAPIDKeys()` or an equivalent P-256 generator.
-
-**Build the tile extract on the Pi** — roughly 1–2 hours, unblocks the first
-three rows above:
-
-```
-curl -LO https://github.com/onthegomap/planetiler/releases/latest/download/planetiler.jar
-java -Xmx4g -jar planetiler.jar --download --area=baden-wuerttemberg \
-  --bounds=8.2750,48.9400,8.5600,49.0950 \
-  --output=karlsruhe.2026-08.pmtiles --force
-```
-
-It belongs on the mounted data volume, in the directory the container reads as
-`TILES_DIR` (default `/data/tiles`). The filename must match
-`CONFIG.TILES_FILENAME`, so a regenerated extract bypasses the edge cache.
-`data/tiles/` is gitignored; Section 13.2 publishes the file as a GitHub
-Release asset.
-
-**The fog shader has never executed.** Its layer class is tested against a
-hand-built fake GL object, which proves the call sequence and nothing about the
-GLSL. Treat the first render on a real device as the actual test, and say so
-rather than reporting Phase 3 as fully verified.
 
 Two questions are still outstanding with the platform chat:
 
@@ -126,7 +93,7 @@ Two questions are still outstanding with the platform chat:
 
 ---
 
-## 4. Deployment — read before touching Docker
+## 3. Deployment — read before touching Docker
 
 The Pi runs a **multi-site platform** maintained in a different repository and
 a different chat. One container per site, listening on `PORT`, with its SQLite
@@ -156,42 +123,36 @@ copies every directory the server reads at boot — it exists because a missing
 
 ---
 
-## 5. Phase 6 — next
+## 4. What Phase 6 built
 
-Scope from Section 12: the profile, the badge shelf, the leaderboard with
-metric and period switching, the anonymity toggle, and the badge evaluation
-job. Endpoints in Section 9.2: `GET /api/leaderboard`, `GET /api/profile/:handle`,
-`PATCH /api/settings`. Rules in Sections 7.6–7.8; the badge table is Section
-5.8.
+Profile, badge shelf, leaderboard (metric and period switching, paging),
+anonymity toggle, and the badge evaluation job. Three things a future reader
+needs before touching any of it:
 
-It needs **no external data** and nothing from the owner — it can be built end
-to end from what is already in the repository.
-
-Three things to get right, because the spec is specific and easy to skim past:
-
-- **Badges are activity floors, not competitive targets.** Section 7.1's
-  `BADGE_THRESHOLDS` comment says so explicitly, and explains why the numbers
-  are deliberately not linear across periods. Award at `value >= threshold`,
-  minimum and not "strictly greater".
-- **ISO-8601 week numbering**, Monday-based, week 1 containing the first
-  Thursday. Period boundaries are computed in `Europe/Berlin` and then
-  converted to UTC seconds. Section 5.8 says there is **one** helper for this
-  in `packages/shared` and that no route computes boundaries itself —
-  `berlin-time.ts` is where it belongs.
-- **Section 9.5 governs the profile and the leaderboard.** Read it before
-  designing either. The anonymity toggle is not decoration.
-
-Badge evaluation runs on boot if the most recently closed period was missed
-(Section 7.9), the same self-healing posture the maintenance tick already has.
-`runMaintenanceTick` is the precedent worth copying: it takes `nowS` as a
-parameter, never reads the clock itself, and is a pass over current state
-rather than a step forward from the last run.
+- **The shared period helper is the only place period boundaries are
+  computed.** ISO-8601 week numbering (Monday-based, week 1 contains the
+  first Thursday), computed in `Europe/Berlin` and converted to UTC seconds,
+  lives once in `packages/shared` (`berlin-time.ts`). No route re-derives it.
+- **The badge job and the leaderboard deliberately share their value
+  functions.** `packages/api/src/badges.ts` exports
+  `explorerValuesByUser`/`barflyValuesByUser`/`allTimeBarflyValuesByUser`;
+  `routes/leaderboard.ts` and `routes/profile.ts` call the same functions
+  rather than re-querying, so a user's leaderboard standing, profile figures,
+  and badge award can never disagree about the same number.
+- **The tie-break reading (SPEC.md v1.6 changelog, item 2).** "Earliest
+  achievement" is not defined for a running total, so it was read as the
+  instant a user's value last rose to what it now is:
+  `fog_state.updated_at` for all-time area, the latest qualifying day within
+  the period for week/month area, and the completion that pushed the count to
+  its total for bars — with users who never scored falling through to
+  `users.id`. This is now the normative reading; do not re-derive a different
+  one from the same spec words.
 
 ---
 
-## 6. Deliberate debts
+## 5. Deliberate debts
 
-Small, known, left alone on purpose. None block Phase 6.
+Small, known, left alone on purpose. None block Phase 7.
 
 | Item                                                                                          | Where                                  |
 | --------------------------------------------------------------------------------------------- | -------------------------------------- |
@@ -203,13 +164,39 @@ Small, known, left alone on purpose. None block Phase 6.
 | Avatar renders very small on `/app`                                                           | `packages/web/src/screens/AppHome.tsx` |
 | `PASSWORD_MIN_LENGTH` is 8, chosen by an executor because the spec names no value             | `packages/shared/src/config.ts`        |
 | The seeded admin cannot use the security-question reset; its recovery path is the environment | `packages/api/src/db/seed-admin.ts`    |
+| `scripts/extract-tiles.sh` does not exist; the one real extract was produced by hand          | `scripts/` (Section 4.2, `app.ts`)     |
 
 ---
 
-## 7. Things that bit, so they do not bite again
+## 6. Things that bit, so they do not bite again
 
 Each cost a round trip. Each looked correct on first reading.
 
+- **The verification chain itself was lying.** `packages/api` and
+  `packages/web` import `@tipsytrails/shared` through a gitignored `dist` that
+  neither `pnpm test` nor `pnpm typecheck` rebuilt — only `prepare` did, and
+  `prepare` runs on install, not on an edit. Confirmed by breaking
+  `isVisitExpired` to a threshold ten times too large, a change that keeps its
+  signature: `pnpm typecheck` reported zero errors and the api suite covering
+  visit expiry passed 26 of 26, because the stale `dist` on disk was still the
+  old, correct build. This is the most instructive defect in the project so
+  far — every other bug here was caught by a test; this one was invisible to
+  every test until the harness itself was mutated. `pretest` and
+  `pretypecheck` now rebuild `shared` before either command runs (SPEC.md v1.6
+  changelog, item 4).
+- **A city-progress assertion that checked a number's format, not its
+  value.** When the city and district overview screens moved from Phase 2's
+  invented placeholder numbers onto real `GET /api/progress` data, the
+  district assertion was exact and caught a zeroed value as it should; the
+  city assertion only checked that the rendered text looked like a percentage
+  (`toMatch(/^\d+%$/)`), so the same mutation — the real API figure silently
+  replaced by zero — passed clean. Replacing an invented number with an
+  unverified one is barely an improvement. Fixed to an exact assertion against
+  the stubbed value in the same commit that found it
+  (`Add the profile, badge shelf and leaderboard screens`). When a test
+  changes from "the app made something up" to "the app used a real value",
+  the assertion has to change from "looks plausible" to "is the value", or the
+  migration proves nothing.
 - **The first `POST /api/visits` returned a stale pending visit.** Expiry was
   evaluated lazily on the read path only, so a visit six hours dead still
   matched `status = 'pending'` and was handed back — with its old `started_at`,
@@ -217,12 +204,12 @@ Each cost a round trip. Each looked correct on first reading.
   It was found by executing the path, not by reading the diff, and only because
   the check-in route was tried before the pending-poll route. Both handlers now
   evaluate expiry.
-- **Verify security and correctness properties by executing them.** This is the
-  third time on this project that a green suite hid a real defect — the
+- **Verify security and correctness properties by executing them.** A green
+  suite has now hidden a real defect more than once on this project — the
   reset-question decoy took three attempts, `revealVersion` served two
-  questions at once, and now this. Mutation-test any guard you add: break the
-  code it covers and confirm the test fails. Several tests here asserted
-  nothing until that was done.
+  questions at once, the stale pending visit above, and now both entries above
+  it. Mutation-test any guard you add: break the code it covers and confirm
+  the test fails. Several tests here asserted nothing until that was done.
 - **`trustProxy` must be `1`, never `true`.** With `true` Fastify takes the
   left-most `X-Forwarded-For` entry, which the client controls, so anyone can
   mint a fresh rate-limit bucket per request. A test fails if this changes.
@@ -241,6 +228,35 @@ Each cost a round trip. Each looked correct on first reading.
   every step immediately; do not batch commits.
 - **Commit messages with embedded double quotes break shell quoting.** Use
   `git commit -F <file>` with a heredoc.
+
+---
+
+## 7. Phase 7 — next
+
+Scope from Section 12: Community Submissions and Admin — suggest-a-bar with a
+map picker, the duplicate guard, the community marker, and the admin area
+(bar management, moderation, user list). Endpoints in Section 9.2/9.3:
+`POST /api/bars/suggest`, and the `/api/admin/*` surface. It needs **no
+external data** — everything it touches is already in the repository or the
+running database.
+
+Two places the spec is specific and easy to skim past:
+
+- **Section 11.3's duplicate guard is a concrete algorithm, not "similar
+  name".** Reject a submission if an active bar exists within
+  `SUGGEST_DUPLICATE_RADIUS_M` whose name has a normalized Levenshtein ratio
+  ≥ `SUGGEST_NAME_SIMILARITY` after both names are lowercased, stripped of
+  diacritics and punctuation, whitespace-collapsed, and have a leading
+  article or a common suffix (`bar`, `pub`, `kneipe`, `cafe`) dropped. The
+  rejection must name the conflicting bar. The map picker is mandatory — it
+  is how position is set, not geocoding — and a submitting user gets a
+  `bar_discoveries` row for their own submission immediately.
+- **Section 9.3's admin edit recomputes derived fields, and does not touch
+  history.** Editing a bar's position must recompute `cell_index` and
+  `district_id` the same way seeding does; existing discoveries are not
+  revoked by a move or an edit. Every `/api/admin/*` route requires
+  `is_admin` and must 403 otherwise — worth a test per route, not just one
+  for the prefix.
 
 ---
 
