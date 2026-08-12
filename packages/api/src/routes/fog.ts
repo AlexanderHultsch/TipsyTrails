@@ -26,7 +26,12 @@ import { toVisitSummary, type VisitSummary } from './visits.js';
 // `fog_district_progress` / `fog_daily_progress` triple and share the
 // active-city/grid lookups below — one coherent unit, per the phase brief.
 
-interface CityRow {
+// Exported so routes/bars.ts's suggest handler (SPEC.md Section 11.3) can
+// place a submitted position against the same active city and grid this
+// route uses, rather than a second copy of "how do I get a GridParams" —
+// task brief: "reuse the projection the sample handler already uses rather
+// than a second copy."
+export interface CityRow {
   id: number;
   origin_lat: number;
   origin_lon: number;
@@ -36,7 +41,7 @@ interface CityRow {
   playable_cells: number;
 }
 
-function loadActiveCity(db: Database.Database): CityRow | null {
+export function loadActiveCity(db: Database.Database): CityRow | null {
   return (
     db
       .prepare<[], CityRow>(
@@ -46,7 +51,7 @@ function loadActiveCity(db: Database.Database): CityRow | null {
   );
 }
 
-function toGridParams(city: CityRow): GridParams {
+export function toGridParams(city: CityRow): GridParams {
   return {
     origin_lat: city.origin_lat,
     origin_lon: city.origin_lon,

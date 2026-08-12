@@ -384,3 +384,162 @@ describe('GET /api/bars/:id', () => {
     expect(undiscovered.json()).toEqual(nonexistent.json());
   });
 });
+
+describe('POST /api/bars/suggest', () => {
+  // Well outside SUGGEST_DUPLICATE_RADIUS_M (25 m) from SCHLOSS but still a
+  // short, plausible walk — used whenever a test needs "a different spot,
+  // not a duplicate collision by position alone".
+  const NEARBY_NOT_DUPLICATE = diagonalOffset(SCHLOSS, 30);
+  if (30 <= CONFIG.SUGGEST_DUPLICATE_RADIUS_M) {
+    throw new Error('NEARBY_NOT_DUPLICATE is expected to fall outside SUGGEST_DUPLICATE_RADIUS_M');
+  }
+
+  // Nowhere near Karlsruhe's bounding box (SPEC.md Section 6.2:
+  // 48.9400-49.0950 N, 8.2750-8.5600 E).
+  const OUTSIDE_CITY = { lat: 0, lon: 0 };
+
+  function suggestBar(
+    cookie: string,
+    body: { name: string; address: string | null; lat: number; lon: number },
+  ): Promise<LightMyRequestResponse> {
+    return injectWithOrigin({
+      method: 'POST',
+      url: '/api/bars/suggest',
+      headers: { cookie },
+      payload: body,
+    });
+  }
+
+  it('creates a community bar that appears immediately in GET /api/bars for the submitter, discovered', async () => {
+    const cookie = await registerUser('suggester');
+
+    const response = await suggestBar(cookie, {
+      name: 'Irish Pub Karlsruhe',
+      address: 'Kaiserstraße 1',
+      ...NEARBY_NOT_DUPLICATE,
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body).toMatchObject({ name: 'Irish Pub Karlsruhe', source: 'community' });
+    expect(typeof body.discoveredAt).toBe('number');
+
+    const barsResponse = await injectWithOrigin({
+      method: 'GET',
+      url: '/api/bars',
+      headers: { cookie },
+    });
+    const names = barsResponse.json().bars.map((b: { name: string }) => b.name);
+    expect(names).toContain('Irish Pub Karlsruhe');
+
+    const userId = db
+      .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+      .get('suggester')!.id;
+    const discovery = db
+      .prepare<[number, number], { discovered_at: number }>(
+        'SELECT discovered_at FROM bar_discoveries WHERE user_id = ? AND bar_id = ?',
+      )
+      .get(userId, body.id);
+    expect(discovery).toBeDefined();
+
+    const barRow = db
+      .prepare<[number], { source: string; status: string; submitted_by: number }>(
+        'SELECT source, status, submitted_by FROM bars WHERE id = ?',
+      )
+      .get(body.id);
+    expect(barRow).toMatchObject({ source: 'community', status: 'active', submitted_by: userId });
+  });
+
+  it('rejects a near-duplicate within SUGGEST_DUPLICATE_RADIUS_M, naming the conflicting bar', async () => {
+    const cookie = await registerUser('suggester');
+    const closeBy = diagonalOffset(SCHLOSS, 10);
+    expect(10).toBeLessThan(CONFIG.SUGGEST_DUPLICATE_RADIUS_M);
+
+    const response = await suggestBar(cookie, {
+      name: 'zum SCHLOSSGARTEN',
+      address: null,
+      ...closeBy,
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json();
+    expect(body.code).toBe('duplicate_bar');
+    expect(body.message).toContain('Zum Schlossgarten');
+
+    const communityBars = db
+      .prepare<[], { count: number }>(
+        "SELECT COUNT(*) AS count FROM bars WHERE source = 'community'",
+      )
+      .get();
+    expect(communityBars?.count).toBe(0);
+  });
+
+  it('accepts the same name outside SUGGEST_DUPLICATE_RADIUS_M', async () => {
+    const cookie = await registerUser('suggester');
+
+    const response = await suggestBar(cookie, {
+      name: 'Zum Schlossgarten',
+      address: null,
+      ...NEARBY_NOT_DUPLICATE,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ name: 'Zum Schlossgarten', source: 'community' });
+  });
+
+  it('accepts a different name inside SUGGEST_DUPLICATE_RADIUS_M', async () => {
+    const cookie = await registerUser('suggester');
+    const closeBy = diagonalOffset(SCHLOSS, 10);
+
+    const response = await suggestBar(cookie, {
+      name: 'Irish Pub Karlsruhe',
+      address: null,
+      ...closeBy,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ name: 'Irish Pub Karlsruhe', source: 'community' });
+  });
+
+  it('rejects a position outside the active city', async () => {
+    const cookie = await registerUser('suggester');
+
+    const response = await suggestBar(cookie, {
+      name: 'Somewhere Else',
+      address: null,
+      ...OUTSIDE_CITY,
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe('outside_city');
+
+    const count = db
+      .prepare<[], { count: number }>(
+        "SELECT COUNT(*) AS count FROM bars WHERE source = 'community'",
+      )
+      .get();
+    expect(count?.count).toBe(0);
+  });
+
+  it('enforces the suggest rate limit', async () => {
+    const cookie = await registerUser('suggester');
+    const limit = CONFIG.RATE_LIMITS.suggest.limit;
+
+    for (let i = 0; i < limit; i++) {
+      const response = await suggestBar(cookie, {
+        name: `Suggested Bar ${i}`,
+        address: null,
+        ...offsetMeters(SCHLOSS, i * 200, i * 200),
+      });
+      expect(response.statusCode).toBe(201);
+    }
+
+    const limited = await suggestBar(cookie, {
+      name: 'One Too Many',
+      address: null,
+      ...offsetMeters(SCHLOSS, limit * 200, limit * 200),
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json().code).toBe('rate_limited');
+  });
+});
