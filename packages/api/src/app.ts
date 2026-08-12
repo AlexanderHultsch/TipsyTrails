@@ -20,6 +20,8 @@ import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
 import { fogRoutes, type AcceptedPosition } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
+import { leaderboardRoutes } from './routes/leaderboard.js';
+import { profileRoutes } from './routes/profile.js';
 import { pushRoutes } from './routes/push.js';
 import { resolveSeedDir, staticDataRoutes } from './routes/static-data.js';
 import { tilesRoutes } from './routes/tiles.js';
@@ -142,6 +144,8 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(fogRoutes(lastAccepted));
   app.register(barsRoutes);
   app.register(visitsRoutes(lastAccepted));
+  app.register(leaderboardRoutes);
+  app.register(profileRoutes);
   app.register(pushRoutes(vapid.status === 'enabled' ? vapid.config.publicKey : null));
 
   const tilesPath = join(env.TILES_DIR, CONFIG.TILES_FILENAME);

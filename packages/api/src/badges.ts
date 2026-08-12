@@ -38,6 +38,25 @@ export interface BadgeProgress {
   threshold: number;
 }
 
+// Section 7.8's leaderboard and profile need the same per-user value this
+// module already computes for badges, plus the instant that value was
+// reached — the "earliest achievement" leaderboard tie-break. Kept as one
+// richer return type on the existing value functions below rather than a
+// second query, so a ranked read can never disagree with what the badge job
+// itself scored a user at.
+export interface MetricStanding {
+  value: number;
+  achievedAtS: number;
+}
+
+export interface BadgeSummary {
+  kind: BadgeKind;
+  period: BadgePeriod;
+  periodKey: string;
+  value: number;
+  awardedAt: number;
+}
+
 interface CityRow {
   id: number;
   playable_cells: number;
@@ -57,6 +76,7 @@ function loadActiveCity(db: Database.Database): CityRow | null {
 interface ExplorerRow {
   user_id: number;
   cells: number;
+  achieved_day: string;
 }
 
 // Section 7.7: `explorer` is the percent of playable city area newly
@@ -65,24 +85,37 @@ interface ExplorerRow {
 // packages/shared, and never re-derived here) and divided by
 // `cities.playable_cells`. A user with no rows for any of these days (never
 // moved) is simply absent from the result map, i.e. implicitly 0%.
-function explorerValuesByUser(
+//
+// Exported for Section 7.8's leaderboard (routes/leaderboard.ts) and
+// profile (routes/profile.ts), which read this exact computation rather
+// than re-querying `fog_daily_progress` themselves, so those surfaces can
+// never disagree with a user's badge value. `achieved_day` is the latest of
+// the summed days, which is always a day the user actually progressed on —
+// every `fog_daily_progress` row is written only with `revealed_cells > 0`
+// (routes/fog.ts's `applyReveal`) — i.e. the day this user's period total
+// was reached, Section 7.8's "earliest achievement" tie-break instant.
+export function explorerValuesByUser(
   db: Database.Database,
   cityId: number,
   playableCells: number,
   days: string[],
-): Map<number, number> {
-  const values = new Map<number, number>();
+): Map<number, MetricStanding> {
+  const values = new Map<number, MetricStanding>();
   if (playableCells <= 0 || days.length === 0) {
     return values;
   }
   const placeholders = days.map(() => '?').join(', ');
   const rows = db
     .prepare<unknown[], ExplorerRow>(
-      `SELECT user_id, SUM(revealed_cells) AS cells FROM fog_daily_progress WHERE city_id = ? AND day IN (${placeholders}) GROUP BY user_id`,
+      `SELECT user_id, SUM(revealed_cells) AS cells, MAX(day) AS achieved_day
+       FROM fog_daily_progress WHERE city_id = ? AND day IN (${placeholders}) GROUP BY user_id`,
     )
     .all(cityId, ...days);
   for (const row of rows) {
-    values.set(row.user_id, (row.cells / playableCells) * 100);
+    values.set(row.user_id, {
+      value: (row.cells / playableCells) * 100,
+      achievedAtS: Math.floor(Date.parse(`${row.achieved_day}T00:00:00Z`) / 1000),
+    });
   }
   return values;
 }
@@ -90,6 +123,7 @@ function explorerValuesByUser(
 interface BarflyRow {
   user_id: number;
   mastered: number;
+  achieved_at_s: number;
 }
 
 // Section 7.7: `barfly` counts bars whose *earliest* completed visit falls
@@ -98,15 +132,21 @@ interface BarflyRow {
 // completion across all time (not scoped to the period), and only that
 // earliest instant is tested against the period boundary — a later repeat
 // completion at the same bar never appears here at all.
-function barflyValuesByUser(
+//
+// Exported for the same reason and by the same callers as
+// `explorerValuesByUser` above. `achieved_at_s` is the latest of the
+// contributing `first_completed_at` instants — the completion that pushed
+// this user's in-scope count to its current total, Section 7.8's
+// "earliest achievement" tie-break instant for the bars metric.
+export function barflyValuesByUser(
   db: Database.Database,
   startS: number,
   endS: number,
-): Map<number, number> {
-  const values = new Map<number, number>();
+): Map<number, MetricStanding> {
+  const values = new Map<number, MetricStanding>();
   const rows = db
     .prepare<[number, number], BarflyRow>(
-      `SELECT user_id, COUNT(*) AS mastered FROM (
+      `SELECT user_id, COUNT(*) AS mastered, MAX(first_completed_at) AS achieved_at_s FROM (
          SELECT user_id, bar_id, MIN(completed_at) AS first_completed_at
          FROM visits
          WHERE status = 'completed'
@@ -117,9 +157,18 @@ function barflyValuesByUser(
     )
     .all(startS, endS);
   for (const row of rows) {
-    values.set(row.user_id, row.mastered);
+    values.set(row.user_id, { value: row.mastered, achievedAtS: row.achieved_at_s });
   }
   return values;
+}
+
+// Section 7.8: "All-time bars is the count of distinct mastered bars" — no
+// period filter at all, which is exactly `barflyValuesByUser` with bounds
+// wide enough to include every `completed_at` there will ever be. Kept as
+// its own export rather than a magic `(0, Number.MAX_SAFE_INTEGER)` at each
+// call site.
+export function allTimeBarflyValuesByUser(db: Database.Database): Map<number, MetricStanding> {
+  return barflyValuesByUser(db, 0, Number.MAX_SAFE_INTEGER);
 }
 
 interface InsertedRow {
@@ -138,7 +187,7 @@ function awardCandidates(
   period: BadgePeriod,
   periodKey: string,
   awardedAt: number,
-  values: Map<number, number>,
+  values: Map<number, MetricStanding>,
 ): BadgeAward[] {
   const threshold: number = CONFIG.BADGE_THRESHOLDS[kind][period];
   const insert = db.prepare<[number, string, string, string, number, number], InsertedRow>(
@@ -148,13 +197,13 @@ function awardCandidates(
      RETURNING user_id`,
   );
   const awarded: BadgeAward[] = [];
-  for (const [userId, value] of values) {
-    if (value < threshold) {
+  for (const [userId, standing] of values) {
+    if (standing.value < threshold) {
       continue;
     }
-    const row = insert.get(userId, kind, period, periodKey, value, awardedAt);
+    const row = insert.get(userId, kind, period, periodKey, standing.value, awardedAt);
     if (row) {
-      awarded.push({ userId, kind, value });
+      awarded.push({ userId, kind, value: standing.value });
     }
   }
   return awarded;
@@ -227,14 +276,57 @@ export function currentBadgeProgress(
         city.id,
         city.playable_cells,
         badgePeriodDays(period, periodKey),
-      ).get(userId) ?? 0)
+      ).get(userId)?.value ?? 0)
     : 0;
-  const barflyValue = barflyValuesByUser(db, startS, endS).get(userId) ?? 0;
+  const barflyValue = barflyValuesByUser(db, startS, endS).get(userId)?.value ?? 0;
 
   return [
     { kind: 'explorer', value: explorerValue, threshold: CONFIG.BADGE_THRESHOLDS.explorer[period] },
     { kind: 'barfly', value: barflyValue, threshold: CONFIG.BADGE_THRESHOLDS.barfly[period] },
   ];
+}
+
+interface BadgeQueryRow {
+  user_id: number;
+  kind: string;
+  period: string;
+  period_key: string;
+  value: number;
+  awarded_at: number;
+}
+
+// Section 7.7's badge shelf and inline leaderboard icons: every badge one or
+// more users have ever been awarded, in one query rather than one per row —
+// routes/leaderboard.ts's page of rows and routes/profile.ts's single row
+// both call this instead of querying `badges` themselves.
+export function badgesByUser(
+  db: Database.Database,
+  userIds: number[],
+): Map<number, BadgeSummary[]> {
+  const result = new Map<number, BadgeSummary[]>();
+  if (userIds.length === 0) {
+    return result;
+  }
+  const placeholders = userIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare<unknown[], BadgeQueryRow>(
+      `SELECT user_id, kind, period, period_key, value, awarded_at FROM badges
+       WHERE user_id IN (${placeholders})
+       ORDER BY awarded_at, id`,
+    )
+    .all(...userIds);
+  for (const row of rows) {
+    const list = result.get(row.user_id) ?? [];
+    list.push({
+      kind: row.kind as BadgeKind,
+      period: row.period as BadgePeriod,
+      periodKey: row.period_key,
+      value: row.value,
+      awardedAt: row.awarded_at,
+    });
+    result.set(row.user_id, list);
+  }
+  return result;
 }
 
 function runCatchUpSafely(db: Database.Database, log: FastifyBaseLogger | undefined): void {
