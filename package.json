@@ -9,10 +9,12 @@
   "scripts": {
     "prepare": "pnpm --filter @tipsytrails/shared build",
     "build": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build && pnpm --filter @tipsytrails/web build",
+    "pretypecheck": "pnpm --filter @tipsytrails/shared build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "pretest": "pnpm --filter @tipsytrails/shared build",
     "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
