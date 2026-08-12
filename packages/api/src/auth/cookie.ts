@@ -35,6 +35,10 @@ function sendUnauthenticated(reply: FastifyReply): void {
   reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
 }
 
+function sendForbidden(reply: FastifyReply): void {
+  reply.code(403).send({ code: 'forbidden', message: 'Administrator access required.' });
+}
+
 // Shared by requireAuth and the must-change-password gate: both need to know
 // which user (if any) a request's session cookie belongs to, resolved the
 // same way, so the two can never disagree about who is authenticated.
@@ -61,6 +65,29 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
   const userId = resolveSessionUserId(request);
   if (userId == null) {
     sendUnauthenticated(reply);
+    return;
+  }
+
+  request.userId = userId;
+}
+
+// Phase 7 step 2 (SPEC.md Section 12): every /api/admin/* route sits behind
+// this. Per that section's Definition of Done, a logged-in non-admin gets
+// 403 — the endpoint's existence is not a secret here, unlike Section 9.5's
+// bar rules, only the authority to use it is — while an unauthenticated
+// caller still gets requireAuth's 401.
+export async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const userId = resolveSessionUserId(request);
+  if (userId == null) {
+    sendUnauthenticated(reply);
+    return;
+  }
+
+  const row = request.server.db
+    .prepare<[number], { is_admin: number }>('SELECT is_admin FROM users WHERE id = ?')
+    .get(userId);
+  if (!row || !row.is_admin) {
+    sendForbidden(reply);
     return;
   }
 

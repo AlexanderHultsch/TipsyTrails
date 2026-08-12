@@ -1,9 +1,9 @@
-import { findConflictingBar, NO_DISTRICT, toCell } from '@tipsytrails/shared';
+import { findConflictingBar } from '@tipsytrails/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
 import { createRateLimiter } from '../http/rate-limit.js';
-import { loadActiveCity, toGridParams } from './fog.js';
+import { loadActiveCity, resolveCellAndDistrict, toGridParams } from './fog.js';
 
 // SPEC.md Sections 5.7, 7.4, 9.2, 9.5: `GET /api/bars` and `GET /api/bars/:id`
 // answer only from bars the requesting user has discovered — every query in
@@ -136,7 +136,7 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
         `SELECT ${DISCOVERED_BAR_COLUMNS}
          FROM bar_discoveries
          JOIN bars ON bars.id = bar_discoveries.bar_id
-         WHERE bar_discoveries.user_id = ?
+         WHERE bar_discoveries.user_id = ? AND bars.status = 'active'
          ORDER BY bar_discoveries.discovered_at, bars.id`,
       )
       .all(request.userId);
@@ -162,7 +162,7 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
         `SELECT ${DISCOVERED_BAR_COLUMNS}
          FROM bar_discoveries
          JOIN bars ON bars.id = bar_discoveries.bar_id
-         WHERE bar_discoveries.user_id = ? AND bars.id = ?`,
+         WHERE bar_discoveries.user_id = ? AND bars.id = ? AND bars.status = 'active'`,
       )
       .get(request.userId, barId);
 
@@ -209,21 +209,22 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
       // Same projection `POST /api/samples` uses (routes/fog.ts), not a
       // second copy of it.
       const grid = toGridParams(city);
-      const cellIndex = toCell(lat, lon, grid);
-      if (cellIndex === null) {
+      const cellResult = resolveCellAndDistrict(
+        grid,
+        request.server.grid,
+        request.server.districtIdByGridIndex,
+        lat,
+        lon,
+      );
+      if (cellResult.status === 'outside_city') {
         sendOutsideCity(reply);
         return;
       }
-
-      if (!request.server.grid || !request.server.districtIdByGridIndex) {
+      if (cellResult.status === 'grid_unavailable') {
         sendGridUnavailable(reply);
         return;
       }
-      const districtGrid = request.server.grid;
-      const districtIdByGridIndex = request.server.districtIdByGridIndex;
-      const districtIndex = districtGrid[cellIndex];
-      const districtId =
-        districtIndex !== NO_DISTRICT ? (districtIdByGridIndex.get(districtIndex) ?? null) : null;
+      const { cellIndex, districtId } = cellResult;
 
       const activeBars = db
         .prepare<[number], ActiveBarForDuplicateCheck>(

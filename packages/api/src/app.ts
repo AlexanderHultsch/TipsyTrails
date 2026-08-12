@@ -15,6 +15,7 @@ import { applySecurityHeaders } from './http/security-headers.js';
 import { resolveVapidConfig } from './push/config.js';
 import { createWebPushSender, type PushSender } from './push/sender.js';
 import { accountRoutes } from './routes/account.js';
+import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
@@ -140,6 +141,7 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(healthRoutes);
   app.register(authRoutes(env));
   app.register(accountRoutes);
+  app.register(adminRoutes);
   app.register(cityRoutes);
   app.register(fogRoutes(lastAccepted));
   app.register(barsRoutes);

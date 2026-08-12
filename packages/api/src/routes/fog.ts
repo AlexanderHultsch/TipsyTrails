@@ -51,6 +51,19 @@ export function loadActiveCity(db: Database.Database): CityRow | null {
   );
 }
 
+// Exported so routes/admin.ts's move-a-bar handler (SPEC.md Section 9.3) can
+// recompute against the city a bar actually belongs to, not assumed to be
+// the active one — the same CityRow shape loadActiveCity returns.
+export function loadCityById(db: Database.Database, cityId: number): CityRow | null {
+  return (
+    db
+      .prepare<[number], CityRow>(
+        `SELECT id, origin_lat, origin_lon, grid_width, grid_height, cell_size_m, playable_cells FROM cities WHERE id = ?`,
+      )
+      .get(cityId) ?? null
+  );
+}
+
 export function toGridParams(city: CityRow): GridParams {
   return {
     origin_lat: city.origin_lat,
@@ -59,6 +72,37 @@ export function toGridParams(city: CityRow): GridParams {
     grid_height: city.grid_height,
     cell_size_m: city.cell_size_m,
   };
+}
+
+// Exported so routes/bars.ts's suggest handler and routes/admin.ts's
+// create/move-bar handlers share one computation (Phase 7 step 2 task
+// brief: "reuse the cell/district computation the suggest handler already
+// does rather than writing a third copy"). Order matches the code this was
+// lifted from: outside-city is checked before grid availability, since a
+// position outside the grid never needs the district lookup at all.
+export type CellDistrictResult =
+  | { status: 'ok'; cellIndex: number; districtId: number | null }
+  | { status: 'outside_city' }
+  | { status: 'grid_unavailable' };
+
+export function resolveCellAndDistrict(
+  grid: GridParams,
+  districtGrid: Uint16Array | null,
+  districtIdByGridIndex: Map<number, number> | null,
+  lat: number,
+  lon: number,
+): CellDistrictResult {
+  const cellIndex = toCell(lat, lon, grid);
+  if (cellIndex === null) {
+    return { status: 'outside_city' };
+  }
+  if (!districtGrid || !districtIdByGridIndex) {
+    return { status: 'grid_unavailable' };
+  }
+  const districtIndex = districtGrid[cellIndex];
+  const districtId =
+    districtIndex !== NO_DISTRICT ? (districtIdByGridIndex.get(districtIndex) ?? null) : null;
+  return { status: 'ok', cellIndex, districtId };
 }
 
 function sendUnauthenticated(reply: FastifyReply): void {
