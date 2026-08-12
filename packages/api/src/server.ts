@@ -1,4 +1,5 @@
 import { buildApp } from './app.js';
+import { startBadgeScheduler } from './badges.js';
 import { loadEnv } from './env.js';
 import { startMaintenanceScheduler } from './maintenance.js';
 import { initialiseDatabase } from './startup.js';
@@ -9,9 +10,11 @@ const app = buildApp(env, db);
 // Started here, not in `buildApp`: tests build apps constantly (`app.test.ts`
 // and friends) and must not each spin up a background timer.
 const maintenance = startMaintenanceScheduler(app);
+const badges = startBadgeScheduler(app);
 
 async function shutdown(): Promise<void> {
   maintenance.stop();
+  badges.stop();
   await app.close();
   db.close();
   process.exit(0);

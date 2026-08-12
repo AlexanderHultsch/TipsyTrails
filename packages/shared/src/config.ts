@@ -31,6 +31,10 @@ export const CONFIG = {
 
   LEADERBOARD_PAGE_SIZE: 50,
   MAINTENANCE_INTERVAL_MS: 60 * 1000, // see 7.9
+  // Badge evaluation catch-up interval, see 7.9. Periods only close at 04:00
+  // Europe/Berlin, so checking hourly still lands "shortly after" close while
+  // running the aggregation queries 60x less often than MAINTENANCE_INTERVAL_MS.
+  BADGE_EVAL_INTERVAL_MS: 60 * 60 * 1000,
 
   // Section 5.3: username length bounds are spec-defined; password minimum is
   // not stated by SPEC.md and was chosen by the auth route implementation.

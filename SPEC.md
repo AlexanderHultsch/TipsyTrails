@@ -473,6 +473,7 @@ export const CONFIG = {
 
   LEADERBOARD_PAGE_SIZE: 50,
   MAINTENANCE_INTERVAL_MS: 60 * 1000,  // see 7.9
+  BADGE_EVAL_INTERVAL_MS: 60 * 60 * 1000,  // see 7.9
 
   RATE_LIMITS: {
     auth:            { limit: 10, windowMs: 60 * 1000,          by: 'ip' },
