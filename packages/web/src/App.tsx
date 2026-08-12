@@ -14,7 +14,9 @@ import { CityOverview } from './screens/CityOverview.js';
 import { DistrictOverview } from './screens/DistrictOverview.js';
 import { HowMasteringWorks } from './screens/HowMasteringWorks.js';
 import { Landing } from './screens/Landing.js';
+import { Leaderboard } from './screens/Leaderboard.js';
 import { Login } from './screens/Login.js';
+import { Profile } from './screens/Profile.js';
 import { Register } from './screens/Register.js';
 import { Reset } from './screens/Reset.js';
 import { Settings } from './screens/Settings.js';
@@ -126,6 +128,22 @@ export function App() {
           element={
             <RequireAuth>
               <HowMasteringWorks />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/leaderboard"
+          element={
+            <RequireAuth>
+              <Leaderboard />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/profile/:handle"
+          element={
+            <RequireAuth>
+              <Profile />
             </RequireAuth>
           }
         />

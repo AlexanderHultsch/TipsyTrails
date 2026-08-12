@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getCityBoundary, getNeighbourBoundaries } from '../api/client.js';
+import { ApiError, getCityBoundary, getNeighbourBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
 import { computeBoundingBox, createProjector } from '../geo/project.js';
-import { PLACEHOLDER_PROGRESS_PERCENT } from './placeholder-progress.js';
 
 const VIEWPORT_WIDTH = 320;
 const VIEWPORT_HEIGHT = 320;
@@ -19,6 +18,7 @@ const VIEWPORT_PADDING = 12;
 export function CityOverview() {
   const [city, setCity] = useState<BoundaryFeatureCollection | null>(null);
   const [neighbours, setNeighbours] = useState<BoundaryFeatureCollection | null>(null);
+  const [cityPercent, setCityPercent] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,11 +26,12 @@ export function CityOverview() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    Promise.all([getCityBoundary(), getNeighbourBoundaries()])
-      .then(([cityData, neighboursData]) => {
+    Promise.all([getCityBoundary(), getNeighbourBoundaries(), getProgress()])
+      .then(([cityData, neighboursData, progress]) => {
         if (cancelled) return;
         setCity(cityData);
         setNeighbours(neighboursData);
+        setCityPercent(progress.city.percent);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -98,9 +99,7 @@ export function CityOverview() {
           </p>
         )}
         {map}
-        {city && (
-          <p className="city-overview__progress">{PLACEHOLDER_PROGRESS_PERCENT}% explored</p>
-        )}
+        {city && <p className="city-overview__progress">{cityPercent.toFixed(1)}% explored</p>}
       </div>
       <div className="screen__actions">
         <Link className="button button--primary" to="/districts">

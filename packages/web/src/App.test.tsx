@@ -452,7 +452,7 @@ describe('App', () => {
     );
   });
 
-  it('opens the burger menu with exactly the Phase 1, 2 and 5 destinations, and closes it on Escape', async () => {
+  it('opens the burger menu with exactly the Phase 1, 2, 5 and 6 destinations, and closes it on Escape', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(200, {
@@ -482,6 +482,8 @@ describe('App', () => {
       'Map',
       'City',
       'Districts',
+      'Leaderboard',
+      'Profile',
       'How mastering works',
       'Settings',
       'Log out',
@@ -811,6 +813,12 @@ describe('App', () => {
       if (url === `/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`) {
         return jsonResponse(200, neighboursFixture);
       }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 125, playableCells: 1000, percent: 12.5 },
+          districts: [],
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -836,6 +844,7 @@ describe('App', () => {
       expect(d.match(/M/g)).toHaveLength(ringCount(neighboursFixture.features[index]));
     });
 
+    expect(container.querySelector('.city-overview__progress')?.textContent).toBe('12.5% explored');
     expect(container.textContent).toContain('View districts');
   });
 
@@ -850,6 +859,12 @@ describe('App', () => {
       if (url === `/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`) {
         return jsonResponse(200, neighboursFixture);
       }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          districts: [],
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -862,6 +877,11 @@ describe('App', () => {
       'Could not reach the server. Check your connection and try again.',
     );
     expect(container.querySelector('.city-overview__map')).toBeNull();
+    // The progress figure must not silently fall back to a bare 0% here -
+    // `city` never gets set on this failure path, so the paragraph that
+    // would show it must not render at all, distinguishing "the value never
+    // arrived" from "the value arrived and reads 0%" (Section 7.6).
+    expect(container.querySelector('.city-overview__progress')).toBeNull();
   });
 
   it('renders all 27 districts as a list with a name and a percentage each', async () => {
@@ -871,6 +891,18 @@ describe('App', () => {
       }
       if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
         return jsonResponse(200, districtsFixture);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          districts: districtsFixture.features.map((feature, index) => ({
+            id: index + 1,
+            name: feature.properties.name,
+            revealedCells: index,
+            playableCells: 100,
+            percent: index,
+          })),
+        });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -887,7 +919,7 @@ describe('App', () => {
     items.forEach((item, index) => {
       const name = districtsFixture.features[index].properties.name;
       expect(item.textContent).toContain(name);
-      expect(item.querySelector('.district-list__percent')?.textContent).toMatch(/^\d+%$/);
+      expect(item.querySelector('.district-list__percent')?.textContent).toBe(`${index}.0%`);
     });
   });
 
@@ -898,6 +930,12 @@ describe('App', () => {
       }
       if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
         return jsonResponse(200, districtsFixture);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          districts: [],
+        });
       }
       if (url.startsWith('/tiles/')) {
         return jsonResponse(206, {});

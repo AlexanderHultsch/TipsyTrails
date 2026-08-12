@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getDistrictBoundaries } from '../api/client.js';
+import { ApiError, getDistrictBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeature, BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { centerOfGeometry, pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
 import { computeBoundingBox, createProjector } from '../geo/project.js';
-import { PLACEHOLDER_PROGRESS_PERCENT } from './placeholder-progress.js';
 
 const VIEWPORT_WIDTH = 320;
 const VIEWPORT_HEIGHT = 320;
@@ -32,6 +31,7 @@ function mapLinkFor(feature: BoundaryFeature): string {
 // than duplicating the list's tap targets at a size that would violate 8.2.
 export function DistrictOverview() {
   const [districts, setDistricts] = useState<BoundaryFeatureCollection | null>(null);
+  const [percentByName, setPercentByName] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,9 +39,11 @@ export function DistrictOverview() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getDistrictBoundaries()
-      .then((data) => {
-        if (!cancelled) setDistricts(data);
+    Promise.all([getDistrictBoundaries(), getProgress()])
+      .then(([data, progress]) => {
+        if (cancelled) return;
+        setDistricts(data);
+        setPercentByName(new Map(progress.districts.map((d) => [d.name, d.percent])));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -104,7 +106,9 @@ export function DistrictOverview() {
               <li key={feature.properties.osm_id}>
                 <Link className="district-list__item" to={mapLinkFor(feature)}>
                   <span className="district-list__name">{feature.properties.name}</span>
-                  <span className="district-list__percent">{PLACEHOLDER_PROGRESS_PERCENT}%</span>
+                  <span className="district-list__percent">
+                    {(percentByName.get(feature.properties.name) ?? 0).toFixed(1)}%
+                  </span>
                 </Link>
               </li>
             ))}

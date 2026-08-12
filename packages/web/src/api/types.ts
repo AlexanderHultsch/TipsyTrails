@@ -1,3 +1,6 @@
+import { CONFIG } from '@tipsytrails/shared';
+import type { BadgePeriod } from '@tipsytrails/shared';
+
 export interface User {
   id: number;
   username: string;
@@ -99,4 +102,87 @@ export interface PendingVisitsResponse {
 // this exists outside SPEC.md Section 9.2's original endpoint table.
 export interface VapidPublicKeyResponse {
   publicKey: string | null;
+}
+
+// GET /api/progress response shape (packages/api/src/routes/fog.ts). Section
+// 7.6's area-explored figures, city-wide and per district - the same
+// revealed/playable pair the fog mask itself is scored against, already
+// turned into a percent server-side so this is never recomputed here.
+export interface CityProgress {
+  revealedCells: number;
+  playableCells: number;
+  percent: number;
+}
+
+export interface DistrictProgress {
+  id: number;
+  name: string;
+  revealedCells: number;
+  playableCells: number;
+  percent: number;
+}
+
+export interface ProgressResponse {
+  city: CityProgress;
+  districts: DistrictProgress[];
+}
+
+// SPEC.md Section 7.7: two badge kinds, derived from CONFIG.BADGE_THRESHOLDS
+// the same way packages/api/src/badges.ts's own BadgeKind is - so a third
+// kind added to config.ts is a type error here rather than a silent gap.
+export type BadgeKind = keyof typeof CONFIG.BADGE_THRESHOLDS;
+
+// A badge a user has actually been awarded (packages/api/src/badges.ts's
+// BadgeSummary) - shared by GET /api/leaderboard's per-entry `badges` and
+// GET /api/profile/:handle's `badges`.
+export interface BadgeSummary {
+  kind: BadgeKind;
+  period: BadgePeriod;
+  periodKey: string;
+  value: number;
+  awardedAt: number;
+}
+
+// Live "on track" progress toward one badge's threshold for the current
+// period (packages/api/src/badges.ts's BadgeProgress, Section 7.7's last
+// paragraph) - value and threshold both come from the server, never
+// recomputed client-side.
+export interface BadgeProgress {
+  kind: BadgeKind;
+  value: number;
+  threshold: number;
+}
+
+// GET /api/leaderboard response shape (packages/api/src/routes/leaderboard.ts).
+export interface LeaderboardEntry {
+  rank: number;
+  userId: number;
+  displayName: string;
+  isAnonymous: boolean;
+  avatarSeed: string;
+  value: number;
+  badges: BadgeSummary[];
+}
+
+export interface LeaderboardResponse {
+  metric: 'area' | 'bars';
+  period: 'all' | 'week' | 'month';
+  page: number;
+  pageSize: number;
+  totalUsers: number;
+  totalPages: number;
+  entries: LeaderboardEntry[];
+}
+
+// GET /api/profile/:handle response shape (packages/api/src/routes/profile.ts).
+export interface ProfileResponse {
+  userId: number;
+  handle: string;
+  displayName: string;
+  isAnonymous: boolean;
+  avatarSeed: string;
+  areaPercent: number;
+  barsMastered: number;
+  badges: BadgeSummary[];
+  badgeProgress: Record<BadgePeriod, BadgeProgress[]>;
 }

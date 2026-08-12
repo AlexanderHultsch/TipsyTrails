@@ -6,7 +6,10 @@ import type {
   CityMeta,
   FogMaskResponse,
   FogProgress,
+  LeaderboardResponse,
   PendingVisitsResponse,
+  ProfileResponse,
+  ProgressResponse,
   Sample,
   SamplesResponse,
   User,
@@ -228,6 +231,37 @@ export function checkIn(input: { barId: number }): Promise<VisitSummary> {
 // visits, for the persistent banner (Section 7.5).
 export function getPendingVisits(): Promise<PendingVisitsResponse> {
   return request<PendingVisitsResponse>('/api/visits/pending');
+}
+
+// GET /api/progress (Section 9.2/7.6): city-wide and per-district area
+// explored, the real figures screens/CityOverview.tsx and
+// screens/DistrictOverview.tsx show in place of Phase 2's placeholder.
+export function getProgress(): Promise<ProgressResponse> {
+  return request<ProgressResponse>('/api/progress');
+}
+
+// GET /api/leaderboard (Section 9.2/7.8): ranked standings for one
+// metric/period/page. Query params are always sent explicitly - the server
+// defaults them too (routes/leaderboard.ts's zod schema), but the screen
+// always has a concrete metric/period/page in state by the time it fetches.
+export function getLeaderboard(input: {
+  metric: 'area' | 'bars';
+  period: 'all' | 'week' | 'month';
+  page: number;
+}): Promise<LeaderboardResponse> {
+  const params = new URLSearchParams({
+    metric: input.metric,
+    period: input.period,
+    page: String(input.page),
+  });
+  return request<LeaderboardResponse>(`/api/leaderboard?${params.toString()}`);
+}
+
+// GET /api/profile/:handle (Section 9.2/9.5): accepts a username or a
+// `player-{id}` handle - this function is agnostic between the two, exactly
+// like the route itself, and returns the identical 404 body either way.
+export function getProfile(handle: string): Promise<ProfileResponse> {
+  return request<ProfileResponse>(`/api/profile/${encodeURIComponent(handle)}`);
 }
 
 // GET /api/push/vapid-public-key (Section 9.2/Phase 5 step 5): the key
