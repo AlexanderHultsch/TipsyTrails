@@ -1,6 +1,9 @@
 import { ACTIVE_CITY_SLUG } from './city.js';
 import type { BoundaryFeatureCollection } from './geo-types.js';
 import type {
+  AdminBar,
+  AdminBarsResponse,
+  AdminUsersResponse,
   Bar,
   BarsResponse,
   CityMeta,
@@ -217,6 +220,24 @@ export function getBar(id: string): Promise<Bar> {
   return request<Bar>(`/api/bars/${encodeURIComponent(id)}`);
 }
 
+// POST /api/bars/suggest (Section 11.3/9.2): the map-picked position, name
+// and address a player submits. Rejects with `code: 'duplicate_bar'` and a
+// message naming the conflicting bar (packages/api/src/routes/bars.ts) -
+// the caller renders err.message exactly like every other ApiError here
+// rather than special-casing the code, so the server's own wording reaches
+// the user unchanged.
+export function suggestBar(input: {
+  name: string;
+  address: string | null;
+  lat: number;
+  lon: number;
+}): Promise<Bar> {
+  return request<Bar>('/api/bars/suggest', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 // POST /api/visits (Section 9.2/7.5 step 2): creates the pending visit, or
 // returns the existing one if this bar already has one open (Section 5.7) -
 // the caller renders whatever VisitSummary comes back either way.
@@ -305,6 +326,58 @@ export function deleteAccount(input: { password: string }): Promise<{ ok: true }
     method: 'DELETE',
     body: JSON.stringify(input),
   });
+}
+
+// GET /api/admin/bars (Section 9.3): every bar including hidden ones,
+// optionally filtered by source - mirrors the server's own optional query
+// param rather than always sending it.
+export function getAdminBars(input?: { source?: string }): Promise<AdminBarsResponse> {
+  const query = input?.source ? `?source=${encodeURIComponent(input.source)}` : '';
+  return request<AdminBarsResponse>(`/api/admin/bars${query}`);
+}
+
+// POST /api/admin/bars (Section 9.3): create a bar directly, source='admin'
+// server-side.
+export function createAdminBar(input: {
+  name: string;
+  address: string | null;
+  lat: number;
+  lon: number;
+}): Promise<AdminBar> {
+  return request<AdminBar>('/api/admin/bars', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+// PATCH /api/admin/bars/:id (Section 9.3): edit name, address, position, or
+// status - moving a bar recomputes cell_index and district_id server-side.
+export function updateAdminBar(
+  id: number,
+  input: Partial<{
+    name: string;
+    address: string | null;
+    lat: number;
+    lon: number;
+    status: 'active' | 'hidden';
+  }>,
+): Promise<AdminBar> {
+  return request<AdminBar>(`/api/admin/bars/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+// DELETE /api/admin/bars/:id (Section 9.3): cascades discoveries and visits
+// server-side - irreversible, so every caller of this function must have
+// already confirmed with the user naming the bar (Phase 7 task brief).
+export function deleteAdminBar(id: number): Promise<{ ok: true }> {
+  return request<{ ok: true }>(`/api/admin/bars/${id}`, { method: 'DELETE' });
+}
+
+// GET /api/admin/users (Section 9.3): the user list with stats.
+export function getAdminUsers(): Promise<AdminUsersResponse> {
+  return request<AdminUsersResponse>('/api/admin/users');
 }
 
 // Served by packages/api/src/routes/static-data.ts at

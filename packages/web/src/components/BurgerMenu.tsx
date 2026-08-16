@@ -74,6 +74,11 @@ export function BurgerMenu() {
             </li>
           )}
           <li>
+            <Link to="/suggest" onClick={() => setOpen(false)}>
+              Suggest a bar
+            </Link>
+          </li>
+          <li>
             <Link to="/how-it-works" onClick={() => setOpen(false)}>
               How mastering works
             </Link>
@@ -83,6 +88,13 @@ export function BurgerMenu() {
               Settings
             </Link>
           </li>
+          {user?.isAdmin && (
+            <li>
+              <Link to="/admin" onClick={() => setOpen(false)}>
+                Admin
+              </Link>
+            </li>
+          )}
           <li>
             <button type="button" onClick={handleLogoutClick}>
               Log out

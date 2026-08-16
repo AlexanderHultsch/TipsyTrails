@@ -20,6 +20,18 @@ const BAR_MARKER_SVG =
   '<path d="M4 4h16a1 1 0 0 1 .8 1.6l-6.8 8.7v4.7h3a1 1 0 0 1 0 2H7a1 1 0 0 1 0-2h3v-4.7L3.2 5.6A1 1 0 0 1 4 4z"/>' +
   '</svg>';
 
+// Section 11.3, a Definition-of-Done item: community bars carry a visible
+// distinguishing marker. A small solid dot in the corner - a shape
+// difference, not a colour one (Section 8.1's rule that the accent colour
+// is never the only carrier of meaning applies just as much to "no colour
+// at all" as it does to the accent itself) - paired with text in the
+// button's own aria-label below, so the distinction survives for anyone who
+// cannot see the shape either.
+const COMMUNITY_MARK_SVG =
+  '<svg class="bar-marker__community-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+  '<circle cx="19" cy="5" r="4"/>' +
+  '</svg>';
+
 export interface BarMarkersOptions {
   map: MaplibreMap;
   onSelect: (bar: Bar) => void;
@@ -70,11 +82,26 @@ export class BarMarkers {
   }
 
   private createElement(bar: Bar): HTMLButtonElement {
+    const isCommunity = bar.source === 'community';
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'bar-marker';
+    button.className = isCommunity ? 'bar-marker bar-marker--community' : 'bar-marker';
+    // aria-label stays exactly the bar's name for every source, unchanged
+    // from before this marker existed - the community distinction is
+    // carried as a description, not folded into the name (aria-describedby
+    // below), so it reads as supplementary information to assistive tech
+    // rather than part of what the bar is called.
     button.setAttribute('aria-label', bar.name);
-    button.innerHTML = BAR_MARKER_SVG;
+    button.innerHTML = isCommunity ? BAR_MARKER_SVG + COMMUNITY_MARK_SVG : BAR_MARKER_SVG;
+    if (isCommunity) {
+      const descriptionId = `bar-marker-community-desc-${bar.id}`;
+      const description = document.createElement('span');
+      description.id = descriptionId;
+      description.className = 'visually-hidden';
+      description.textContent = 'Added by the community';
+      button.appendChild(description);
+      button.setAttribute('aria-describedby', descriptionId);
+    }
     button.addEventListener('click', () => {
       const entry = this.markers.get(bar.id);
       if (entry) {

@@ -4,6 +4,7 @@ import { CurrentUserProvider } from './auth/CurrentUserContext.js';
 import {
   GuestOnly,
   RedirectIfMustChangePassword,
+  RequireAdmin,
   RequireAuth,
   RequireAuthOnly,
 } from './auth/route-guards.js';
@@ -27,6 +28,20 @@ import { Settings } from './screens/Settings.js';
 // when a map route is actually visited.
 const MapScreen = lazy(() =>
   import('./screens/Map.js').then((module) => ({ default: module.MapScreen })),
+);
+
+// SuggestBar's map picker (map/MapPicker.tsx) pulls in the same MapLibre
+// dependency as MapScreen above, for the same reason: it must not enter the
+// shell chunk either.
+const SuggestBar = lazy(() =>
+  import('./screens/SuggestBar.js').then((module) => ({ default: module.SuggestBar })),
+);
+
+// Phase 7 task brief: the admin area is not on the critical path for a
+// normal player, so it is code-split the same way the map routes are, kept
+// out of the shell chunk even though it does not itself depend on MapLibre.
+const Admin = lazy(() =>
+  import('./screens/Admin.js').then((module) => ({ default: module.Admin })),
 );
 
 export function App() {
@@ -121,6 +136,26 @@ export function App() {
             <RequireAuth>
               <BarDetail />
             </RequireAuth>
+          }
+        />
+        <Route
+          path="/suggest"
+          element={
+            <RequireAuth>
+              <Suspense fallback={null}>
+                <SuggestBar />
+              </Suspense>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RequireAdmin>
+              <Suspense fallback={null}>
+                <Admin />
+              </Suspense>
+            </RequireAdmin>
           }
         />
         <Route

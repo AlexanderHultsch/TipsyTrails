@@ -174,6 +174,51 @@ export interface LeaderboardResponse {
   entries: LeaderboardEntry[];
 }
 
+// GET /api/admin/bars, POST /api/admin/bars, PATCH /api/admin/bars/:id
+// response shape (packages/api/src/routes/admin.ts's AdminBarSummary,
+// Section 9.3) - includes hidden bars and the fields regular bar summaries
+// (Bar, above) don't carry: cityId, source, submittedBy, status, createdAt.
+export interface AdminBar {
+  id: number;
+  cityId: number;
+  districtId: number | null;
+  name: string;
+  address: string | null;
+  lat: number;
+  lon: number;
+  source: string;
+  submittedBy: number | null;
+  status: string;
+  createdAt: number;
+}
+
+export interface AdminBarsResponse {
+  bars: AdminBar[];
+}
+
+// GET /api/admin/users response shape (packages/api/src/routes/admin.ts's
+// AdminUserSummary, Section 9.3): "user list with stats" - the real
+// username, never the anonymous handle (Section 7.8's anonymity is a
+// display choice for other players, not a shield from the admin who
+// already moderates their submissions).
+export interface AdminUser {
+  id: number;
+  username: string;
+  isAdmin: boolean;
+  isAnonymous: boolean;
+  mustChangePassword: boolean;
+  createdAt: number;
+  lastSeenAt: number | null;
+  areaRevealedCells: number;
+  areaPercent: number;
+  barsMastered: number;
+  badgeCount: number;
+}
+
+export interface AdminUsersResponse {
+  users: AdminUser[];
+}
+
 // GET /api/profile/:handle response shape (packages/api/src/routes/profile.ts).
 export interface ProfileResponse {
   userId: number;

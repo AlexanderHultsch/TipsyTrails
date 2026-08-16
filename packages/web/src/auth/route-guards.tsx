@@ -32,6 +32,30 @@ export function RequireAuthOnly({ children }: { children: ReactElement }): React
   return children;
 }
 
+// Signed-in, not forced through a password change, and is_admin. Used for
+// /admin. Section 12 Phase 7 DoD: "the admin section is visible in the
+// burger menu only for admins" - this is that same gate applied to the
+// route itself, and it is cosmetic only. The real boundary is
+// requireAdmin (packages/api/src/auth/cookie.ts), which every
+// /api/admin/* route sits behind and which answers 403 regardless of what
+// this guard does.
+export function RequireAdmin({ children }: { children: ReactElement }): ReactElement | null {
+  const { user, loading } = useCurrentUser();
+  if (loading) {
+    return null;
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  if (user.mustChangePassword) {
+    return <Navigate to="/change-password" replace />;
+  }
+  if (!user.isAdmin) {
+    return <Navigate to="/map" replace />;
+  }
+  return children;
+}
+
 // Signed-out only. Used for /login and /register.
 export function GuestOnly({ children }: { children: ReactElement }): ReactElement | null {
   const { user, loading } = useCurrentUser();
