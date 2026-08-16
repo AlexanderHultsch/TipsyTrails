@@ -4,6 +4,7 @@ import { Protocol } from 'pmtiles';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { CheckInPanel } from '../components/CheckInPanel.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
@@ -65,8 +66,13 @@ export function MapScreen() {
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const { user } = useCurrentUser();
   const trackingState = useSampleTracking();
-  useFogLayer(mapInstance, trackingState.revealVersion);
+  // Phase 8 task brief, part B (reviewer finding): the fog cache is keyed
+  // per user (map/fog/fog-cache.ts) - this screen is RequireAuth-guarded,
+  // so `user` is already resolved by the time it mounts, but the `null`
+  // fallback keeps useFogLayer's own contract honest for the type.
+  useFogLayer(mapInstance, trackingState.revealVersion, user?.id ?? null);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
   useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));

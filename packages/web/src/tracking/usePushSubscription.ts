@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, getVapidPublicKey, subscribePush, unsubscribePush } from '../api/client.js';
 import { toSubscriptionPayload, urlBase64ToUint8Array } from './pushSubscription.js';
+import { SERVICE_WORKER_URL } from '../sw/register.js';
 
 // SPEC.md Section 7.5's 21-minute push reminder, client side (task Section
-// D). The service worker itself is public/push-sw.js, a static file - it
-// only needs to display a notification, nothing dynamic, so there is
-// nothing to generate or bundle for it.
-const SERVICE_WORKER_URL = '/push-sw.js';
+// D). The service worker itself is public/sw.js, a static file - Phase 8's
+// task brief merged it with the offline shell worker (one scope, one
+// service worker; see that file's own comment), so the URL now lives in
+// sw/register.ts, the one place main.tsx also registers it from.
 
 export type PushPermission = NotificationPermission | 'unsupported';
 

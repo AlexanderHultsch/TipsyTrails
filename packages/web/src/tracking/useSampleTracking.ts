@@ -59,6 +59,20 @@ export interface SampleTrackingState {
 // and queues samples across offline stretches rather than dropping them
 // (Section 12, Phase 8's "never fail silently" habit, applied early).
 export function useSampleTracking(): SampleTrackingState {
+  // In-memory only, deliberately - this is what SPEC.md Section 12's
+  // "queued samples survive going offline and are posted on reconnect"
+  // actually covers (Phase 8 task brief, part C): a stretch offline while
+  // this component stays mounted, ended by the browser's 'online' event
+  // (handleOnline below). It does not survive the tab being closed or the
+  // page reloaded - there is no localStorage/IndexedDB backing here, so a
+  // reload starts this ref, and the queue, empty again. Persisting the
+  // queue itself was judged out of scope for the offline *shell* (this
+  // ref's own samples are the input to POST /api/samples, not the derived,
+  // storable state Section 10.2 scopes client-side persistence to - see
+  // map/fog/fog-cache.ts for what is persisted instead). App.test.tsx's
+  // "queues samples while offline ... flushes ... on reconnect" test proves
+  // the narrower claim; there is no test claiming reload-survival, and this
+  // comment is that decision on record.
   const queueRef = useRef<Sample[]>([]);
   const watchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);

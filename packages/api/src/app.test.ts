@@ -30,6 +30,7 @@ const testEnv: Env = {
 
 const indexHtml = '<!doctype html><html><body>Tipsy Trails SPA shell</body></html>';
 const assetJs = 'console.log("tipsy-trails asset");';
+const manifestJson = '{"name":"Tipsy Trails"}';
 
 let dbPath: string;
 let db: Database.Database;
@@ -85,6 +86,7 @@ describe('SPA static serving', () => {
     mkdirSync(join(webRoot, 'assets'), { recursive: true });
     writeFileSync(join(webRoot, 'index.html'), indexHtml);
     writeFileSync(join(webRoot, 'assets', 'app-abc123.js'), assetJs);
+    writeFileSync(join(webRoot, 'manifest.json'), manifestJson);
   });
 
   afterEach(() => {
@@ -106,6 +108,15 @@ describe('SPA static serving', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe(indexHtml);
+    expect(response.headers['cache-control']).toBe('public, max-age=0, must-revalidate');
+  });
+
+  it('serves the manifest with the same revalidation cache header as index.html (SPEC.md Section 4.1)', async () => {
+    const app = buildApp({ ...testEnv, WEB_ROOT: webRoot }, db);
+    const response = await app.inject({ method: 'GET', url: '/manifest.json' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe(manifestJson);
     expect(response.headers['cache-control']).toBe('public, max-age=0, must-revalidate');
   });
 

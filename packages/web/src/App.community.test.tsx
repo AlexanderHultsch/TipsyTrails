@@ -185,6 +185,11 @@ beforeEach(() => {
   mapInstances.length = 0;
   addProtocolMock.mockClear();
   removeProtocolMock.mockClear();
+  // Phase 8: map/fog/fog-cache.ts writes to localStorage on a successful
+  // fog fetch - cleared here for the same cross-test-leakage reason
+  // App.checkin.test.tsx and App.test.tsx clear it (see the latter's own
+  // comment).
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -194,6 +199,7 @@ afterEach(() => {
   container.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe('suggest a bar', () => {

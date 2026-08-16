@@ -264,6 +264,15 @@ beforeEach(() => {
   mapInstances.length = 0;
   addProtocolMock.mockClear();
   removeProtocolMock.mockClear();
+  // Phase 8: map/fog/fog-cache.ts now writes a fog snapshot to localStorage
+  // on every successful GET /api/city + GET /api/fog pair. Without this,
+  // the one test below that stubs both (the fog mask/canvas-fallback test)
+  // would leave a cached mask that every later /map test in this file -
+  // most of which never stub those two routes at all - would pick up
+  // through useFogLayer's own offline fallback, rendering fog they never
+  // asked for. Same clearing App.checkin.test.tsx already does for the
+  // mastering-explainer flag, for the same cross-test-leakage reason.
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -276,6 +285,7 @@ afterEach(() => {
   removeGeolocationStub();
   removeWakeLockStub();
   setOnline(true);
+  window.localStorage.clear();
 });
 
 describe('App', () => {
