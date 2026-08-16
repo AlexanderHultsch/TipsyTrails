@@ -462,7 +462,7 @@ describe('App', () => {
     );
   });
 
-  it('opens the burger menu with exactly the Phase 1, 2, 5, 6 and 7 destinations, and closes it on Escape', async () => {
+  it('opens the burger menu with exactly the Phase 1, 2, 5, 6, 7 and 8 destinations, and closes it on Escape', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(200, {
@@ -497,6 +497,7 @@ describe('App', () => {
       'Suggest a bar',
       'How mastering works',
       'Settings',
+      'Privacy',
       'Log out',
     ]);
 

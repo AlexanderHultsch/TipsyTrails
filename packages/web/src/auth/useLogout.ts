@@ -11,7 +11,12 @@ export function useLogout(): () => Promise<void> {
 
   return async function handleLogout() {
     try {
-      await logout();
+      // Phase 8 task brief, part B: whether this succeeds or fails (e.g. a
+      // network error), the `finally` block below still clears the local
+      // user and lets the route guards redirect to /login - a caught
+      // failure here would have nothing further to tell the player, who
+      // ends up signed out locally either way.
+      await logout().catch(() => {});
     } finally {
       // Phase 8 task brief, part B (reviewer finding): keying the fog
       // cache per user (map/fog/fog-cache.ts) stops a different account

@@ -6,8 +6,10 @@ import { useLogout } from '../auth/useLogout.js';
 // Single burger menu, top right, on every authenticated screen (Section
 // 8.4). Phase 2 adds Map, City and Districts; Phase 5 adds "How mastering
 // works" (Section 7.5: reachable from here regardless of the auto-shown
-// explainer); Phase 6 adds Leaderboard and Profile - the rest arrive with
-// their own screens in later phases.
+// explainer); Phase 6 adds Leaderboard and Profile; Phase 8 task brief part
+// A adds Privacy, reachable from here even though this menu itself only
+// ever renders on authenticated screens - screens/Register.tsx is the other
+// way in, for a signed-out reader.
 export function BurgerMenu() {
   const [open, setOpen] = useState(false);
   const { user } = useCurrentUser();
@@ -86,6 +88,11 @@ export function BurgerMenu() {
           <li>
             <Link to="/settings" onClick={() => setOpen(false)}>
               Settings
+            </Link>
+          </li>
+          <li>
+            <Link to="/privacy" onClick={() => setOpen(false)}>
+              Privacy
             </Link>
           </li>
           {user?.isAdmin && (

@@ -153,6 +153,15 @@ export function MapScreen() {
           </p>
         </div>
       )}
+      {/* Phase 8 task brief, part C: a new account's first view of the map
+          is otherwise just fog and no markers, with nothing telling them
+          what to do next. Gone for good once the first bar is discovered -
+          discoveredBars only ever grows. */}
+      {discoveredBars.length === 0 && (
+        <div className="map-toast" role="status">
+          <p>No bars discovered yet - walk toward one to reveal it here.</p>
+        </div>
+      )}
       {trackingState.lastNewCells !== null && trackingState.lastNewCells > 0 && (
         <div className="map-toast" role="status">
           <p>

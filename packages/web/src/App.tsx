@@ -17,6 +17,7 @@ import { HowMasteringWorks } from './screens/HowMasteringWorks.js';
 import { Landing } from './screens/Landing.js';
 import { Leaderboard } from './screens/Leaderboard.js';
 import { Login } from './screens/Login.js';
+import { Privacy } from './screens/Privacy.js';
 import { Profile } from './screens/Profile.js';
 import { Register } from './screens/Register.js';
 import { Reset } from './screens/Reset.js';
@@ -86,6 +87,14 @@ export function App() {
             <RequireAuthOnly>
               <ChangePassword />
             </RequireAuthOnly>
+          }
+        />
+        <Route
+          path="/privacy"
+          element={
+            <RedirectIfMustChangePassword>
+              <Privacy />
+            </RedirectIfMustChangePassword>
           }
         />
         <Route

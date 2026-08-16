@@ -105,6 +105,9 @@ export function Register() {
             I confirm that I am 18 years of age or older.
           </label>
         </div>
+        <p className="screen__footnote">
+          <Link to="/privacy">See what Tipsy Trails stores about you</Link>
+        </p>
         <div className="screen__actions">
           <button className="button button--primary" type="submit" disabled={submitting}>
             Create account

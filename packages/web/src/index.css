@@ -537,18 +537,33 @@ a {
   font-size: 0.875rem;
 }
 
-/* How mastering works (Section 7.5): explanatory prose, left-aligned like
-   .bar-detail rather than .screen__content's centred default. */
-.how-it-works {
+/* How mastering works (Section 7.5) and Privacy (Section 10.3): explanatory
+   prose, left-aligned like .bar-detail rather than .screen__content's
+   centred default. */
+.how-it-works,
+.privacy {
   text-align: left;
 }
 
-.how-it-works p {
+.how-it-works p,
+.privacy p,
+.privacy ul {
   margin: 1rem 0 0;
 }
 
-.how-it-works p:first-of-type {
+.how-it-works p:first-of-type,
+.privacy p:first-of-type {
   margin-top: 0;
+}
+
+.privacy h2 {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  margin: 1.5rem 0 0;
+}
+
+.privacy li {
+  margin: 0.25rem 0 0;
 }
 
 /* City and district overview screens (Section 8.3): schematic inline-SVG

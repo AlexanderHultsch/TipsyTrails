@@ -88,6 +88,12 @@ export function Settings() {
         </section>
 
         <section className="settings-section">
+          <Link className="button button--secondary" to="/privacy">
+            Privacy
+          </Link>
+        </section>
+
+        <section className="settings-section">
           <button type="button" className="button button--secondary" onClick={handleLogout}>
             Log out
           </button>
