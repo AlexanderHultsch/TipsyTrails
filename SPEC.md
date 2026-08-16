@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -986,13 +986,16 @@ Profile, badge shelf, leaderboard with metric and period switching, anonymity to
 Suggest-a-bar with map picker, duplicate guard, community marker, admin area.
 
 **Definition of Done**
-- [ ] A bar can be suggested via map pin, name, and address, and appears immediately for all users
-- [ ] Community bars carry a visible distinguishing marker
-- [ ] Submissions within 25 m of a similarly named active bar are rejected with a message naming the conflict
-- [ ] The submitter immediately has the bar as discovered
-- [ ] The admin section is visible in the burger menu only for admins, and admin endpoints return 403 otherwise
-- [ ] The admin can create, edit, hide, and delete bars; moving a bar recomputes cell and district; deletion cascades cleanly
-- [ ] Submission rate limits are enforced
+
+`[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the missing part named. Phase 7 has no device-dependent items, so `[~]` is unused here.
+
+- [x] A bar can be suggested via map pin, name, and address, and appears immediately for all users — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `creates a community bar that appears immediately in GET /api/bars for the submitter, discovered`, `is discovered by a second, unrelated user who later walks within BAR_DISCOVERY_RADIUS_M of it`; `packages/web/src/App.community.test.tsx`, describe `suggest a bar`: `submitting a bar with a picked pin succeeds and the bar appears as discovered`
+- [x] Community bars carry a visible distinguishing marker — `packages/web/src/App.community.test.tsx`, describe `community marker`: `shows a community bar marker distinctly from an OSM bar marker`
+- [x] Submissions within 25 m of a similarly named active bar are rejected with a message naming the conflict — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `rejects a near-duplicate within SUGGEST_DUPLICATE_RADIUS_M, naming the conflicting bar`
+- [x] The submitter immediately has the bar as discovered — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `creates a community bar that appears immediately in GET /api/bars for the submitter, discovered` (asserts the `bar_discoveries` row exists for the submitter)
+- [x] The admin section is visible in the burger menu only for admins, and admin endpoints return 403 otherwise — `packages/web/src/App.community.test.tsx`, describe `admin menu visibility`: `hides the Admin entry from the burger menu for a non-admin user`, `shows the Admin entry in the burger menu for an admin user`; `packages/api/src/routes/admin.test.ts`, describe `admin guard`: `returns 403 for a logged-in non-admin at $method $url` (parameterised over every `/api/admin/*` route)
+- [x] The admin can create, edit, hide, and delete bars; moving a bar recomputes cell and district; deletion cascades cleanly — `packages/api/src/routes/admin.test.ts`: describe `POST /api/admin/bars`: `creates a bar directly, active, source=admin, submitted by the admin`; describe `PATCH /api/admin/bars/:id`: `edits name, address, and status`, `recomputes cell_index and district_id to the values the projection gives for the new position`; describe `DELETE /api/admin/bars/:id`: `deletes a bar with discoveries and visits, cascading both away`; describe `hiding a bar and player-facing endpoints`: `a hidden bar vanishes from GET /api/bars for a player who had discovered it`
+- [x] Submission rate limits are enforced — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `enforces the suggest rate limit`
 
 ### Phase 8 — Hardening and Polish
 
@@ -1082,6 +1085,20 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.7 — community submissions and admin
+
+Recorded after Phase 7 was built. Section 11.3 left four things open; all four were decided. Two more decisions, neither previously stated, came out of building the admin area.
+
+**Section 11.3's duplicate guard needed four readings.** The normalized Levenshtein ratio is `1 - distance / max(len a, len b)`, with `a === b` (which also covers both-empty) short-circuiting to 1 before any division, so the both-empty case never divides by zero. The leading-article set covers English and German — the section names the suffixes (`bar`, `pub`, `kneipe`, `cafe`) but not the articles, and this is a German-city app with English UI copy, so both languages' definite/indefinite articles apply. The order of normalisation steps is not a free choice: it is the literal sequence the section's own sentence lists — lowercase, strip diacritics, strip punctuation, collapse whitespace, drop leading article, drop trailing suffix — and is followed as normative, including that the article is dropped before the suffix is checked. And a name can normalize to nothing (the section's own example, "The Bar", loses its article and then its remaining content is entirely the trailing suffix): both sides of the comparison guard against this, because without it two such names would compare as identical and block each other, and an empty string would match every other name that also normalizes away to nothing.
+
+**Hidden bars were not actually hidden.** `GET /api/bars` and `GET /api/bars/:id` never filtered on `bars.status`, so a bar an admin hid stayed visible to every player who had already discovered it — a gap open since Phase 4, closed now that Phase 7 gave admins a way to hide a bar in the first place. Both endpoints now filter to `status = 'active'`. `POST /api/samples`'s discovery query and the check-in query in `routes/visits.ts` already filtered correctly. The leaderboard and badge queries deliberately ignore bar status: mastering is a completed visit, and hiding a bar afterwards must not revoke it. That is a rule, not an oversight.
+
+**Admin routes carry no rate limit.** Section 7.1's `RATE_LIMITS` names none for the admin surface, every admin route sits behind `requireAdmin`, and the admin account is the trust boundary those limits exist to protect in the first place. Recorded here as a decision so a future reader does not mistake the absence for a gap.
+
+**Admin-created and admin-edited bars are exempt from the duplicate guard.** Section 11.3 specifies the guard for community submissions; Section 9.3 says nothing about applying it to admin routes, and the admin is trusted to know what they are doing — including, deliberately, adding a second bar with a name close to an existing one.
+
+**Admin endpoints answer 403 to a logged-in non-admin, not 404.** The opposite of Section 9.5's bar rules, and deliberately so: there, hiding a bar's existence is the point; here, only the authority to act is secret, not the existence of `/api/admin/*` itself.
 
 ### v1.6 — progress, leaderboard, and badges
 
@@ -1185,4 +1202,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.6*
+*End of specification v1.7*

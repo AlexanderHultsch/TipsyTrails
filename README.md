@@ -8,7 +8,7 @@ Self-hosted on a Raspberry Pi, reachable at `https://tipsytrails.ahultsch.com` t
 
 ## Status
 
-**Phases 0–6 are implemented.** Phases 7–8 are not built yet.
+**Phases 0–7 are implemented.** Phase 8 is not built yet.
 
 What exists today: a pnpm monorepo (`packages/shared`, `packages/api`,
 `packages/web`); a Fastify API on SQLite (WAL) with an idempotent migration
@@ -16,8 +16,13 @@ runner; accounts, sessions, and a security-question password reset; the map —
 MapLibre GL and PMTiles, code-split, in a hand-drawn ink style, with district
 polygons and the city and district overview screens; fog of war — a per-user
 bitmask revealed by walking, a WebGL layer with a 2D canvas fallback, and
-per-district and per-day progress; and bars — 170 of them imported from
-OpenStreetMap, discovered at 100 m, permanently visible once found.
+per-district and per-day progress; bars — 170 of them imported from
+OpenStreetMap, discovered at 100 m, permanently visible once found;
+community submissions — a player places a pin on the map, names the bar,
+and gives an address, and it goes live for everyone immediately unless it
+duplicates a similarly named bar nearby, in which case the rejection names
+the conflict; and an admin area, reachable only to admins, for creating,
+editing, hiding, and deleting bars and for viewing the user list.
 
 Mastering works like this: standing at a bar you have found, you check in.
 Twenty minutes later, open the app again while you are still there and the bar

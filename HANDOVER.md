@@ -1,11 +1,11 @@
-# Handover — state of play before Phase 7
+# Handover — state of play before Phase 8
 
 For the next Claude Code session. Written after the session that completed
-Phase 6.
+Phase 7.
 
 `SPEC.md` is the source of truth; `CLAUDE.md` holds the guardrails. This file
 only records where things stand, what is deliberately unfinished, and what to
-do first. Replace it when Phase 7 is done — it is a note between sessions, not
+do first. Replace it when Phase 8 is done — it is a note between sessions, not
 project documentation.
 
 ---
@@ -16,10 +16,11 @@ project documentation.
 | --------------------- | ---------------------------------------------------------- |
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
-| Phases complete       | 0–6 (with the gaps in §3, which need the owner)            |
-| Phase 7               | not started                                                |
-| Tests                 | 568 green — shared 137, api 296, web 135                   |
-| Spec version          | 1.6                                                        |
+| Phases complete       | 0–7 (with the gaps in §2, which need the owner)            |
+| Phase 8               | not started                                                |
+| Tests                 | 633 green — shared 165, api 326, web 142                   |
+| Spec version          | 1.7                                                        |
+| `main` at             | `47c2cbe`                                                  |
 
 Everything is committed and pushed. The working tree was clean at handover.
 
@@ -37,18 +38,18 @@ remove it: `packages/api` and `packages/web` import `@tipsytrails/shared`,
 which resolves to a gitignored `dist`. Without the hook a fresh clone
 silently runs a subset of the api package's tests while still printing a
 passing summary. `pnpm test` and `pnpm typecheck` also each carry their own
-`pretest`/`pretypecheck` rebuild of `packages/shared` now (§6, §7) — `prepare`
-covers a fresh clone, the two `pre*` hooks cover an edit mid-session. Running
-a single package's tests directly (`pnpm --filter @tipsytrails/api test`)
-still bypasses both and can read a stale `dist`; that gap is accepted, not
-missed.
+`pretest`/`pretypecheck` rebuild of `packages/shared` now (SPEC.md v1.6
+changelog) — `prepare` covers a fresh clone, the two `pre*` hooks cover an
+edit mid-session. Running a single package's tests directly
+(`pnpm --filter @tipsytrails/api test`) still bypasses both and can read a
+stale `dist`; that gap is accepted, not missed.
 
 ---
 
 ## 2. What needs the owner, not an agent
 
-None of this can be closed from the sandbox. Carried forward from the Phase 5
-handover, with two updates from this session marked below.
+None of this can be closed from the sandbox. Carried forward unchanged from
+the Phase 6 handover — Phase 7 touched none of it.
 
 | Item                                                            | Blocked on                                                              |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -59,20 +60,15 @@ handover, with two updates from this session marked below.
 | Push delivery on Android and on an installed iOS PWA            | no browser, no push service, no device                                  |
 | The first real `docker build`                                   | no Docker daemon here                                                   |
 
-**Updated this session — the tile extract build step is done.** The PMTiles
-extract has been built and sits on the owner's laptop as
-`karlsruhe.2026-08.pmtiles`. What remains is copying it to the Pi's
-`TILES_DIR` and re-testing the map screens there — not building it. And it is
-**9.4 MB**, not the 30–80 MB `SPEC.md` estimated: that figure was never
-measured before now, only guessed at, and the real number should replace the
-estimate wherever it matters for planning (it does not need to reach
-`SPEC.md` itself, which states the estimate as an estimate).
+**The PMTiles extract has been built and sits on the owner's laptop** as
+`karlsruhe.2026-08.pmtiles` (9.4 MB, measured, not the 30–80 MB `SPEC.md`
+originally estimated). What remains is copying it to the Pi's `TILES_DIR` and
+re-testing the map screens there — not building it.
 
 **`scripts/extract-tiles.sh` does not exist.** `packages/api/src/app.ts`
 names it in its startup error and Section 4.2 lists it in the repository
-tree, but the extract above was produced by invoking `planetiler` by hand,
-not by running this script. Tracked in §6 (deliberate debts) rather than
-written now — writing it was not this session's task.
+tree, but the one real extract was produced by invoking `planetiler` by hand,
+not by running this script. Tracked in §5 (deliberate debts).
 
 **Push configuration.** Three optional variables in the Pi's
 `apps/tipsy-trails/.env`: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
@@ -123,36 +119,53 @@ copies every directory the server reads at boot — it exists because a missing
 
 ---
 
-## 4. What Phase 6 built
+## 4. What Phase 7 built
 
-Profile, badge shelf, leaderboard (metric and period switching, paging),
-anonymity toggle, and the badge evaluation job. Three things a future reader
-needs before touching any of it:
+Suggest-a-bar (map pin, name, address), the duplicate guard, the community
+marker, and the admin area (bar management, user list). Three things a future
+reader needs before touching any of it:
 
-- **The shared period helper is the only place period boundaries are
-  computed.** ISO-8601 week numbering (Monday-based, week 1 contains the
-  first Thursday), computed in `Europe/Berlin` and converted to UTC seconds,
-  lives once in `packages/shared` (`berlin-time.ts`). No route re-derives it.
-- **The badge job and the leaderboard deliberately share their value
-  functions.** `packages/api/src/badges.ts` exports
-  `explorerValuesByUser`/`barflyValuesByUser`/`allTimeBarflyValuesByUser`;
-  `routes/leaderboard.ts` and `routes/profile.ts` call the same functions
-  rather than re-querying, so a user's leaderboard standing, profile figures,
-  and badge award can never disagree about the same number.
-- **The tie-break reading (SPEC.md v1.6 changelog, item 2).** "Earliest
-  achievement" is not defined for a running total, so it was read as the
-  instant a user's value last rose to what it now is:
-  `fog_state.updated_at` for all-time area, the latest qualifying day within
-  the period for week/month area, and the completion that pushed the count to
-  its total for bars — with users who never scored falling through to
-  `users.id`. This is now the normative reading; do not re-derive a different
-  one from the same spec words.
+- **Section 11.3's duplicate guard has four readings that were undetermined
+  by the spec text, now settled** (SPEC.md v1.7 changelog): the normalized
+  Levenshtein ratio is `1 - distance / max(len a, len b)`, short-circuiting
+  identical inputs (including both-empty) to 1 before any division; the
+  leading-article set covers English and German, since Section 11.3 names the
+  suffixes but not the articles; the order of normalisation steps is the
+  literal sequence the section's own sentence lists, followed as normative,
+  not a free choice; and a name can normalize to nothing (`"The Bar"` loses
+  its article, then its remainder is entirely the trailing suffix), so both
+  sides of the comparison guard against it.
+- **The two empty-name guards in `packages/shared/src/suggest.ts` are
+  individually redundant and jointly load-bearing.** Removing either alone
+  changes no test's outcome — the candidate-side guard is redundant because a
+  ratio against a non-empty string already comes out at 0, and the
+  existing-side guard alone still catches the empty-candidate case earlier.
+  Removing _both_ fails `packages/shared/src/suggest.test.ts`: `never matches
+an existing bar whose name normalizes to the empty string`, because two
+  names that both normalize to `""` would otherwise compare as identical.
+  Neither guard is dead code — do not delete one as a "simplification" later.
+- **The admin menu gate is cosmetic; the 403 is the real boundary.** Hiding
+  the "Admin" burger-menu entry from a non-admin (`packages/web`) is a UX
+  nicety. The actual authority check is `requireAdmin` in
+  `packages/api/src/auth/cookie.ts`, applied to every `/api/admin/*` route
+  independently and tested per-route, not just once for the prefix
+  (`packages/api/src/routes/admin.test.ts`, describe `admin guard`). Do not
+  treat the menu's visibility as the security control.
+
+Also worth knowing: **hidden bars were not actually hidden until this
+phase** — `GET /api/bars` and `GET /api/bars/:id` never filtered
+`bars.status`, a gap open since Phase 4 and only closed now that admins had a
+way to hide a bar at all (SPEC.md v1.7 changelog). The leaderboard and badge
+queries still deliberately ignore bar status: mastering is permanent once
+completed, and hiding a bar afterwards must not revoke it. That is a rule,
+not an oversight — do not "fix" it by adding a status join there.
 
 ---
 
 ## 5. Deliberate debts
 
-Small, known, left alone on purpose. None block Phase 7.
+Small, known, left alone on purpose. None block Phase 8 except the
+accessibility ones, which Phase 8 exists to close.
 
 | Item                                                                                          | Where                                  |
 | --------------------------------------------------------------------------------------------- | -------------------------------------- |
@@ -165,6 +178,8 @@ Small, known, left alone on purpose. None block Phase 7.
 | `PASSWORD_MIN_LENGTH` is 8, chosen by an executor because the spec names no value             | `packages/shared/src/config.ts`        |
 | The seeded admin cannot use the security-question reset; its recovery path is the environment | `packages/api/src/db/seed-admin.ts`    |
 | `scripts/extract-tiles.sh` does not exist; the one real extract was produced by hand          | `scripts/` (Section 4.2, `app.ts`)     |
+| The map picker has no keyboard-only path — Phase 8's accessibility pass                       | `packages/web/src/map/MapPicker.tsx`   |
+| Admin create/edit forms take latitude and longitude as plain numbers, not a picker            | `packages/web/src/screens/Admin.tsx`   |
 
 ---
 
@@ -183,7 +198,7 @@ Each cost a round trip. Each looked correct on first reading.
   far — every other bug here was caught by a test; this one was invisible to
   every test until the harness itself was mutated. `pretest` and
   `pretypecheck` now rebuild `shared` before either command runs (SPEC.md v1.6
-  changelog, item 4).
+  changelog).
 - **A city-progress assertion that checked a number's format, not its
   value.** When the city and district overview screens moved from Phase 2's
   invented placeholder numbers onto real `GET /api/progress` data, the
@@ -192,11 +207,10 @@ Each cost a round trip. Each looked correct on first reading.
   (`toMatch(/^\d+%$/)`), so the same mutation — the real API figure silently
   replaced by zero — passed clean. Replacing an invented number with an
   unverified one is barely an improvement. Fixed to an exact assertion against
-  the stubbed value in the same commit that found it
-  (`Add the profile, badge shelf and leaderboard screens`). When a test
-  changes from "the app made something up" to "the app used a real value",
-  the assertion has to change from "looks plausible" to "is the value", or the
-  migration proves nothing.
+  the stubbed value in the same commit that found it. When a test changes from
+  "the app made something up" to "the app used a real value", the assertion
+  has to change from "looks plausible" to "is the value", or the migration
+  proves nothing.
 - **The first `POST /api/visits` returned a stale pending visit.** Expiry was
   evaluated lazily on the read path only, so a visit six hours dead still
   matched `status = 'pending'` and was handed back — with its old `started_at`,
@@ -204,12 +218,19 @@ Each cost a round trip. Each looked correct on first reading.
   It was found by executing the path, not by reading the diff, and only because
   the check-in route was tried before the pending-poll route. Both handlers now
   evaluate expiry.
+- **`GET /api/bars` and `GET /api/bars/:id` never filtered `bars.status`.** A
+  bar an admin hid stayed visible to every player who had already discovered
+  it, from Phase 4 until Phase 7 gave admins a way to hide one at all. Found
+  while building the admin area, not by a pre-existing test — nothing in
+  Phases 4–6 exercised hiding, so nothing could have caught it earlier. Both
+  endpoints now filter to `status = 'active'`.
 - **Verify security and correctness properties by executing them.** A green
   suite has now hidden a real defect more than once on this project — the
   reset-question decoy took three attempts, `revealVersion` served two
-  questions at once, the stale pending visit above, and now both entries above
-  it. Mutation-test any guard you add: break the code it covers and confirm
-  the test fails. Several tests here asserted nothing until that was done.
+  questions at once, the stale pending visit above, the unfiltered
+  `bars.status` above, and now both entries above it. Mutation-test any guard
+  you add: break the code it covers and confirm the test fails. Several tests
+  here asserted nothing until that was done.
 - **`trustProxy` must be `1`, never `true`.** With `true` Fastify takes the
   left-most `X-Forwarded-For` entry, which the client controls, so anyone can
   mint a fresh rate-limit bucket per request. A test fails if this changes.
@@ -231,32 +252,38 @@ Each cost a round trip. Each looked correct on first reading.
 
 ---
 
-## 7. Phase 7 — next
+## 7. Phase 8 — next
 
-Scope from Section 12: Community Submissions and Admin — suggest-a-bar with a
-map picker, the duplicate guard, the community marker, and the admin area
-(bar management, moderation, user list). Endpoints in Section 9.2/9.3:
-`POST /api/bars/suggest`, and the `/api/admin/*` surface. It needs **no
-external data** — everything it touches is already in the repository or the
-running database.
+Scope from Section 12: Hardening and Polish — PWA manifest and install
+prompt, offline shell, the `/privacy` page, a performance pass, error states,
+empty states, and an accessibility pass. Its Definition of Done is the
+longest in the plan and most of it needs a real device or a real Pi under
+load; some of it can be built and partly verified from the sandbox.
 
-Two places the spec is specific and easy to skim past:
+**Needs the owner or a real device — cannot be closed from here:**
 
-- **Section 11.3's duplicate guard is a concrete algorithm, not "similar
-  name".** Reject a submission if an active bar exists within
-  `SUGGEST_DUPLICATE_RADIUS_M` whose name has a normalized Levenshtein ratio
-  ≥ `SUGGEST_NAME_SIMILARITY` after both names are lowercased, stripped of
-  diacritics and punctuation, whitespace-collapsed, and have a leading
-  article or a common suffix (`bar`, `pub`, `kneipe`, `cafe`) dropped. The
-  rejection must name the conflicting bar. The map picker is mandatory — it
-  is how position is set, not geocoding — and a submitting user gets a
-  `bar_discoveries` row for their own submission immediately.
-- **Section 9.3's admin edit recomputes derived fields, and does not touch
-  history.** Editing a bar's position must recompute `cell_index` and
-  `district_id` the same way seeding does; existing discoveries are not
-  revoked by a move or an edit. Every `/api/admin/*` route requires
-  `is_admin` and must 403 otherwise — worth a test per route, not just one
-  for the prefix.
+- Install to the home screen on Android and iOS
+- Lighthouse mobile performance ≥ 90
+- Time to interactive < 3 s on a mid-range Android over simulated 4G
+- API p95 latency < 150 ms measured on the Pi under 10 concurrent users
+- Total container memory under load < 400 MB
+
+**Buildable and at least partly testable in the sandbox:**
+
+- The PWA manifest and offline shell (Workbox via `vite-plugin-pwa` — the
+  gap already named in §5: `push-sw.js` is hand-written and nothing wires
+  `vite-plugin-pwa` up yet)
+- Queued samples surviving offline and posting on reconnect
+- `/privacy`, covering the per-day reveal counters (Section 10.2) and linking
+  to `ahultsch.com`'s policy and legal notice
+- `prefers-reduced-motion` disabling the dissolve animation and all
+  transitions
+- The accessibility pass itself: WCAG 2.1 AA contrast, visible focus states,
+  labelled form fields, no state carried by the accent colour alone — plus
+  the two accessibility debts already on record in §5 (the map picker's
+  missing keyboard path, the admin lat/lon inputs) are natural candidates to
+  close here rather than defer again
+- User-facing messages for every network failure, replacing any silent one
 
 ---
 

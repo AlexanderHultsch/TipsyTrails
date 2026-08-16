@@ -450,6 +450,45 @@ describe('POST /api/bars/suggest', () => {
     expect(barRow).toMatchObject({ source: 'community', status: 'active', submitted_by: userId });
   });
 
+  it('is discovered by a second, unrelated user who later walks within BAR_DISCOVERY_RADIUS_M of it', async () => {
+    // Far enough from SCHLOSS that this position cannot itself trigger a
+    // duplicate match or a stray discovery of the seeded 'Zum Schlossgarten'
+    // bar, keeping this test about one thing: a fresh community bar reaching
+    // a second, unrelated user through the ordinary discovery path.
+    const suggestedPosition = offsetMeters(SCHLOSS, 500, 500);
+
+    const suggesterCookie = await registerUser('suggester');
+    const suggestResponse = await suggestBar(suggesterCookie, {
+      name: 'Second User Test Bar',
+      address: null,
+      ...suggestedPosition,
+    });
+    expect(suggestResponse.statusCode).toBe(201);
+    const barId = suggestResponse.json().id as number;
+
+    const walkerCookie = await registerUser('walker');
+    const within = diagonalOffset(suggestedPosition, 95);
+    expect(95).toBeLessThan(CONFIG.BAR_DISCOVERY_RADIUS_M);
+
+    const samplesResponse = await postSamples(walkerCookie, [sample({ ...within })]);
+    expect(samplesResponse.statusCode).toBe(200);
+    const newBars = samplesResponse.json().newBars;
+    expect(newBars).toHaveLength(1);
+    expect(newBars[0]).toMatchObject({
+      id: barId,
+      name: 'Second User Test Bar',
+      source: 'community',
+    });
+
+    const barsResponse = await injectWithOrigin({
+      method: 'GET',
+      url: '/api/bars',
+      headers: { cookie: walkerCookie },
+    });
+    const names = barsResponse.json().bars.map((b: { name: string }) => b.name);
+    expect(names).toContain('Second User Test Bar');
+  });
+
   it('rejects a near-duplicate within SUGGEST_DUPLICATE_RADIUS_M, naming the conflicting bar', async () => {
     const cookie = await registerUser('suggester');
     const closeBy = diagonalOffset(SCHLOSS, 10);
