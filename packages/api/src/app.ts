@@ -170,8 +170,10 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
         const rel = relative(webRoot, filePath);
         if (rel.startsWith(`assets${sep}`)) {
           reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-        } else if (rel === 'index.html' || rel === 'manifest.json') {
+        } else if (rel === 'index.html' || rel === 'manifest.json' || rel === 'sw.js') {
           reply.header('Cache-Control', 'public, max-age=0, must-revalidate');
+        } else if (rel.startsWith(`icons${sep}`)) {
+          reply.header('Cache-Control', 'public, max-age=86400');
         }
       },
     });

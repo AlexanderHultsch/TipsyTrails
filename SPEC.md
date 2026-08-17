@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.8
+**Version:** 1.9
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -116,7 +116,8 @@ Cache aggressively at the Cloudflare edge so the Pi handles almost no repeat tra
 | `/assets/*` (hashed) | `public, max-age=31536000, immutable` | Vite content hashing |
 | `/tiles/karlsruhe.<version>.pmtiles` | `public, max-age=2592000` | Range requests must be allowed; 9.4 MB measured for Karlsruhe, fetched in small ranges |
 | `/static/districts.json` | `public, max-age=86400` | District polygons, simplified |
-| `/index.html`, `/manifest.json` | `public, max-age=0, must-revalidate` | |
+| `/index.html`, `/manifest.json`, `/sw.js` | `public, max-age=0, must-revalidate` | The service worker controls the whole app shell (Section 15, v1.9); pinned the same as the shell document rather than left to an intermediary |
+| `/icons/*` | `public, max-age=86400` | Referenced from the manifest, not content-hashed, changes rarely — same reasoning as `/static/districts.json` above, not the shell's must-revalidate treatment |
 | `/api/*` | `private, no-store` | Never cached |
 
 Two things Cloudflare does not do by default and that must be configured explicitly:
@@ -1089,6 +1090,14 @@ These are consequences to design around, not reasons to reconsider:
 
 ## 15. Changelog
 
+### v1.9 — two loose ends from closing Phase 8
+
+Two corrections, not decisions.
+
+**`/sw.js` gets the same cache treatment as `index.html` and `manifest.json`.** Section 4.1's table predates the service worker and never listed it, so it fell through to the same `public, max-age=0` every other unlisted static file gets — missing `must-revalidate`. That worker controls the entire app shell; a stale copy left cacheable by an intermediary (Cloudflare sits in front of this origin) pins every client it reaches to an old shell until it updates. `packages/api/src/app.ts` now sets `must-revalidate` for it, `app.test.ts` covers it, and the table gains both `/sw.js` and `/icons/*` — the latter at `public, max-age=86400`, matching `/static/districts.json`'s existing reasoning: referenced from the manifest, not content-hashed, changes rarely.
+
+**`scripts/rebuild-grid.ts` now exists.** Section 4.2's tree and Section 6.2 both named it since before v1.8; the file itself was never written — the same gap `extract-tiles.sh` had until v1.6. The new stub validates `--city=<slug>` and the city config like the other pipeline scripts, then refuses to run: migrating every existing `fog_state.mask` onto a new grid (O3) is real work, and a stub that quietly did nothing would be worse than the missing file.
+
 ### v1.8 — hardening, polish, and the offline shell
 
 Recorded after Phase 8 was built — the last phase in Section 12's plan. Five decisions. A sixth candidate — the tile extract's measured size — needed nothing further: it was already corrected to 9.4 MB in the v1.6 entry below, and neither Section 4.2's tree nor 13.2 states the old estimate any more, so there was nothing left to fix.
@@ -1219,4 +1228,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.8*
+*End of specification v1.9*
