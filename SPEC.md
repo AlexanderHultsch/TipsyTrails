@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.7
+**Version:** 1.8
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -1002,17 +1002,20 @@ Suggest-a-bar with map picker, duplicate guard, community marker, admin area.
 PWA manifest and install prompt, offline shell, privacy page, performance pass, error states, empty states, accessibility pass.
 
 **Definition of Done**
-- [ ] The app installs to the home screen on Android and iOS
-- [ ] Opening offline shows the cached shell, the last fog state, and a clear offline indicator
-- [ ] Queued samples survive going offline and are posted on reconnect
-- [ ] Lighthouse mobile performance ≥ 90
-- [ ] Time to interactive < 3 s on a mid-range Android over simulated 4G
-- [ ] API p95 latency < 150 ms measured on the Pi under 10 concurrent users
-- [ ] `/privacy` is live, mentions the per-day reveal counters, and links to the main site's policy and legal notice
-- [ ] `prefers-reduced-motion` disables the dissolve animation and all transitions
-- [ ] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1)
-- [ ] Every network failure produces a user-facing message, never a silent failure
-- [ ] Total container memory under load < 400 MB
+
+`[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the part that needs a device, a browser, or the Pi named. Five items need a phone, a Lighthouse run, a browser tracing simulated 4G, or the Pi itself under load — nothing buildable from here gets any of them partway there, so they stay `[ ]`, each with what is missing named beside it.
+
+- [ ] The app installs to the home screen on Android and iOS — needs an Android device and an iOS device; nothing here can install a PWA to a home screen
+- [~] Opening offline shows the cached shell, the last fog state, and a clear offline indicator — the last fog state and the offline indicator are proven end to end: `packages/web/src/App.pwa.test.tsx`, describe blocks `offline indicator and queued samples` and `fog state offline`. The cached-shell half rests on `sw.js`'s own `networkFirst`/`cacheFirst` handlers, which jsdom has no Service Worker environment to execute — proven only as source-text assertions in the same file's `describe('a single service worker')` (the file exists, `push-sw.js` does not, `/api/*` is never intercepted), not by actually serving a page from the Cache API
+- [~] Queued samples survive going offline and are posted on reconnect — proven for an offline stretch with the tab open and the tracking hook still mounted: `packages/web/src/App.pwa.test.tsx`, describe `offline indicator and queued samples`. The queue itself is a `useRef` held in memory (`packages/web/src/tracking/useSampleTracking.ts`), so it does not survive a reload — that half is a deliberate limit, recorded in a comment at the same `useRef`, not merely untested
+- [ ] Lighthouse mobile performance ≥ 90 — needs a real browser and a Lighthouse run
+- [ ] Time to interactive < 3 s on a mid-range Android over simulated 4G — needs a real or simulated Android device
+- [ ] API p95 latency < 150 ms measured on the Pi under 10 concurrent users — needs the Pi
+- [x] `/privacy` is live, mentions the per-day reveal counters, and links to the main site's policy and legal notice — `packages/web/src/App.privacy.test.tsx`, describe `/privacy`
+- [~] `prefers-reduced-motion` disables the dissolve animation and all transitions — the CSS rule itself is asserted structurally: `packages/web/src/App.a11y.test.tsx`, describe `prefers-reduced-motion` (the universal `*, *::before, *::after` selector, durations collapsed to zero with `!important`). The JS-driven fog dissolve's own listener is exercised against a real `matchMedia`: `packages/web/src/map/fog/fog-controller.test.ts`, `packages/web/src/map/fog/webgl-fog-layer.test.ts`. Neither proves a real browser applying the rule — this project's jsdom test config applies no real stylesheet
+- [~] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1) — contrast, the focus ring's own contrast, labelled form fields, and the accent-plus-label rule are all automated in `packages/web/src/App.a11y.test.tsx`. Nothing here can run a screen reader, so whether any of this is announced sensibly is unverified
+- [x] Every network failure produces a user-facing message, never a silent failure — the same centralized network-error path (`packages/web/src/api/client.ts`) is exercised failing at three independent call sites: login (`packages/web/src/App.test.tsx`, `shows a message rather than failing silently on a network failure during login`), the city boundary fetch (`packages/web/src/App.test.tsx`, `shows a message rather than an empty screen when the city boundary fetch fails`), and the district overview fetch (`packages/web/src/App.privacy.test.tsx`, describe `network failures surface a message`)
+- [ ] Total container memory under load < 400 MB — needs the Pi under load, and a Docker image, which has never been built here
 
 ---
 
@@ -1085,6 +1088,20 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.8 — hardening, polish, and the offline shell
+
+Recorded after Phase 8 was built — the last phase in Section 12's plan. Five decisions. A sixth candidate — the tile extract's measured size — needed nothing further: it was already corrected to 9.4 MB in the v1.6 entry below, and neither Section 4.2's tree nor 13.2 states the old estimate any more, so there was nothing left to fix.
+
+**One service worker, not two.** A scope can have exactly one service worker; registering a second silently replaces the first, and which one wins depends on load order, not on anything a reviewer could predict from the source. `push-sw.js` (Phase 5) and an offline-shell worker (this phase) cannot coexist at the app's one scope, so they are merged into a single `packages/web/public/sw.js` that owns both the Cache-API shell and Web Push. Both registration sites — the eager offline-shell registration on app start and `usePushSubscription`'s `enable()` — import the same `SERVICE_WORKER_URL` constant from `packages/web/src/sw/register.ts` rather than each naming a filename, so a second, competing URL cannot be reintroduced by one call site drifting from the other. `sw.js`'s fetch handler explicitly never intercepts `/api/*`: those responses are `private, no-store` (Section 4.1), and a cached one on a shared device is a privacy problem, not a cache-hit win.
+
+**The client-side fog cache is keyed per user and cleared on logout.** The first version of `packages/web/src/map/fog/fog-cache.ts` used one unkeyed `localStorage` entry, reasoning from the precedent of `packages/web/src/tracking/masteringExplainer.ts`'s existing unkeyed flag — but that flag only records whether someone has seen the mastering explainer once, while this one records where a person walked. On a shared device, the next account to sign in, offline, would have been shown the previous account's revealed fog — their movement history, drawn as a map — before a single network request completed. The cache key now includes the user id, and `auth/useLogout.ts` clears the current user's entry on logout. Sections 10.2 (data minimisation) and 10.6 (account deletion) both bear on this: a fog mask reveals where someone has been in a way the server-side model already treats as sensitive, and a client-side cache is not exempt from that just because it never touches the database.
+
+**The privacy page was re-read line by line against what the code actually does, and three overclaims came out of it.** A claim of *absence* — "we don't use X" — is the kind most worth checking, because nothing forces it to be re-verified when the code beneath it changes. `/privacy` previously implied OpenStreetMap was a service the app talks to at runtime; it is not — tiles are served by this app's own `/tiles/*` route (Section 9.2), and the browser never contacts OSM directly. The page now names OpenStreetMap correctly as the source the map *data* came from, and separately names the two outside services that genuinely do see live traffic: Cloudflare, which tunnels every request including position samples (Section 4, C1), and the browser vendor's own push service (Google, Apple, or Mozilla, depending on the browser), which carries a subscription and each reminder if push is turned on. Two smaller overclaims came out of the same pass: the deletion section stated an unqualified immediate removal, when C7's existing Pi backup job means a routine backup can still hold a copy until it cycles out — now stated as such. And the per-day reveal counters (Section 5.5) were described as feeding only the badge job, when Section 7.8 already has them feeding the leaderboard's week/month filters too; the page now says both.
+
+**`scripts/extract-tiles.sh`'s `--area` flag takes the last segment of `geofabrik_region`, not the field's full stored path.** `data/cities/<slug>.json` stores the full Geofabrik path (`europe/germany/baden-wuerttemberg`) because that is the more useful value to keep on record — it is also the path segment of the actual download URL, which the script's own reachability probe uses. Planetiler's `--area`, however, only ever ran successfully against the short form (`baden-wuerttemberg`); its own log shows it resolving that short name to the full download URL itself. Recorded here because the difference reads as an inconsistency on a first pass over the script, and is not one — the full path and the short segment are each used exactly where they work.
+
+**The player's own position is now rendered on the map** (Sections 8.1, 8.3). It was specified from the start — Section 8.1's one accent colour is reserved for exactly this, among active states — and never built until this phase's `OwnPositionMarker`. Nothing is drawn before the first GPS fix arrives; there is no last-known-position guess and no origin-corner placeholder.
 
 ### v1.7 — community submissions and admin
 
@@ -1202,4 +1219,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.7*
+*End of specification v1.8*

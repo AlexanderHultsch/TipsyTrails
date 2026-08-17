@@ -8,7 +8,7 @@ Self-hosted on a Raspberry Pi, reachable at `https://tipsytrails.ahultsch.com` t
 
 ## Status
 
-**Phases 0–7 are implemented.** Phase 8 is not built yet.
+**Phases 0–8 are implemented** — the full eight-phase plan in [`SPEC.md`](SPEC.md) Section 12. Phase 8's device-dependent Definition-of-Done items — install to a home screen, Lighthouse ≥ 90, time to interactive on a mid-range Android, API p95 on the Pi, and container memory under load — need a phone, a browser, or the Pi, none of which exist in this environment, and remain unverified.
 
 What exists today: a pnpm monorepo (`packages/shared`, `packages/api`,
 `packages/web`); a Fastify API on SQLite (WAL) with an idempotent migration
@@ -44,16 +44,37 @@ name with "Player #<id>" everywhere — leaderboard included — immediately
 and reversibly, without dropping you from the ranking or resetting anything
 you have earned.
 
-Three things are verified only as far as this development environment allows,
-and are called out rather than glossed: the map extract exists but has not
+The app installs to a home screen as a proper PWA: a manifest, icons, and one
+service worker that handles both the offline shell and push, reopening
+offline to a cached shell, your last-known fog, and a plain offline indicator
+rather than a blank screen. Position samples taken while offline queue in
+memory and post once the connection returns — a reload during that stretch
+starts the queue over, which is a stated limit, not an unnoticed gap. The fog
+you have revealed is cached per account and cleared on sign-out, so a shared
+device never shows the next player someone else's walked territory. Your own
+position now renders on the map, in the app's one accent colour, once a GPS
+fix arrives. A `/privacy` page states plainly what is stored and why, and
+links out for anything broader.
+`prefers-reduced-motion` turns off the fog dissolve and every other
+transition; contrast, focus states, and form labelling meet WCAG 2.1 AA
+against the app's near-monochrome palette; and every network failure now
+surfaces a message instead of failing silently.
+
+Six things are verified only as far as this development environment allows,
+and are called out rather than glossed: the map extract has been built and
+measures 9.4 MB, but it sits on the project owner's laptop and has not
 reached the server, so nothing has rendered against real tiles; the fog shader
 has never been
 compiled, because there is no GPU here — its layer class is tested against a
 fake WebGL context, which proves the call sequence and nothing about the GLSL;
 no push notification has ever been delivered, because there is no browser and
 no push service — the once-only, not-while-completed and dead-endpoint rules
-are tested against a faked sender, the wire is not; and no Docker image has
-been built, because there is no Docker daemon. What
+are tested against a faked sender, the wire is not; no Docker image has
+been built, because there is no Docker daemon; no screen reader has ever run
+against any of this, so whether the accessibility pass's automated contrast,
+focus and labelling checks add up to a sensibly narrated app is unknown; and
+installing to a home screen, on Android or iOS, is unproven for the same
+reason — no phone. What
 *has* been verified is the server itself, booted from a hand-assembled copy of
 the runtime image's file layout — it serves the API and the SPA, runs
 migrations, seeds the admin account and the city data, and imports all 170 bars
