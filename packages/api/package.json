@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "seed:admin": "node dist/db/seed-admin-cli.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

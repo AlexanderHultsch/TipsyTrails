@@ -57,7 +57,7 @@ describe('loadEnv', () => {
     expect(() => loadEnv({ ...validEnv, PUBLIC_ORIGIN: 'not-a-url' })).toThrow();
   });
 
-  it('parses successfully when ADMIN_USERNAME and ADMIN_PASSWORD are both omitted', () => {
+  it('parses successfully when ADMIN_USER and ADMIN_PASSWORD are both omitted', () => {
     expect(() => loadEnv(validEnv)).not.toThrow();
   });
 

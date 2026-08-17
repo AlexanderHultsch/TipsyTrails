@@ -7,13 +7,13 @@ const SEEDED_ADMIN_SECURITY_QUESTION =
   'Password recovery is not available for the seeded admin account.';
 
 export async function seedAdmin(db: Database.Database, env: Env): Promise<'seeded' | 'skipped'> {
-  if (!env.ADMIN_USERNAME || !env.ADMIN_PASSWORD) {
+  if (!env.ADMIN_USER || !env.ADMIN_PASSWORD) {
     return 'skipped';
   }
 
   const existing = db
     .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
-    .get(env.ADMIN_USERNAME);
+    .get(env.ADMIN_USER);
   if (existing) {
     return 'skipped';
   }
@@ -27,7 +27,7 @@ export async function seedAdmin(db: Database.Database, env: Env): Promise<'seede
       (username, password_hash, security_question, security_answer_hash, avatar_seed, is_admin, must_change_password, age_confirmed_at, created_at)
      VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)`,
   ).run(
-    env.ADMIN_USERNAME,
+    env.ADMIN_USER,
     passwordHash,
     SEEDED_ADMIN_SECURITY_QUESTION,
     securityAnswerHash,

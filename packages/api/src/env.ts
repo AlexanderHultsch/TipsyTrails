@@ -12,7 +12,7 @@ export const envSchema = z.object({
   PUBLIC_ORIGIN: z.url(),
   DATABASE_PATH: z.string().min(1),
   SESSION_SECRET: z.string().min(32),
-  ADMIN_USERNAME: z.string().optional(),
+  ADMIN_USER: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
   WEB_ROOT: z.string().transform(emptyToUndefined).optional(),
   TILES_DIR: z.string().default('/data/tiles'),

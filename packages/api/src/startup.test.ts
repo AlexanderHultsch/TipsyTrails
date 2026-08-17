@@ -79,12 +79,12 @@ describe('initialiseDatabase', () => {
     expect(usersCount()).toBe(usersBefore);
   });
 
-  it('seeds an admin when ADMIN_USERNAME and ADMIN_PASSWORD are present', async () => {
+  it('seeds an admin when ADMIN_USER and ADMIN_PASSWORD are present', async () => {
     dbPath = join(tmpdir(), `tipsytrails-startup-test-${randomUUID()}.db`);
     const env = loadEnv({
       ...baseEnv,
       DATABASE_PATH: dbPath,
-      ADMIN_USERNAME: 'admin',
+      ADMIN_USER: 'admin',
       ADMIN_PASSWORD: 'correct-horse',
     });
 

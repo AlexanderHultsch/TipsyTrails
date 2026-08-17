@@ -36,3 +36,43 @@ describe('runtime image contents', () => {
     },
   );
 });
+
+// SPEC.md Section 4.3: `docker compose exec tipsy-trails npm run seed:admin`
+// must resolve from the container's working directory. The runtime stage is
+// a `pnpm deploy` output, not the source tree, so `npm run` has nothing to
+// read unless package.json itself is copied in — nothing else in this
+// stage provides one.
+describe('npm run seed:admin (SPEC.md Section 4.3)', () => {
+  const apiPackageJson = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'packages/api/package.json'), 'utf-8'),
+  ) as { scripts: Record<string, string> };
+
+  it('the Dockerfile runtime stage COPYs package.json to the working directory', () => {
+    expect(runtimeStage).toMatch(
+      /COPY\s+(--\S+\s+)*\/app\/packages\/api\/package\.json\s+\.\/package\.json\b/,
+    );
+  });
+
+  it('packages/api/package.json defines a seed:admin script targeting the compiled dist output', () => {
+    expect(apiPackageJson.scripts['seed:admin']).toBe('node dist/db/seed-admin-cli.js');
+  });
+
+  it('the seed:admin script path matches where tsconfig.build.json actually emits it', () => {
+    const buildConfig = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'packages/api/tsconfig.build.json'), 'utf-8'),
+    ) as { compilerOptions: { outDir: string; rootDir: string } };
+    expect(
+      existsSync(
+        join(
+          REPO_ROOT,
+          'packages/api',
+          buildConfig.compilerOptions.rootDir,
+          'db/seed-admin-cli.ts',
+        ),
+      ),
+    ).toBe(true);
+    expect(apiPackageJson.scripts['seed:admin']).toBe(
+      `node ${buildConfig.compilerOptions.outDir}/db/seed-admin-cli.js`,
+    );
+  });
+});

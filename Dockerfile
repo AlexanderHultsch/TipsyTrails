@@ -38,6 +38,11 @@ WORKDIR /app
 #   public                 the built SPA
 #   data/seed              per-city grid + geojson             (routes/static-data.ts)
 #   data/cities             <slug>.json city config             (db/seed-city.ts)
+# package.json is not read at boot (CMD invokes dist/server.js directly) but
+# this stage is a `pnpm deploy` output, not the source tree, so nothing
+# named `npm run <script>` resolves here otherwise — SPEC.md Section 4.3's
+# `docker compose exec tipsy-trails npm run seed:admin` needs it present.
+COPY --from=build --chown=node:node /app/packages/api/package.json ./package.json
 COPY --from=build --chown=node:node /app/deploy/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages/api/dist ./dist
 COPY --from=build --chown=node:node /app/packages/api/migrations ./migrations

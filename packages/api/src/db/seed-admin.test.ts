@@ -60,7 +60,7 @@ function getAdmin(): {
 
 describe('seedAdmin', () => {
   it('seeds a single admin user with is_admin and must_change_password set', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
 
     const result = await seedAdmin(db, env);
 
@@ -73,7 +73,7 @@ describe('seedAdmin', () => {
   });
 
   it('stores an argon2id password hash', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
 
     await seedAdmin(db, env);
 
@@ -81,7 +81,7 @@ describe('seedAdmin', () => {
   });
 
   it('hashes the seeded password so it can be verified and wrong passwords are rejected', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
 
     await seedAdmin(db, env);
 
@@ -91,7 +91,7 @@ describe('seedAdmin', () => {
   });
 
   it('is a no-op and returns skipped on a second run', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
 
     await seedAdmin(db, env);
     const hashBefore = getAdmin().password_hash;
@@ -106,7 +106,7 @@ describe('seedAdmin', () => {
   it('does not re-hash and overwrite the stored hash when ADMIN_PASSWORD has since changed', async () => {
     const firstEnv = loadEnv({
       ...baseEnv,
-      ADMIN_USERNAME: 'admin',
+      ADMIN_USER: 'admin',
       ADMIN_PASSWORD: 'correct-horse',
     });
     await seedAdmin(db, firstEnv);
@@ -114,7 +114,7 @@ describe('seedAdmin', () => {
 
     const secondEnv = loadEnv({
       ...baseEnv,
-      ADMIN_USERNAME: 'admin',
+      ADMIN_USER: 'admin',
       ADMIN_PASSWORD: 'a-different-password',
     });
     const result = await seedAdmin(db, secondEnv);
@@ -124,7 +124,7 @@ describe('seedAdmin', () => {
   });
 
   it('leaves must_change_password at 0 once the admin has changed it', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
     await seedAdmin(db, env);
 
     db.prepare("UPDATE users SET must_change_password = 0 WHERE username = 'admin'").run();
@@ -135,7 +135,7 @@ describe('seedAdmin', () => {
   });
 
   it('skips and creates no user when ADMIN_PASSWORD is absent', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'admin' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin' });
 
     const result = await seedAdmin(db, env);
 
@@ -143,7 +143,7 @@ describe('seedAdmin', () => {
     expect(usersCount()).toBe(0);
   });
 
-  it('skips and creates no user when ADMIN_USERNAME is absent', async () => {
+  it('skips and creates no user when ADMIN_USER is absent', async () => {
     const env = loadEnv({ ...baseEnv, ADMIN_PASSWORD: 'correct-horse' });
 
     const result = await seedAdmin(db, env);
@@ -152,14 +152,27 @@ describe('seedAdmin', () => {
     expect(usersCount()).toBe(0);
   });
 
+  it('ignores the retired ADMIN_USERNAME name and skips when only it is set', async () => {
+    const env = loadEnv({
+      ...baseEnv,
+      ADMIN_USERNAME: 'admin',
+      ADMIN_PASSWORD: 'correct-horse',
+    });
+
+    const result = await seedAdmin(db, env);
+
+    expect(result).toBe('skipped');
+    expect(usersCount()).toBe(0);
+  });
+
   it('treats a username differing only in case as already existing', async () => {
-    const env = loadEnv({ ...baseEnv, ADMIN_USERNAME: 'Admin', ADMIN_PASSWORD: 'correct-horse' });
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'Admin', ADMIN_PASSWORD: 'correct-horse' });
     await seedAdmin(db, env);
     expect(usersCount()).toBe(1);
 
     const clashingEnv = loadEnv({
       ...baseEnv,
-      ADMIN_USERNAME: 'admin',
+      ADMIN_USER: 'admin',
       ADMIN_PASSWORD: 'correct-horse',
     });
     const result = await seedAdmin(db, clashingEnv);
