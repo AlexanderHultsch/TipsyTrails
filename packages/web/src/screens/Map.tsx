@@ -13,6 +13,7 @@ import { useBarMarkers } from '../map/bars/useBarMarkers.js';
 import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
+import { useOwnPositionMarker } from '../map/position/useOwnPositionMarker.js';
 import {
   hasSeenMasteringExplainer,
   markMasteringExplainerSeen,
@@ -76,6 +77,7 @@ export function MapScreen() {
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
   useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));
+  useOwnPositionMarker(mapInstance, trackingState.lastPosition);
   const visits = useVisits(
     discoveredBars,
     trackingState.visitUpdates,
