@@ -43,11 +43,13 @@ declare module 'fastify' {
     // directory. Null under the same conditions `grid` is null.
     districtIdByGridIndex: Map<number, number> | null;
     // SPEC.md Sections 5.9, 7.9, Phase 5 step 5: resolved once at boot from
-    // the VAPID_* env vars (push/config.ts). Null means push is disabled —
-    // absent config, incomplete config, or config `webpush.setVapidDetails`
-    // itself rejected — and maintenance.ts's dispatch step is a no-op the
-    // same way the grid/tiles routes above answer with a clear error rather
-    // than crashing when their own optional input is missing.
+    // the VAPID_* env vars, or else the on-disk key file loaded/generated
+    // beside DATABASE_PATH (push/config.ts). Null means push is disabled —
+    // incomplete env config, an unusable key file, or config
+    // `webpush.setVapidDetails` itself rejected — and maintenance.ts's
+    // dispatch step is a no-op the same way the grid/tiles routes above
+    // answer with a clear error rather than crashing when their own
+    // optional input is missing.
     pushSender: PushSender | null;
   }
 }
@@ -119,19 +121,25 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
 
   // Section 5.9/7.9/Phase 5 step 5: push is an enhancement (task brief) —
   // PUBLIC_ORIGIN and SESSION_SECRET above remain the only variables that
-  // stop the app from booting. Absent VAPID_* config is the ordinary,
-  // silent-at-info-level case; some but not all three set almost certainly
-  // means a typo, so it gets a warning — either way `pushSender` ends up
+  // stop the app from booting. All three VAPID_* env vars set wins
+  // outright; none set loads or generates the on-disk key file beside
+  // DATABASE_PATH (the ordinary Pi deployment, silent at info level); some
+  // but not all three set almost certainly means a typo, so it gets a
+  // warning; a key file present but unreadable/malformed, or one that
+  // could not be written, gets a loud error the same way a missing
+  // grid.bin or tile extract does above — either way `pushSender` ends up
   // null and every push feature degrades to "disabled" rather than the
   // container refusing to start.
   const vapid = resolveVapidConfig(env);
   let pushSender: PushSender | null = null;
-  if (vapid.status === 'disabled') {
-    app.log.info('Web Push is not configured (VAPID_* env vars absent); push reminders are off.');
-  } else if (vapid.status === 'misconfigured') {
+  if (vapid.status === 'misconfigured') {
     app.log.warn(
       `Web Push is misconfigured: ${vapid.missing.join(', ')} not set. Set all three VAPID_* ` +
         'variables to enable push, or none to leave it disabled. Push reminders are off.',
+    );
+  } else if (vapid.status === 'unavailable') {
+    app.log.error(
+      `Web Push key material is unavailable (${vapid.reason}); push reminders are off.`,
     );
   } else {
     pushSender = createWebPushSender(vapid.config, app.log);

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import webpush from 'web-push';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -18,12 +19,20 @@ const migrationsDir = fileURLToPath(new URL('../migrations', import.meta.url));
 // routes/static-data.test.ts uses to reach data/seed.
 const REAL_SEED_DIR = fileURLToPath(new URL('../../../data/seed', import.meta.url));
 
+// A directory private to this file rather than the literal '/tmp/test.db'
+// most describe blocks below used to share — `DATABASE_PATH` is now also
+// where resolveVapidConfig (SPEC.md Section 5.9) looks for/generates the
+// persisted VAPID key file, and a shared path would mean this file's own
+// health/static/grid tests silently write into the same key file every
+// other test file in the suite reads and writes too.
+const vapidTestDir = join(tmpdir(), `tipsytrails-app-test-vapid-${randomUUID()}`);
+
 const testEnv: Env = {
   NODE_ENV: 'test',
   API_HOST: '0.0.0.0',
   API_PORT: 3000,
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
-  DATABASE_PATH: '/tmp/test.db',
+  DATABASE_PATH: join(vapidTestDir, 'tipsytrails.db'),
   SESSION_SECRET: '0123456789012345678901234567890123',
   TILES_DIR: '/data/tiles',
 };
@@ -51,6 +60,7 @@ afterAll(() => {
       rmSync(file);
     }
   }
+  rmSync(vapidTestDir, { recursive: true, force: true });
 });
 
 describe('GET /api/health', () => {
@@ -231,17 +241,39 @@ describe('grid.bin loaded at boot', () => {
 });
 
 describe('pushSender decoration (SPEC.md Sections 5.9, 7.9, Phase 5 step 5)', () => {
-  it('is null and the app still boots when no VAPID_* variable is set', async () => {
-    const app = buildApp(testEnv, db);
+  // Its own directory per test, distinct from `vapidTestDir` above — this
+  // block is the one that actually exercises the on-disk key file (SPEC.md
+  // Section 5.9) directly, so it needs one nothing else in this file (or
+  // the suite) can collide with.
+  let pushVapidDir: string;
 
-    expect(app.pushSender).toBeNull();
+  beforeEach(() => {
+    pushVapidDir = join(tmpdir(), `tipsytrails-app-test-push-vapid-${randomUUID()}`);
+  });
+
+  afterEach(() => {
+    rmSync(pushVapidDir, { recursive: true, force: true });
+  });
+
+  it('generates and persists a key file, and boots with a working sender, when no VAPID_* variable is set', async () => {
+    const app = buildApp({ ...testEnv, DATABASE_PATH: join(pushVapidDir, 'tipsytrails.db') }, db);
+
+    expect(app.pushSender).not.toBeNull();
+    expect(existsSync(join(pushVapidDir, CONFIG.VAPID_KEY_FILENAME))).toBe(true);
 
     const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
     expect(healthResponse.statusCode).toBe(200);
   });
 
   it('is null and the app still boots when only some VAPID_* variables are set', async () => {
-    const app = buildApp({ ...testEnv, VAPID_PUBLIC_KEY: 'only-the-public-key' }, db);
+    const app = buildApp(
+      {
+        ...testEnv,
+        DATABASE_PATH: join(pushVapidDir, 'tipsytrails.db'),
+        VAPID_PUBLIC_KEY: 'only-the-public-key',
+      },
+      db,
+    );
 
     expect(app.pushSender).toBeNull();
 
@@ -249,11 +281,12 @@ describe('pushSender decoration (SPEC.md Sections 5.9, 7.9, Phase 5 step 5)', ()
     expect(healthResponse.statusCode).toBe(200);
   });
 
-  it('is a working sender when all three VAPID_* variables are well-formed', async () => {
+  it('is a working sender when all three VAPID_* variables are well-formed, and leaves no key file behind', async () => {
     const keys = webpush.generateVAPIDKeys();
     const app = buildApp(
       {
         ...testEnv,
+        DATABASE_PATH: join(pushVapidDir, 'tipsytrails.db'),
         VAPID_PUBLIC_KEY: keys.publicKey,
         VAPID_PRIVATE_KEY: keys.privateKey,
         VAPID_SUBJECT: 'mailto:admin@example.com',
@@ -262,6 +295,7 @@ describe('pushSender decoration (SPEC.md Sections 5.9, 7.9, Phase 5 step 5)', ()
     );
 
     expect(app.pushSender).not.toBeNull();
+    expect(existsSync(join(pushVapidDir, CONFIG.VAPID_KEY_FILENAME))).toBe(false);
   });
 
   it('is null and the app still boots when VAPID_SUBJECT is not mailto: or https:', async () => {
@@ -269,12 +303,25 @@ describe('pushSender decoration (SPEC.md Sections 5.9, 7.9, Phase 5 step 5)', ()
     const app = buildApp(
       {
         ...testEnv,
+        DATABASE_PATH: join(pushVapidDir, 'tipsytrails.db'),
         VAPID_PUBLIC_KEY: keys.publicKey,
         VAPID_PRIVATE_KEY: keys.privateKey,
         VAPID_SUBJECT: 'not-a-valid-subject',
       },
       db,
     );
+
+    expect(app.pushSender).toBeNull();
+
+    const healthResponse = await app.inject({ method: 'GET', url: '/api/health' });
+    expect(healthResponse.statusCode).toBe(200);
+  });
+
+  it('is null and the app still boots when the persisted key file is malformed', async () => {
+    mkdirSync(pushVapidDir, { recursive: true });
+    writeFileSync(join(pushVapidDir, CONFIG.VAPID_KEY_FILENAME), 'not json');
+
+    const app = buildApp({ ...testEnv, DATABASE_PATH: join(pushVapidDir, 'tipsytrails.db') }, db);
 
     expect(app.pushSender).toBeNull();
 

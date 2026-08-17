@@ -14,12 +14,19 @@ import type { Env } from '../env.js';
 
 const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url));
 
+// A directory private to this file rather than a literal shared path —
+// DATABASE_PATH is also where resolveVapidConfig (SPEC.md Section 5.9)
+// looks for/generates the persisted VAPID key file, and a path shared
+// across test files would mean this suite's own app builds silently
+// generate/read the same key file as every other route test file.
+const vapidTestDir = join(tmpdir(), `tipsytrails-tiles-test-vapid-${randomUUID()}`);
+
 const baseEnv: Env = {
   NODE_ENV: 'test',
   API_HOST: '0.0.0.0',
   API_PORT: 3000,
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
-  DATABASE_PATH: '/tmp/test.db',
+  DATABASE_PATH: join(vapidTestDir, 'tipsytrails.db'),
   SESSION_SECRET: '0123456789012345678901234567890123',
   TILES_DIR: '/data/tiles',
 };
@@ -46,6 +53,7 @@ afterAll(() => {
       rmSync(file);
     }
   }
+  rmSync(vapidTestDir, { recursive: true, force: true });
 });
 
 describe('GET /tiles/:filename with a present extract', () => {

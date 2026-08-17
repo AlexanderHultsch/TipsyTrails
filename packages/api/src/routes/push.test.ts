@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import webpush from 'web-push';
@@ -18,10 +19,17 @@ const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url)
 // forbids key material anywhere in the repository, including tests).
 const vapidKeys = webpush.generateVAPIDKeys();
 
+// A directory private to this file rather than the literal '/tmp/test.db'
+// this used to share with most other route test files — DATABASE_PATH is
+// also where resolveVapidConfig (SPEC.md Section 5.9) looks for/generates
+// the persisted VAPID key file, and this is the one file whose tests
+// actually depend on that behaviour.
+const vapidTestDir = join(tmpdir(), `tipsytrails-push-test-vapid-${randomUUID()}`);
+
 const baseEnv = {
   NODE_ENV: 'test',
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
-  DATABASE_PATH: '/tmp/test.db',
+  DATABASE_PATH: join(vapidTestDir, 'tipsytrails.db'),
   SESSION_SECRET: '0123456789012345678901234567890123',
 };
 
@@ -103,6 +111,7 @@ afterEach(() => {
       rmSync(file);
     }
   }
+  rmSync(vapidTestDir, { recursive: true, force: true });
 });
 
 describe('GET /api/push/vapid-public-key', () => {
@@ -111,13 +120,39 @@ describe('GET /api/push/vapid-public-key', () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it('returns null when push is not configured', async () => {
+  it('returns a generated public key, persisted beside DATABASE_PATH, when no VAPID_* variable is set', async () => {
     const { cookie } = await registerUser('walker');
 
     const response = await injectWithOrigin({
       method: 'GET',
       url: '/api/push/vapid-public-key',
       headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const { publicKey } = response.json() as { publicKey: string | null };
+    expect(typeof publicKey).toBe('string');
+    const persisted = JSON.parse(
+      readFileSync(join(vapidTestDir, CONFIG.VAPID_KEY_FILENAME), 'utf8'),
+    ) as { publicKey: string };
+    expect(publicKey).toBe(persisted.publicKey);
+  });
+
+  it('returns null when only some VAPID_* variables are set (misconfigured)', async () => {
+    const env = loadEnv({ ...baseEnv, VAPID_PUBLIC_KEY: 'only-the-public-key' });
+    const misconfiguredApp = buildApp(env, db);
+    const registerResponse = await misconfiguredApp.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      headers: { origin: baseEnv.PUBLIC_ORIGIN },
+      payload: { ...validRegisterBody, username: 'walker-misconfigured' },
+    });
+    const cookie = extractSessionCookie(registerResponse);
+
+    const response = await misconfiguredApp.inject({
+      method: 'GET',
+      url: '/api/push/vapid-public-key',
+      headers: { origin: baseEnv.PUBLIC_ORIGIN, cookie },
     });
 
     expect(response.statusCode).toBe(200);

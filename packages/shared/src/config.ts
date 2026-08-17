@@ -65,6 +65,7 @@ export const CONFIG = {
   },
 
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
+  VAPID_KEY_FILENAME: 'vapid-keys.json', // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;
 
 // The single ms→s boundary required by rule 6 in Section 0.

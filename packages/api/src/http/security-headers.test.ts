@@ -12,10 +12,17 @@ import { loadEnv } from '../env.js';
 
 const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url));
 
+// A directory private to this file rather than a literal shared path —
+// DATABASE_PATH is also where resolveVapidConfig (SPEC.md Section 5.9)
+// looks for/generates the persisted VAPID key file, and a path shared
+// across test files would mean this suite's own app builds silently
+// generate/read the same key file as every other route test file.
+const vapidTestDir = join(tmpdir(), `tipsytrails-security-headers-test-vapid-${randomUUID()}`);
+
 const baseEnv = {
   NODE_ENV: 'test',
   PUBLIC_ORIGIN: 'https://tipsytrails.ahultsch.com',
-  DATABASE_PATH: '/tmp/test.db',
+  DATABASE_PATH: join(vapidTestDir, 'tipsytrails.db'),
   SESSION_SECRET: '0123456789012345678901234567890123',
 };
 
@@ -36,6 +43,7 @@ afterEach(() => {
       rmSync(file);
     }
   }
+  rmSync(vapidTestDir, { recursive: true, force: true });
 });
 
 describe('security headers', () => {
