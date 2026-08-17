@@ -7,7 +7,7 @@ Phase N", no longer applies: every phase is built, and what remains is not
 more building but the operational work of actually running this on the Pi,
 plus the handful of spec items nobody has built at all (Section 3 below).
 
-`SPEC.md` is the source of truth (now v1.8); `CLAUDE.md` holds the
+`SPEC.md` is the source of truth (now v1.10); `CLAUDE.md` holds the
 guardrails. This file only records where things stand, what is deliberately
 unfinished, and what to do first. Keep it current rather than replacing it
 wholesale again — there is no next phase to write it "before" any more.
@@ -21,9 +21,9 @@ wholesale again — there is no next phase to write it "before" any more.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Tests                 | 694 green — shared 165, api 328, web 201                   |
-| Spec version          | 1.8                                                        |
-| `main` at             | `7b409fe`                                                  |
+| Tests                 | 713 green — shared 165, api 347, web 201                   |
+| Spec version          | 1.10                                                       |
+| `main` at             | `3dc3522`                                                  |
 
 Everything was committed and pushed at handover.
 
@@ -51,69 +51,84 @@ stale `dist`; that gap is accepted, not missed.
 
 ## 2. The owner's list — the whole critical path
 
-Nothing below is buildable from this sandbox any more. Every item needs
-either the owner's own environment (the Pi, a phone, a browser, the platform
-chat) or a decision only the owner can make (a secret value). This supersedes
-the old "what needs the owner" table — Phase 8 added nothing new to build
-from here, only more items of exactly this kind.
+Three items that used to open this list are closed. Not deleted — recorded
+briefly so nobody reopens them:
 
-**Getting it running:**
+- **Both platform-chat questions** (what `admin: yes` injects, what
+  `deploy.sh` does to `.env`) are answered: the platform repository
+  (`PiMultiServiceServer`) was read directly, not inferred, and `SPEC.md`
+  Section 4.3 was rewritten wholesale as a result (v1.10 changelog).
+- **VAPID key provisioning** is no longer a manual step. Keys generate
+  themselves on first boot and persist beside the database (Section 5.9).
+  Leave the three `VAPID_*` variables unset on the Pi.
 
-1. **The tile extract onto the Pi.** Built and measured at 9.4 MB, sitting on
-   the owner's laptop as `karlsruhe.2026-08.pmtiles`. What remains is copying
-   it into the Pi's `TILES_DIR`, nothing more — the file itself does not need
-   rebuilding. `scripts/extract-tiles.sh` now exists (this session) to
-   regenerate it from a Geofabrik extract via Planetiler if it ever needs to
-   be, but the one real extract was still produced by hand and the script has
-   never been run end to end — no Java, no Planetiler jar, and no route to
-   Geofabrik in this sandbox.
-2. **The Cloudflare Cache Rule for `/tiles/*`** (Section 4.1). Cloudflare does
-   not cache `.pmtiles` by default; without this rule every range request
-   reaches the Pi and Phase 2's `cf-cache-status: HIT` check can never pass.
-3. **The first real `docker build`.** Every image change so far has been
-   verified by hand-assembling the runtime layout (`pnpm deploy --prod
---legacy` plus `dist`, `migrations`, `public`, `data/seed`, `data/cities`)
-   and booting the server from it — that boot is real and passes, but
-   `docker build` itself remains unproven. `packages/api/src/docker-image.test.ts`
-   asserts the Dockerfile copies every directory the server reads at boot,
-   because a missing `data/cities` once crashed the container while every
-   test was green.
-4. **The platform contract is now read, not inferred.** Both questions that
-   used to sit here are answered, and Section 4.3 of `SPEC.md` was rewritten
-   wholesale as a result (see the v1.10 changelog). `admin: yes` is only
-   environment-variable injection — no shared user store — so it is correct
-   for this app. What it injects is `ADMIN_USER`, **not** `ADMIN_USERNAME`,
-   and it fully overwrites `apps/tipsy-trails/.env` on every deploy,
-   preserving only `SESSION_SECRET`.
-5. **`PUBLIC_ORIGIN`, `PORT` and `DB_PATH` go in the platform's own
-   `docker-compose.yml`**, in this site's `environment:` block. `deploy.sh`
-   never writes them and this app refuses to boot without `PUBLIC_ORIGIN`.
-   That file is not overwritten by a deploy, unlike the three admin values.
-6. **VAPID keys are no longer provisioned by hand.** They are generated on
-   first boot and persisted beside the database on the data volume, because
-   anything placed in `apps/tipsy-trails/.env` is wiped by the next deploy.
-   The three `VAPID_*` variables remain an all-or-nothing override for other
-   deployments; on the Pi they should be left unset. **Never write a key
-   value into any file** — `.env`, `.env.example`, a test, a comment, or this
-   handover (`CLAUDE.md`). Name the variables, never their values.
+**Before running anything on the Pi: `deploy.sh --fresh` deletes the data
+volume.** That volume is this app's database and its tile extract — every
+account, all fog progress, every mastered bar, and now the VAPID key file
+too (Section 4.3). There is no separate backup beyond whatever C7's existing
+Pi backup job covers. `--fresh` against this site is data loss, not a reset.
+
+Nothing below is buildable from this sandbox. Every item needs either the
+owner's own environment (the Pi, a phone, a browser) or a decision only the
+owner can make. In dependency order — independent steps can proceed even if
+an earlier one is stuck:
+
+1. **The tile extract onto the Pi.** Independent of everything else here.
+   Built and measured at 9.4 MB, sitting on the owner's laptop as
+   `karlsruhe.2026-08.pmtiles`; copy it into the Pi's `TILES_DIR`, nothing
+   more to build. `scripts/extract-tiles.sh` can regenerate it but has never
+   been run end to end.
+2. **The Cloudflare Cache Rule for `/tiles/*`.** Independent of everything
+   else here. Without it Cloudflare never caches `.pmtiles` and every range
+   request reaches the Pi.
+3. **`PUBLIC_ORIGIN`, `PORT`, `DB_PATH` in the platform's own
+   `docker-compose.yml`**, this site's `environment:` block (exact values in
+   `SPEC.md` Section 4.3). Independent of 1–2. `deploy.sh` never writes
+   these and the app refuses to boot without `PUBLIC_ORIGIN` — has to be in
+   place before the site can come up at all.
+4. **Prove the `docker build` in isolation before adding this site to
+   `sites.conf`.** This repository's root `Dockerfile` has never been built
+   anywhere, not even in this sandbox — every image change so far was
+   verified by hand-assembling the runtime layout and booting the server
+   from it, not by the real build. `deploy.sh` builds every site on the Pi
+   in one pass under `set -euo pipefail`: a failing build here, or a failing
+   `seed:admin` right after it, aborts the whole deployment run — every
+   other site's rebuild included. Build and boot the image on its own first.
+   Blocks step 5.
+5. **Add the `tipsy-trails` line to `sites.conf` and let `deploy.sh` run.**
+   Depends on 3 and 4. Confirm `npm run seed:admin` actually succeeds
+   against the real container — it is idempotent, exits zero when there is
+   nothing to do, and never resets a changed password
+   (`packages/api/src/db/seed-admin-cli.ts`), but it has only ever run in
+   tests so far.
+6. **Open Item O10 — measure `trustProxy`'s real hop count.** Depends on 5:
+   needs one real request over the public internet against the live
+   deployment (`SPEC.md` Section 9.4 has the exact procedure). Until it's
+   measured and `trustProxy` set to match, the rate limits cannot be relied
+   on for the Pi deployment — the chain in front of the app is longer than
+   one hop and nobody has counted how many of them append to
+   `X-Forwarded-For`. Do the one-off header log the section describes and
+   stop there: this must not become a reason to start logging client IPs on
+   an ongoing basis, which Section 10.2's data minimisation exists to
+   prevent.
 
 **Needs a device, a browser, or the Pi under load — cannot be closed from a
 sandbox regardless of who is asking:**
 
-6. Real push delivery, on Android and on an installed iOS PWA — the
+7. Real push delivery, on Android and on an installed iOS PWA — the
    once-only, not-while-completed and dead-endpoint rules are tested against
    a faked sender (`packages/api`); the wire to a real push service has never
    been exercised.
-7. Install to the home screen, on Android and on iOS.
-8. Lighthouse mobile performance ≥ 90.
-9. Time to interactive < 3 s on a mid-range Android over simulated 4G.
-10. API p95 latency < 150 ms measured on the Pi under 10 concurrent users.
-11. Total container memory under load < 400 MB.
-12. A screen-reader pass. The automated accessibility checks
+8. Install to the home screen, on Android and on iOS.
+9. Lighthouse mobile performance ≥ 90.
+10. Time to interactive < 3 s on a mid-range Android over simulated 4G.
+11. API p95 latency < 150 ms measured on the Pi under 10 concurrent users.
+12. Total container memory under load < 400 MB.
+13. A screen-reader pass. The automated accessibility checks
     (`packages/web/src/App.a11y.test.tsx`) cover contrast, focus states,
     form labelling, and the accent-colour rule — none of them touch whether
     any of it is announced sensibly, because no screen reader exists here.
-13. The WebGL fog shader's first real compile. There is no GPU in this
+14. The WebGL fog shader's first real compile. There is no GPU in this
     sandbox; `packages/web/src/map/fog/webgl-fog-layer.test.ts` exercises the
     layer class's call sequence against a fake WebGL context, which proves
     nothing about the GLSL itself.
@@ -312,6 +327,21 @@ Each cost a round trip. Each looked correct on first reading.
   every step immediately; do not batch commits.
 - **Commit messages with embedded double quotes break shell quoting.** Use
   `git commit -F <file>` with a heredoc.
+- **Three defects came from inferring the platform contract instead of
+  reading it, and none of them was reachable from this repository's own
+  verification loop.** The wrong admin variable name (`ADMIN_USERNAME`
+  where the platform injects `ADMIN_USER`) and the VAPID keys once slated
+  for a file `deploy.sh` overwrites on every deploy would both have produced
+  a deployment that looked complete — container up, pages loading — while
+  silently missing an admin account, or silently losing push weeks later
+  with no error at any point. `pnpm typecheck`/`lint`/`test` cannot catch
+  either: they are compliance with another system's contract, not this
+  codebase's own logic. The missing `seed:admin` script is the one that
+  would have announced itself — but only the first time `deploy.sh` actually
+  ran against the real platform, aborting that whole Pi's deploy run, every
+  other site's rebuild along with it. All three closed only once
+  `PiMultiServiceServer` was read directly (v1.10 changelog) — it had been
+  inferred, not read, for eight phases.
 
 ---
 
