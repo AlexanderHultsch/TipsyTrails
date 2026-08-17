@@ -36,6 +36,13 @@ export const CONFIG = {
   // running the aggregation queries 60x less often than MAINTENANCE_INTERVAL_MS.
   BADGE_EVAL_INTERVAL_MS: 60 * 60 * 1000,
 
+  // Switching a brand-new database to WAL needs an exclusive lock and does not
+  // go through SQLite's busy handler, so two processes opening the same fresh
+  // file at once can collide — see 4.3. Total budget for getting there, and the
+  // wait between attempts.
+  DB_WAL_RETRY_BUDGET_MS: 5000,
+  DB_WAL_RETRY_INTERVAL_MS: 50,
+
   // Section 5.3: username length bounds are spec-defined; password minimum is
   // not stated by SPEC.md and was chosen by the auth route implementation.
   USERNAME_MIN_LENGTH: 3,
