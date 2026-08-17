@@ -3,6 +3,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './index.js';
 import { runMigrations } from './migrate.js';
@@ -72,6 +73,24 @@ describe('runMigrations', () => {
     expect(row?.count).toBe(1);
 
     db.close();
+  });
+
+  it('takes the write lock before reading the applied set', () => {
+    const db = openDatabase(dbPath);
+    runMigrations(db, migrationsDir);
+
+    const other = new Database(dbPath, { timeout: 0 });
+    db.exec('BEGIN IMMEDIATE');
+
+    try {
+      expect(() => runMigrations(other, migrationsDir)).toThrow(
+        expect.objectContaining({ code: 'SQLITE_BUSY' }),
+      );
+    } finally {
+      db.exec('ROLLBACK');
+      other.close();
+      db.close();
+    }
   });
 
   it('enables foreign key enforcement', () => {
