@@ -78,22 +78,24 @@ from here, only more items of exactly this kind.
    asserts the Dockerfile copies every directory the server reads at boot,
    because a missing `data/cities` once crashed the container while every
    test was green.
-4. **Two questions still open with the platform chat:**
-   - What does `admin: yes|no` in `sites.conf` actually do? If it only
-     injects the shared `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `yes` is fine. If
-     it writes into a shared user table, use `no` — this app has its own
-     `users` table.
-   - Does the Cloudflare route for `tipsytrails.ahultsch.com` point at the
-     platform's Caddy?
-5. **The three `VAPID_*` variables**, in the Pi's `apps/tipsy-trails/.env`:
-   `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Without them the
-   container boots normally and logs once that push is off; with some but
-   not all of them it warns about a partial configuration. Generate a keypair
-   with `web-push`'s `generateVAPIDKeys()` or an equivalent P-256 generator.
-   **Never write a key value into any file** — `.env`, `.env.example`, a
-   test, a comment, or this handover — `.env` is gitignored and
-   `.env.example` documents names and shapes only (`CLAUDE.md`). Name the
-   variables, never their values.
+4. **The platform contract is now read, not inferred.** Both questions that
+   used to sit here are answered, and Section 4.3 of `SPEC.md` was rewritten
+   wholesale as a result (see the v1.10 changelog). `admin: yes` is only
+   environment-variable injection — no shared user store — so it is correct
+   for this app. What it injects is `ADMIN_USER`, **not** `ADMIN_USERNAME`,
+   and it fully overwrites `apps/tipsy-trails/.env` on every deploy,
+   preserving only `SESSION_SECRET`.
+5. **`PUBLIC_ORIGIN`, `PORT` and `DB_PATH` go in the platform's own
+   `docker-compose.yml`**, in this site's `environment:` block. `deploy.sh`
+   never writes them and this app refuses to boot without `PUBLIC_ORIGIN`.
+   That file is not overwritten by a deploy, unlike the three admin values.
+6. **VAPID keys are no longer provisioned by hand.** They are generated on
+   first boot and persisted beside the database on the data volume, because
+   anything placed in `apps/tipsy-trails/.env` is wiped by the next deploy.
+   The three `VAPID_*` variables remain an all-or-nothing override for other
+   deployments; on the Pi they should be left unset. **Never write a key
+   value into any file** — `.env`, `.env.example`, a test, a comment, or this
+   handover (`CLAUDE.md`). Name the variables, never their values.
 
 **Needs a device, a browser, or the Pi under load — cannot be closed from a
 sandbox regardless of who is asking:**

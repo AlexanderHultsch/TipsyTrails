@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.9
+**Version:** 1.10
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -172,9 +172,32 @@ TipsyTrails/
 
 ### 4.3 Deployment
 
-Build happens on the Pi. Push to `main` → SSH to Pi → `git pull && docker compose up -d --build`.
+There are two deployment paths. The diagram in Section 4 and this repository's own `docker-compose.yml` / `caddy/Caddyfile` describe the standalone, two-container path — unaffected by anything below and correct for anyone self-hosting outside the Pi.
 
-Multi-stage Dockerfiles; the frontend build stage runs on the Pi (arm64).
+**The Pi path.** What follows was verified by reading the platform repository directly (`AlexanderHultsch/PiMultiServiceServer`), not inferred, and replaces every earlier description of it back to v1.2.2.
+
+The platform's `~/pi-server/sites.conf` carries one line per site, four whitespace-separated fields — `name repo_url host admin`, no port field. This app's line names it `tipsy-trails` and sets `admin: yes`. Deployment is a local build, not a registry pull: the platform's own `docker-compose.yml` has `build: ./apps/tipsy-trails` for this site, and `deploy.sh` runs `docker compose up -d --build` against it. The `Dockerfile` this builds is the one at this repository's root — not `packages/api/Dockerfile` or `packages/web/Dockerfile`, which serve only the standalone path — and it must sit at the repository root for the platform to find it. `PORT` is a hardcoded convention across the whole platform, `3000`, set identically in its `docker-compose.yml` and its `Caddyfile`; it is not read from `sites.conf`.
+
+**What `admin: yes` actually does.** `deploy.sh` writes `apps/tipsy-trails/.env` on every deploy, containing *exactly three* variables — `SESSION_SECRET`, `ADMIN_USER` (not `ADMIN_USERNAME`), `ADMIN_PASSWORD` — as a full overwrite (`>`) each time. Only `SESSION_SECRET` survives a redeploy: `deploy.sh` reads the value already in the file back out before overwriting it, and writes the same value back. `ADMIN_USER` and `ADMIN_PASSWORD` come from a single shared `~/pi-server/admin.env` — one credential pair reused across every `admin: yes` site on the Pi. This is not a shared user store: the platform holds no user table and does no hashing of its own. It only ever supplies these three values; this app's `users` table (Section 5.3) and its argon2id hashing are entirely its own, untouched by the platform.
+
+**Everything else is manual, and it persists — unlike the three values above.** `PUBLIC_ORIGIN` and any other variable this app needs is *not* written by `deploy.sh`; it must be added by hand to the platform's own `docker-compose.yml`, in this site's `environment:` block, the same place `PORT` and `DB_PATH` already live for the Pi's other sites. `deploy.sh` never touches `docker-compose.yml`, so values placed there survive every redeploy undisturbed. This app refuses to boot without `PUBLIC_ORIGIN` (`packages/api/src/env.ts`), and nothing on the platform side sets it, so the block must read:
+
+```yaml
+environment:
+  - PORT=3000
+  - DB_PATH=/data/db/tipsy.db
+  - PUBLIC_ORIGIN=https://tipsytrails.ahultsch.com
+```
+
+**The seed script must exist and must succeed, every time.** After bringing containers up, `deploy.sh` runs `docker compose exec tipsy-trails npm run seed:admin` under `set -euo pipefail`. A missing script, or one that exits non-zero, aborts the entire deploy run — every other site's rebuild and the final `docker compose restart caddy` along with it. `packages/api/package.json` must define this script, and it must be idempotent: this app already seeds the admin account at boot (`initialiseDatabase`, Section 13.4 — a no-op once a user with that username exists), so `seed:admin` has to be safe to run in addition to that on every single deploy, not a replacement for it. The simplest correct form calls the same seeding insert against the already-migrated database and exits 0 whether it seeded or found the account already there.
+
+**Storage.** The data volume is `./data/tipsy-trails:/data` on the platform side — host `~/pi-server/data/tipsy-trails/`, container `/data`, created by Docker on first start. `DATABASE_PATH`/`DB_PATH` above (`/data/db/tipsy.db`) lives under it. So does the map extract: `TILES_DIR`'s existing default, `/data/tiles` (`packages/api/src/env.ts`), already resolves correctly under this layout with no configuration change — the extract belongs at host `~/pi-server/data/tipsy-trails/tiles/<filename>`.
+
+**`deploy.sh --fresh` destroys that entire volume before rebuilding** — `sudo rm -rf data/tipsy-trails`. For a site on this Pi whose `/data` is a cache, that costs nothing. Here it is the database and the tile extract: every account, all fog progress, every mastered bar. There is no separate backup for it beyond whatever C7's existing Pi backup job already covers. `--fresh` against this site is data loss, not a reset.
+
+**TLS.** Caddy terminates none — `auto_https off` in its Caddyfile — Cloudflare's edge does. The full chain is browser → Cloudflare edge → Cloudflare Tunnel → the `cloudflared` container → Caddy → this app's container. The platform's `Caddyfile` sets neither `trusted_proxies` nor a `header_up` override for `X-Forwarded-For`, which bears directly on Section 9.4's `trustProxy` setting — that section now records the real hop count as unverified rather than settled (Open Item O10, Section 14).
+
+Multi-stage Dockerfiles throughout — this repository's root `Dockerfile` included; the frontend build stage runs on the Pi (arm64) either way.
 
 **Tile serving.** The extract is not in the image — Section 13.1 forbids committing it, and a regenerated extract must not require rebuilding the image either. The platform mounts a persistent data volume for the container, the same one `DATABASE_PATH` lives under, so the extract lives there too, under a directory named by the `TILES_DIR` environment variable (default `/data/tiles`, mirroring the `/data/db/tipsy.db` default for `DATABASE_PATH` in `packages/api/src/env.ts`). The path the API reads is `${TILES_DIR}/${CONFIG.TILES_FILENAME}`. In the single-container deployment the API serves `/tiles/*` from that path itself, including range-request support (Section 4.1); in the standalone two-container path, Caddy serves it from the same mounted location per `caddy/Caddyfile`, unchanged. Startup and missing-file behaviour differ between the two deployments — see Section 13.2.
 
@@ -387,6 +410,10 @@ CREATE TABLE push_subscriptions (
 
 A push endpoint that returns 404 or 410 is deleted immediately — those codes mean the subscription is permanently gone.
 
+**VAPID key material lives on disk, not in the environment.** Section 4.3 is why: the Pi's `deploy.sh` fully overwrites `apps/tipsy-trails/.env` on every deploy and preserves only `SESSION_SECRET` across that overwrite, so a key pair placed there the way `SESSION_SECRET` is would survive exactly one deploy and then silently stop working — push would go dark with no error, since the subscriptions themselves are untouched and only sending against them would start failing. On first boot, if no key file exists, the app generates a VAPID key pair and writes it to `CONFIG.VAPID_KEY_FILENAME` (Section 7.1) in the same directory as `DATABASE_PATH` — already on the persistent data volume in both deployments (Section 4.3). Every later boot loads that file instead of generating a new one. The subject the Web Push protocol requires is not generated; it is derived from `PUBLIC_ORIGIN`, already a mandatory `https:` URL (Section 4.3), so no separate value needs provisioning. Only `--fresh` destroys the key file, and `--fresh` already destroys the database it sits beside.
+
+The three `VAPID_*` environment variables (`packages/api/src/env.ts`) are not removed — they remain supported as an explicit override, all three or none, exactly as `resolveVapidConfig` already treats them (a partial set stays a misconfiguration, warned about at boot). When all three are set, they win over both the persisted file and generation, so a deployment that wants to pin its own key keeps that option — most useful for local development or a fork with no persistent volume to write to. When none are set, the app loads or generates the file as above. On the Pi itself the override should be left unset: `deploy.sh` never writes these three (its `admin: yes` block is exactly `SESSION_SECRET`, `ADMIN_USER`, `ADMIN_PASSWORD`, nothing else), so there is nothing here for it to wipe, and generation exists specifically to remove the manual key-provisioning step this platform cannot support.
+
 ---
 
 ## 6. Geometry and Grid System
@@ -499,6 +526,7 @@ export const CONFIG = {
   },
 
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
+  VAPID_KEY_FILENAME: 'vapid-keys.json',  // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;
 
 // The single ms→s boundary required by rule 6 in Section 0.
@@ -741,7 +769,11 @@ Editing a bar's position recomputes `cell_index` and `district_id`. Existing dis
 
 Per the `RATE_LIMITS` block in Section 7.1, enforced with an in-memory token bucket. Exceeding returns 429 with a `Retry-After` header.
 
-**The client IP must be taken from the trusted proxy header, not the socket.** Behind Cloudflare Tunnel every request reaches the API from `cloudflared`, so socket-based limiting would put all users in one bucket and make the per-IP limits meaningless. The Caddy instance immediately in front of the API sets `X-Forwarded-For` — this repository's own in the standalone two-container path, the platform's own single Caddy instance in front of the single container that runs on the Pi (Section 4.3, v1.2.2). Either way exactly one hop sits in front of the API, so Fastify runs with `trustProxy: 1`, trusting only that immediate hop. This matters because `X-Forwarded-For` is a comma-separated list the client can pre-seed with arbitrary entries; only the right-most hop is guaranteed to have been appended by infrastructure under our control. Trusting the left-most entry instead — what `trustProxy: true` does — would let any client mint a fresh rate-limit bucket per request just by sending a different fabricated value. Getting this wrong turns Section 13.4's "rate limits are load-bearing" into a false statement, so it is verified in Phase 1.
+**The client IP must be taken from the trusted proxy header, not the socket.** Behind Cloudflare Tunnel every request reaches the API from `cloudflared`, so socket-based limiting would put all users in one bucket and make the per-IP limits meaningless. The Caddy instance immediately in front of the API sets `X-Forwarded-For` — this repository's own in the standalone two-container path, the platform's own single Caddy instance in front of the single container that runs on the Pi (Section 4.3, v1.2.2). For the standalone path that Caddy is the only proxy between the client and the API, so `trustProxy: 1` — trusting exactly one hop — is correct there.
+
+**For the Pi path the hop count is not settled, and this app currently trusts `trustProxy: 1` without having verified it.** Section 4.3 confirms the platform's Caddy adds no `trusted_proxies` or `header_up` override of its own, but the chain in front of it is longer than Caddy alone — browser → Cloudflare edge → Cloudflare Tunnel → the `cloudflared` container → Caddy — and how many of those hops actually append an entry to `X-Forwarded-For` cannot be determined by reading either repository. Cloudflare's edge almost certainly adds the real client IP; `cloudflared` may add another before handing off to Caddy. `X-Forwarded-For` is a comma-separated list the client can pre-seed with arbitrary entries, so this is not a detail: only the right-most hop is guaranteed to have been appended by infrastructure under our control, and trusting the wrong number of hops either exposes the list to client-supplied fabrication (too many trusted) or reads a proxy's own address as the client's (too few) — either way, per-IP buckets stop being per-IP with no visible failure. Trusting the left-most entry outright, what `trustProxy: true` does, is wrong either way and would let any client mint a fresh bucket per request.
+
+Getting this right on the Pi is unverified, not assumed correct: log the raw `X-Forwarded-For` header once, from a real request made over the public internet — not from the Pi itself, not from the local network — and count the entries; set `trustProxy` to that count. Until that is done, Section 13.4's "rate limits are load-bearing" is unverified for the Pi deployment, whatever Phase 1's Definition of Done already confirmed about the mechanism itself. Recorded as Open Item O10 (Section 14).
 
 Buckets are in memory and reset on restart — acceptable at this scale, and stated here so nobody mistakes it for a durability bug.
 
@@ -771,6 +803,7 @@ Buckets are in memory and reset on restart — acceptable at this scale, and sta
 - Parameterised SQL exclusively.
 - No stack traces or SQL errors in responses.
 - Password reset invalidates every existing session of that user.
+- The VAPID private key (Section 5.9) is generated on first boot and persisted in the same directory as the SQLite database — the same volume that already holds every password hash, so this widens no boundary. It is never logged, never returned by any API response, and never committed; `GET /api/push/vapid-public-key` (Section 9.2) serves only the public half.
 
 ### 10.2 Data minimisation
 
@@ -1067,7 +1100,7 @@ These are consequences to design around, not reasons to reconsider:
 
 1. **No security through obscurity.** Rate limits, the session model, and the security-question reset flow are all publicly readable. They are specified to hold up under that assumption; the rate limits in Section 9.4 are load-bearing, not decorative — which is precisely why the proxy-header requirement in that section is a correctness issue, not a detail.
 2. **Bar positions are public.** `bars.json` is in the repository, so the "hidden until discovered" mechanic is a gameplay convention, not a secret. This is acceptable — the underlying data is public OSM data regardless. The API still refuses to leak undiscovered bars (Sections 7.4, 9.5), because the convention should not be broken by the app itself.
-3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables with `must_change_password = 1`. A hard-coded admin credential in a public repository is a critical failure.
+3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USER` and `ADMIN_PASSWORD` environment variables with `must_change_password = 1`. A hard-coded admin credential in a public repository is a critical failure.
 4. **Secret scanning.** GitHub secret scanning and push protection are enabled on the repository. Any secret that ever lands in history must be rotated, not merely deleted.
 
 ---
@@ -1085,10 +1118,21 @@ These are consequences to design around, not reasons to reconsider:
 | O5 | Additional cities. The data model supports them; no admin flow for adding one exists. | Out of scope for v1 |
 | O6 | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. | Documented, not built |
 | O7 | Friends, shared sessions, and social features. | Out of scope for v1 |
+| O10 | Section 9.4's `trustProxy` hop count for the Pi deployment is unverified — Cloudflare's edge and `cloudflared` may together add entries to `X-Forwarded-For` before Caddy ever sees the request, and neither this repository nor the platform's settles the real count. Verify by logging the raw header from one real external request against the running deployment and counting the entries, then set `trustProxy` to match. | Open — needs verification on the Pi |
 
 ---
 
 ## 15. Changelog
+
+### v1.10 — the real Pi contract, corrected
+
+Three items, all from finally reading `PiMultiServiceServer` instead of inferring its behaviour.
+
+**Section 4.3 is rewritten wholesale.** Everything about `sites.conf`, `deploy.sh`, and the platform's `docker-compose.yml` in the previous text — going back to v1.2.2 — was inferred from the fact that a multi-site platform existed, not read from it. The real contract differs in enough places that patching it piecemeal would have left the two versions tangled: `sites.conf` has four fields (`name repo_url host admin`), no port field; `admin: yes` writes exactly `SESSION_SECRET`, `ADMIN_USER` — not `ADMIN_USERNAME`, which the previous text (and Section 13.4) had been calling it — and `ADMIN_PASSWORD` into `apps/tipsy-trails/.env`, fully overwritten on every deploy, with only `SESSION_SECRET` read back and preserved; `ADMIN_USER`/`ADMIN_PASSWORD` come from one shared `~/pi-server/admin.env` pair reused across every `admin: yes` site, not a shared user store — this app's own `users` table and hashing are untouched by the platform. `PUBLIC_ORIGIN`, `PORT`, and `DB_PATH` must be added by hand to the platform's `docker-compose.yml`, which `deploy.sh` never touches and which therefore does survive redeploys, unlike the three admin values. `deploy.sh --fresh` deletes the whole per-site data volume, which for other sites on this Pi may be a cache and here is the database and the tile extract — every account, all fog progress, every mastered bar. And `deploy.sh` runs `npm run seed:admin` after bringing containers up, under `set -euo pipefail`, so that script must exist and must succeed, idempotently, every time, or it takes every other site on the Pi down with it — a requirement the previous text never stated because the platform's error-handling posture around `admin: yes` was never actually read.
+
+**VAPID keys move out of the environment.** The corrected `admin: yes` contract above is what forces this: a key pair placed in `apps/tipsy-trails/.env` the way `SESSION_SECRET` might be would survive exactly one deploy, because `SESSION_SECRET` is the only value `deploy.sh` reads back and reuses — everything else in that file is a full overwrite. Section 5.9 now specifies generation on first boot, persisted beside the database on the same data volume, loaded on every later boot, and untouched by anything short of `--fresh`. The three `VAPID_*` environment variables stay supported as an all-or-nothing override for deployments that want to pin their own key — most usefully local development — but the Pi should leave them unset now that there is nothing left for it to provision by hand. Section 10.1 states the resulting security posture: the private key lives on the same volume as the password hashes already do, which widens no boundary, and is never logged, returned, or committed.
+
+**Section 9.4's `trustProxy: 1` is downgraded from settled to open for the Pi.** The platform repository confirms Caddy adds no `trusted_proxies` or `header_up` override, but it does not settle how many hops actually reach it — Cloudflare's edge and `cloudflared` may together add more than the one this app currently trusts, and nothing in either repository resolves the count. Recorded as Open Item O10 (Section 14): verify by logging the raw `X-Forwarded-For` header from one real external request against the running deployment and counting the entries, before treating Section 13.4's "rate limits are load-bearing" as true for this hop.
 
 ### v1.9 — two loose ends from closing Phase 8
 
@@ -1228,4 +1272,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.9*
+*End of specification v1.10*

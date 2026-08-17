@@ -118,18 +118,65 @@ There are two deployment paths.
 ### The Pi (multi-site platform)
 
 The Raspberry Pi that hosts `tipsytrails.ahultsch.com` runs several
-unrelated projects, each as one container behind a single shared Caddy that
-the platform — not this repository — owns and routes. The root `Dockerfile`
-builds one image for that platform: the API serves the built SPA itself, on
-`PORT`. The platform clones this repository, builds the image from the root
-`Dockerfile`, and routes `tipsytrails.ahultsch.com` to the resulting
-container through its own Caddy.
+unrelated projects on a shared platform (`AlexanderHultsch/PiMultiServiceServer`),
+one container per site behind a single Caddy the platform owns, not this
+repository. Registration is one line in the platform's own
+`~/pi-server/sites.conf` — four fields, `name repo_url host admin`, no port
+field — naming this site `tipsy-trails` with `admin: yes`. The platform's
+`deploy.sh` then builds and runs it locally (`build: ./apps/tipsy-trails`
+plus `docker compose up -d --build` against the root `Dockerfile` in this
+repository — no registry image involved) and routes
+`tipsytrails.ahultsch.com` to the resulting container through its own Caddy.
+`PORT` is a hardcoded convention across the platform, `3000`, set in both
+its `docker-compose.yml` and its `Caddyfile` — not read from `sites.conf`.
 
-The container needs `PORT`, `DB_PATH`, `PUBLIC_ORIGIN`, and
-`SESSION_SECRET` from the environment, and optionally `ADMIN_USERNAME` and
-`ADMIN_PASSWORD` to seed the admin account. `SESSION_SECRET` must be at
-least 32 characters, and the container refuses to start without
-`PUBLIC_ORIGIN` and `SESSION_SECRET` set.
+`admin: yes` makes `deploy.sh` write `apps/tipsy-trails/.env` on every
+deploy, containing exactly three variables — `SESSION_SECRET`, `ADMIN_USER`,
+`ADMIN_PASSWORD` — as a full overwrite each time. Only `SESSION_SECRET`
+survives a redeploy: `deploy.sh` reads the existing value back out before
+overwriting the file and writes the same value back. `ADMIN_USER` and
+`ADMIN_PASSWORD` come from one shared `~/pi-server/admin.env` pair reused
+across every `admin: yes` site on the Pi — the platform has no user store of
+its own; this app's accounts and password hashing are entirely its own.
+
+Everything else — `PUBLIC_ORIGIN` above all, since the container refuses to
+boot without it — must be added by hand to the platform's own
+`docker-compose.yml`, in this site's `environment:` block, the same place
+`PORT` and `DB_PATH` already live for the Pi's other sites. `deploy.sh`
+never touches that file, so values placed there, unlike the three admin
+values above, survive every redeploy:
+
+```yaml
+environment:
+  - PORT=3000
+  - DB_PATH=/data/db/tipsy.db
+  - PUBLIC_ORIGIN=https://tipsytrails.ahultsch.com
+```
+
+After bringing the containers up, `deploy.sh` runs
+`docker compose exec tipsy-trails npm run seed:admin` under
+`set -euo pipefail` — a missing or failing script aborts the deploy of
+*every* site on the Pi, not just this one, along with the final
+`docker compose restart caddy`. The script must exist and succeed
+idempotently on every run; this app already seeds the admin account at
+boot, so the script has to be safe alongside that, not a replacement for
+it.
+
+The data volume is `./data/tipsy-trails:/data` on the platform side — host
+`~/pi-server/data/tipsy-trails/`, container `/data`, created by Docker on
+first start. The database and the map extract both live under it, and
+`TILES_DIR`'s existing default (`/data/tiles`) already resolves correctly
+here with no configuration change needed.
+
+**`deploy.sh --fresh` deletes that entire volume before rebuilding.** For
+some sites on this Pi that may just be a cache. Here it is every account,
+all fog progress, and every mastered bar — there is no separate backup for
+it beyond whatever the Pi's existing backup job already covers. Treat
+`--fresh` against this site as data loss, not a reset.
+
+See [`SPEC.md`](SPEC.md) Section 4.3 for the full contract, including the
+Cloudflare TLS chain and why the rate limits' trusted-hop count is still an
+open item.
 
 ### Standalone (this repository's compose)
 
@@ -137,7 +184,7 @@ least 32 characters, and the container refuses to start without
 git clone https://github.com/AlexanderHultsch/TipsyTrails.git
 cd TipsyTrails
 cp .env.example .env
-# fill in .env: SESSION_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD, etc.
+# fill in .env: SESSION_SECRET, ADMIN_USER, ADMIN_PASSWORD, etc.
 docker compose up -d --build
 ```
 
