@@ -18,9 +18,9 @@ COPY packages/web packages/web
 COPY packages/shared packages/shared
 
 ENV NODE_OPTIONS=--max-old-space-size=1536
-RUN pnpm --filter @tipsytrails/web build
-
 RUN pnpm --filter @tipsytrails/shared build
+
+RUN pnpm --filter @tipsytrails/web build
 RUN pnpm --filter @tipsytrails/api build
 RUN pnpm --filter @tipsytrails/api deploy --prod --legacy /app/deploy
 

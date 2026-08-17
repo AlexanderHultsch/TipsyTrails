@@ -37,6 +37,35 @@ describe('runtime image contents', () => {
   );
 });
 
+// @tipsytrails/web and @tipsytrails/api both resolve @tipsytrails/shared
+// through its `main`/`exports`, which point at shared's gitignored `dist/`.
+// The build stage's `pnpm install --ignore-scripts` (see the comment above
+// that RUN line) deliberately skips the root `prepare` hook that would
+// otherwise build shared, so the build stage's own RUN lines are the only
+// thing that can produce that `dist/` before web or api need it. Building
+// web or api before shared once broke the image while every other test
+// stayed green — see the Dockerfile's build-stage RUN lines.
+describe('build stage ordering', () => {
+  const buildStage = dockerfile.slice(
+    dockerfile.indexOf('AS build'),
+    dockerfile.indexOf('AS runtime'),
+  );
+  const sharedBuildIndex = buildStage.indexOf('RUN pnpm --filter @tipsytrails/shared build');
+  const webBuildIndex = buildStage.indexOf('RUN pnpm --filter @tipsytrails/web build');
+  const apiBuildIndex = buildStage.indexOf('RUN pnpm --filter @tipsytrails/api build');
+
+  it('builds @tipsytrails/shared before @tipsytrails/web', () => {
+    expect(sharedBuildIndex).toBeGreaterThan(-1);
+    expect(webBuildIndex).toBeGreaterThan(-1);
+    expect(sharedBuildIndex).toBeLessThan(webBuildIndex);
+  });
+
+  it('builds @tipsytrails/shared before @tipsytrails/api', () => {
+    expect(apiBuildIndex).toBeGreaterThan(-1);
+    expect(sharedBuildIndex).toBeLessThan(apiBuildIndex);
+  });
+});
+
 // SPEC.md Section 4.3: `docker compose exec tipsy-trails npm run seed:admin`
 // must resolve from the container's working directory. The runtime stage is
 // a `pnpm deploy` output, not the source tree, so `npm run` has nothing to
