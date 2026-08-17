@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -111,18 +111,53 @@ describe('runSeedAdminCli', () => {
     const okEnv = loadEnv({ ...baseEnv, DATABASE_PATH: dbPath });
     await runSeedAdminCli(okEnv);
 
+    // A file that exists but is not a SQLite database at all — genuinely
+    // broken, not merely unready, so it must still exit non-zero.
+    const corruptPath = join(tmpdir(), `tipsytrails-seed-admin-cli-corrupt-${randomUUID()}.db`);
+    writeFileSync(corruptPath, 'not a sqlite database, just padding to be long enough 1234567890');
+    const failingEnv = loadEnv({ ...baseEnv, DATABASE_PATH: corruptPath });
+
+    try {
+      await expect(runSeedAdminCli(failingEnv)).rejects.toThrow(/file is not a database/i);
+    } finally {
+      if (existsSync(corruptPath)) {
+        rmSync(corruptPath);
+      }
+    }
+  });
+
+  it('creates the database directory and migrates when it does not exist at all', async () => {
     const missingDirPath = join(
       tmpdir(),
       `tipsytrails-seed-admin-cli-test-${randomUUID()}`,
       'nested',
       'tipsy.db',
     );
-    const failingEnv = loadEnv({ ...baseEnv, DATABASE_PATH: missingDirPath });
+    const env = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: missingDirPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'correct-horse',
+    });
 
-    await expect(runSeedAdminCli(failingEnv)).rejects.toThrow();
+    try {
+      await expect(runSeedAdminCli(env)).resolves.toBeUndefined();
+
+      const verifyDb = openDatabase(missingDirPath);
+      try {
+        const row = verifyDb
+          .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+          .get('admin');
+        expect(row).toBeDefined();
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      rmSync(dirname(missingDirPath), { recursive: true, force: true });
+    }
   });
 
-  it('rejects (exit non-zero) against a database missing the users table', async () => {
+  it('migrates and seeds the admin on a completely fresh, unmigrated database', async () => {
     const unmigratedPath = join(
       tmpdir(),
       `tipsytrails-seed-admin-cli-unmigrated-${randomUUID()}.db`,
@@ -135,7 +170,17 @@ describe('runSeedAdminCli', () => {
     });
 
     try {
-      await expect(runSeedAdminCli(env)).rejects.toThrow(/no such table/i);
+      await expect(runSeedAdminCli(env)).resolves.toBeUndefined();
+
+      const verifyDb = openDatabase(unmigratedPath);
+      try {
+        const row = verifyDb
+          .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+          .get('admin');
+        expect(row).toBeDefined();
+      } finally {
+        verifyDb.close();
+      }
     } finally {
       for (const suffix of ['', '-wal', '-shm']) {
         const file = `${unmigratedPath}${suffix}`;
