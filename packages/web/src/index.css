@@ -39,6 +39,19 @@ a {
   color: var(--color-ink);
 }
 
+/* Phase 8 task brief, part D / Section 8.2's Definition-of-Done item:
+   visible focus on every interactive element, not assumed from the
+   browser default (which is often invisible against a custom palette).
+   The same accent-outline treatment .field input and .bar-marker already
+   use below, generalised to every link, button and explicitly focusable
+   element that doesn't already have its own :focus-visible rule. */
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 /* Full-height page shell. Primary actions sit in .screen__actions, pushed
    to the bottom via margin-top: auto for thumb reach (Section 8.2). */
 .screen {

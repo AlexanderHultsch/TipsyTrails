@@ -193,6 +193,36 @@ describe('FogController', () => {
     expect(container.querySelector('canvas.fog-canvas-fallback')).toBeNull();
   });
 
+  // Phase 8 task brief, part A: `useFogLayer.ts` never passes its own
+  // `prefersReducedMotion`, so this default wiring - not the injectable
+  // override webgl-fog-layer.test.ts exercises - is what the real app
+  // actually runs on. It was untested until now.
+  it('reads window.matchMedia for prefers-reduced-motion by default, and wires that into the WebGL layer', () => {
+    const { map, rawMap } = createFakeMap(true);
+    const matchMediaMock = vi.fn(
+      (query: string) =>
+        ({ matches: query === '(prefers-reduced-motion: reduce)' }) as MediaQueryList,
+    );
+    vi.stubGlobal('matchMedia', matchMediaMock);
+
+    const controller = new FogController({
+      map,
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      detectWebGL2: () => ({}) as WebGL2RenderingContext,
+    });
+
+    const addedLayer = rawMap.addLayer.mock.calls[0][0] as unknown as {
+      reducedMotion: () => boolean;
+    };
+    expect(addedLayer.reducedMotion()).toBe(true);
+    expect(matchMediaMock).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+
+    controller.destroy();
+    vi.unstubAllGlobals();
+  });
+
   it('never mounts a second time if destroyed before a deferred load event fires', () => {
     const { map, rawMap } = createFakeMap(false);
     const detect = vi.fn(() => ({}) as WebGL2RenderingContext);
