@@ -148,9 +148,9 @@ values above, survive every redeploy:
 
 ```yaml
 environment:
-  - PORT=3000
-  - DB_PATH=/data/db/tipsy.db
-  - PUBLIC_ORIGIN=https://tipsytrails.ahultsch.com
+  PORT: "3000"
+  DB_PATH: /data/db/tipsy.db
+  PUBLIC_ORIGIN: https://tipsytrails.ahultsch.com
 ```
 
 After bringing the containers up, `deploy.sh` runs
