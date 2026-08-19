@@ -2,7 +2,7 @@
 
 **Version:** 1.10
 **Status:** Draft — ready for implementation
-**Repository:** https://github.com/AlexanderHultsch/TipsyTrails
+**Repository:** https://github.com/AlexanderHultsch/Tipsy-Trails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
 **Public URL:** `https://tipsytrails.ahultsch.com` (via Cloudflare Tunnel)
 
@@ -134,7 +134,7 @@ Client-side: district polygons, grid metadata, and the bar catalogue are cached 
 ### 4.2 Repository structure
 
 ```
-TipsyTrails/
+Tipsy-Trails/
 ├── docker-compose.yml
 ├── pnpm-workspace.yaml
 ├── .env.example
@@ -1233,7 +1233,7 @@ diagram in Section 4 describes that standalone path, not the Pi's.
 
 ### v1.2.1 — repository rename
 
-Repository renamed to `TipsyTrails` and the public host to `tipsytrails.ahultsch.com`. The public URL stays HTTPS: the session cookie carries the `Secure` flag (Section 10.1) and would not be sent over plain HTTP. Package manager pinned to pnpm 10, which is what the toolchain provides.
+Repository renamed to `Tipsy-Trails` and the public host to `tipsytrails.ahultsch.com`. The public URL stays HTTPS: the session cookie carries the `Secure` flag (Section 10.1) and would not be sent over plain HTTP. Package manager pinned to pnpm 10, which is what the toolchain provides.
 
 ### v1.2 — optimisation pass on v1.1
 
