@@ -60,26 +60,36 @@ transition; contrast, focus states, and form labelling meet WCAG 2.1 AA
 against the app's near-monochrome palette; and every network failure now
 surfaces a message instead of failing silently.
 
-Six things are verified only as far as this development environment allows,
-and are called out rather than glossed: the map extract has been built and
-measures 9.4 MB, but it sits on the project owner's laptop and has not
-reached the server, so nothing has rendered against real tiles; the fog shader
-has never been
-compiled, because there is no GPU here — its layer class is tested against a
-fake WebGL context, which proves the call sequence and nothing about the GLSL;
-no push notification has ever been delivered, because there is no browser and
-no push service — the once-only, not-while-completed and dead-endpoint rules
-are tested against a faked sender, the wire is not; no Docker image has
-been built, because there is no Docker daemon; no screen reader has ever run
-against any of this, so whether the accessibility pass's automated contrast,
-focus and labelling checks add up to a sensibly narrated app is unknown; and
-installing to a home screen, on Android or iOS, is unproven for the same
-reason — no phone. What
-*has* been verified is the server itself, booted from a hand-assembled copy of
-the runtime image's file layout — it serves the API and the SPA, runs
-migrations, seeds the admin account and the city data, and imports all 170 bars
-against a real SQLite file. The first `docker build` and the first render on a
-phone are the real tests, both still to happen on the Pi.
+It runs on the Pi. The root `Dockerfile` builds there on arm64, the container
+starts and stays up, migrations and startup complete, and the site answers
+over the public internet at `https://tipsytrails.ahultsch.com` through the
+Cloudflare Tunnel and the platform's Caddy: `/api/health` returns
+`{"status":"ok"}`, a real browser has loaded the whole PWA shell over that
+hostname, and `/api/auth/me` returns 401 when signed out. It took two
+attempts. The first deploy crash-looped on `EACCES` creating `/data/db`,
+because the platform's data volume is root-owned; the image now starts as
+root, prepares and chowns `/data`, and drops to `node` through its entrypoint
+(see [`SPEC.md`](SPEC.md) Section 4.3).
+
+The rest is verified only as far as this development environment allows, and
+is called out rather than glossed: the map extract has been built and measures
+9.4 MB, but it sits on the project owner's laptop and has not reached the
+server — the running container says so in its own log and answers `/tiles/*`
+with an error until the file arrives, so nothing has rendered against real
+tiles; the fog shader has never been compiled, because there is no GPU here —
+its layer class is tested against a fake WebGL context, which proves the call
+sequence and nothing about the GLSL; no push notification has ever been
+delivered, because there is no browser and no push service — the once-only,
+not-while-completed and dead-endpoint rules are tested against a faked sender,
+the wire is not; no screen reader has ever run against any of this, so whether
+the accessibility pass's automated contrast, focus and labelling checks add up
+to a sensibly narrated app is unknown; and installing to a home screen, on
+Android or iOS, is unproven for the same reason — no phone. The server itself
+was verified here before any of that, booted from a hand-assembled copy of the
+runtime image's file layout — it serves the API and the SPA, runs migrations,
+seeds the admin account and the city data, and imports all 170 bars against a
+real SQLite file. The first render against real tiles and the first install on
+a phone are the tests still to happen.
 
 [`SPEC.md`](SPEC.md) is the single source of truth: data model, game mechanics, API surface, design direction, and an eight-phase build plan with a Definition of Done per phase.
 
@@ -135,8 +145,8 @@ platform's own `docker-compose.yml`. And a host block in its
 outside however healthy its container is. `sites.conf` is maintained only
 on the platform checkout's `env` branch, which is where the Pi's checkout
 sits. All three blocks are written out ready to copy in
-[`SPEC.md`](SPEC.md) Section 4.3. As of that paste none of them exists:
-nothing about this app has ever run on the Pi.
+[`SPEC.md`](SPEC.md) Section 4.3, and all three are in place on the Pi
+today — the site is registered, built and serving.
 
 The platform's `deploy.sh` builds and runs the site locally
 (`build: ./apps/tipsy-trails` plus `docker compose up -d --build` against

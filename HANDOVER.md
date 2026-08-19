@@ -88,28 +88,33 @@ an earlier one is stuck:
    `SPEC.md` Section 4.3). Independent of 1–2. `deploy.sh` never writes
    these and the app refuses to boot without `PUBLIC_ORIGIN` — has to be in
    place before the site can come up at all.
-4. **Prove the `docker build` in isolation before adding this site to
-   `sites.conf`.** This repository's root `Dockerfile` has never been built
-   anywhere, not even in this sandbox — every image change so far was
-   verified by hand-assembling the runtime layout and booting the server
-   from it, not by the real build. `deploy.sh` builds every site on the Pi
-   in one pass under `set -euo pipefail`, and `docker compose up -d --build`
-   carries no `||`: a failing build here aborts the whole deployment run —
-   every other site's rebuild included. Build and boot the image on its own
-   first. Blocks step 5.
-5. **Register the site in all three files and let `deploy.sh` run.**
-   Depends on 3 and 4. A line in `sites.conf` is not enough on its own: the
-   service block in the platform's `docker-compose.yml` and the host block
-   in its `config/caddy/Caddyfile` are equally required, and `sites.conf` is
-   maintained only on the platform checkout's `env` branch. All three blocks
-   are written out ready to copy in `SPEC.md` Section 4.3. Then confirm
-   `npm run seed:admin` actually succeeded against the real container —
-   nothing else will tell you, because `deploy.sh` runs it as
-   `... || echo "  WARN: seed:admin fehlgeschlagen"` and a failure only
-   prints that warning while the deploy reports success. It is idempotent,
-   exits zero when there is nothing to do, and never resets a changed
-   password (`packages/api/src/db/seed-admin-cli.ts`), but it has only ever
-   run in tests so far.
+4. **Done — the image builds and runs on the Pi, at the cost of one crash
+   loop.** The root `Dockerfile` builds on the Pi's own arm64: `gosu`
+   installs cleanly (`gosu 1.14-1+b10 arm64`) and the web build runs there
+   too (`vite build`, `✓ built in 1.39s`). The first deploy then
+   crash-looped on `EACCES: permission denied, mkdir '/data/db'`, exactly
+   as predicted — the platform's `~/pi-server/data/` is root-owned, so a
+   container running as `node` cannot create its own database directory.
+   Commit `7626ecb` starts the container as root, prepares and chowns
+   `/data`, then drops to `node` with `gosu`; the next deploy came up and
+   stayed up, with `COMMAND` showing the entrypoint.
+5. **Done — the site is registered and serving; two things it did not
+   close.** All three blocks are on the Pi, and the container answers over
+   the public internet: `curl -s https://tipsytrails.ahultsch.com/api/health`
+   returns `{"status":"ok"}`, a real browser loaded the whole PWA shell over
+   that hostname (`/`, the hashed CSS and JS, `manifest.json`, `sw.js`,
+   every icon, all 200, plus a 304 on reload), and `/api/auth/me` returns
+   401 when signed out. The server logs
+   `Server listening at http://172.19.0.3:3000`. Still open, both carried
+   by this step rather than closed with it: the tile extract is not on the
+   volume, and the app says so in its own log — "Tile extract not found at
+   /data/tiles/karlsruhe.2026-08.pmtiles" — which is step 1 above. And the
+   admin account is unconfirmed. `deploy.sh`'s seeding loop skips every
+   site after the first (a platform bug, reported separately), so
+   `npm run seed:admin` never ran against this site at all; boot-time
+   seeding in `initialiseDatabase` should have created the account from
+   `ADMIN_USER` and `ADMIN_PASSWORD` regardless, but nobody has signed in
+   to check. Do that before trusting the admin area exists.
 6. **Open Item O10 — measure `trustProxy`'s real hop count.** Depends on 5:
    needs one real request over the public internet against the live
    deployment (`SPEC.md` Section 9.4 has the exact procedure). Until it's
