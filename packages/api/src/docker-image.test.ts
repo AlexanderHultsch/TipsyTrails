@@ -66,6 +66,44 @@ describe('build stage ordering', () => {
   });
 });
 
+// SPEC.md Section 4.3: the platform creates the /data bind mount as root, so
+// the container starts as root, chowns the volume and drops to `node` itself.
+// The four things below are what makes that work, and each of them is a
+// one-line edit away from silently undoing it: a reintroduced `USER node`
+// takes the chown away, a missing COPY/chmod/ENTRYPOINT means the entrypoint
+// never runs (leaving the server as root), and without gosu the entrypoint's
+// last line fails and nothing starts at all.
+describe('root-owned bind mount (SPEC.md Section 4.3)', () => {
+  it('docker-entrypoint.sh exists in the repository at the path the Dockerfile copies it from', () => {
+    expect(existsSync(join(REPO_ROOT, 'docker-entrypoint.sh'))).toBe(true);
+  });
+
+  it('the Dockerfile runtime stage does not set `USER node` — the entrypoint owns the drop', () => {
+    expect(runtimeStage).not.toMatch(/^\s*USER\s+node\b/m);
+  });
+
+  it('the Dockerfile runtime stage installs gosu', () => {
+    expect(runtimeStage).toMatch(/apt-get\s+install\s+[^\n]*\bgosu\b/);
+  });
+
+  it('the Dockerfile runtime stage COPYs the entrypoint to /usr/local/bin and chmods it', () => {
+    expect(runtimeStage).toMatch(
+      /COPY\s+(--\S+\s+)*docker-entrypoint\.sh\s+\/usr\/local\/bin\/docker-entrypoint\.sh\b/,
+    );
+    expect(runtimeStage).toMatch(/RUN\s+chmod\s+\+x\s+\/usr\/local\/bin\/docker-entrypoint\.sh\b/);
+  });
+
+  it('the Dockerfile runtime stage sets the entrypoint, leaving the server as the CMD', () => {
+    expect(runtimeStage).toMatch(/ENTRYPOINT\s+\["\/usr\/local\/bin\/docker-entrypoint\.sh"\]/);
+    expect(runtimeStage).toMatch(/CMD\s+\["node",\s*"dist\/server\.js"\]/);
+  });
+
+  it('the entrypoint execs the CMD as node via gosu', () => {
+    const entrypoint = readFileSync(join(REPO_ROOT, 'docker-entrypoint.sh'), 'utf-8');
+    expect(entrypoint).toMatch(/^exec gosu node "\$@"$/m);
+  });
+});
+
 // SPEC.md Section 4.3: `docker compose exec tipsy-trails npm run seed:admin`
 // must resolve from the container's working directory. The runtime stage is
 // a `pnpm deploy` output, not the source tree, so `npm run` has nothing to

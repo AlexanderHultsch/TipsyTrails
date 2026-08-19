@@ -29,6 +29,11 @@ ENV NODE_ENV=production
 ENV PORT=3000
 WORKDIR /app
 
+# gosu, not su-exec: the platform's other sites are Alpine images and use
+# su-exec for the same job, but this one is Debian. docker-entrypoint.sh
+# drops to `node` with it (SPEC.md Section 4.3).
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
 # Everything the running container reads on boot, and where that read
 # lives. Check this list when adding a new path a route or startup step
 # reads — packages/api/src/docker-image.test.ts fails if it falls out of
@@ -50,6 +55,14 @@ COPY --from=build --chown=node:node /app/packages/web/dist ./public
 COPY --chown=node:node data/seed ./data/seed
 COPY --chown=node:node data/cities ./data/cities
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 3000
-USER node
+# Deliberately no `USER node` here: the platform creates the /data bind mount
+# as root, so the container has to start as root to chown it. The entrypoint
+# owns the privilege drop and execs the CMD as `node` via gosu — putting
+# `USER node` back breaks the chown and returns the container to the boot
+# crash loop this replaced (SPEC.md Section 4.3).
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]
