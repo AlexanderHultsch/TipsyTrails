@@ -7,7 +7,7 @@ Phase N", no longer applies: every phase is built, and what remains is not
 more building but the operational work of actually running this on the Pi,
 plus the handful of spec items nobody has built at all (Section 3 below).
 
-`SPEC.md` is the source of truth (now v1.10); `CLAUDE.md` holds the
+`SPEC.md` is the source of truth (now v1.11); `CLAUDE.md` holds the
 guardrails. This file only records where things stand, what is deliberately
 unfinished, and what to do first. Keep it current rather than replacing it
 wholesale again — there is no next phase to write it "before" any more.
@@ -21,9 +21,8 @@ wholesale again — there is no next phase to write it "before" any more.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Tests                 | 713 green — shared 165, api 347, web 201                   |
-| Spec version          | 1.10                                                       |
-| `main` at             | `3dc3522`                                                  |
+| Tests                 | 719 green — shared 165, api 353, web 201                   |
+| Spec version          | 1.11                                                       |
 
 Everything was committed and pushed at handover.
 
@@ -55,9 +54,12 @@ Three items that used to open this list are closed. Not deleted — recorded
 briefly so nobody reopens them:
 
 - **Both platform-chat questions** (what `admin: yes` injects, what
-  `deploy.sh` does to `.env`) are answered: the platform repository
-  (`PiMultiServiceServer`) was read directly, not inferred, and `SPEC.md`
-  Section 4.3 was rewritten wholesale as a result (v1.10 changelog).
+  `deploy.sh` does to `.env`) are answered: the owner pasted the platform's
+  real `sites.conf`, `deploy.sh`, `docker-compose.yml` and Caddyfile off the
+  running Pi on 2026-08-19, and `SPEC.md` Section 4.3 is written from those
+  files (v1.11 changelog). The repository itself was never readable from any
+  session here — v1.10 claimed it had been read directly, which was false and
+  is what let several wrong details stand for a version.
 - **VAPID key provisioning** is no longer a manual step. Keys generate
   themselves on first boot and persist beside the database (Section 5.9).
   Leave the three `VAPID_*` variables unset on the Pi.
@@ -91,16 +93,23 @@ an earlier one is stuck:
    anywhere, not even in this sandbox — every image change so far was
    verified by hand-assembling the runtime layout and booting the server
    from it, not by the real build. `deploy.sh` builds every site on the Pi
-   in one pass under `set -euo pipefail`: a failing build here, or a failing
-   `seed:admin` right after it, aborts the whole deployment run — every
-   other site's rebuild included. Build and boot the image on its own first.
-   Blocks step 5.
-5. **Add the `tipsy-trails` line to `sites.conf` and let `deploy.sh` run.**
-   Depends on 3 and 4. Confirm `npm run seed:admin` actually succeeds
-   against the real container — it is idempotent, exits zero when there is
-   nothing to do, and never resets a changed password
-   (`packages/api/src/db/seed-admin-cli.ts`), but it has only ever run in
-   tests so far.
+   in one pass under `set -euo pipefail`, and `docker compose up -d --build`
+   carries no `||`: a failing build here aborts the whole deployment run —
+   every other site's rebuild included. Build and boot the image on its own
+   first. Blocks step 5.
+5. **Register the site in all three files and let `deploy.sh` run.**
+   Depends on 3 and 4. A line in `sites.conf` is not enough on its own: the
+   service block in the platform's `docker-compose.yml` and the host block
+   in its `config/caddy/Caddyfile` are equally required, and `sites.conf` is
+   maintained only on the platform checkout's `env` branch. All three blocks
+   are written out ready to copy in `SPEC.md` Section 4.3. Then confirm
+   `npm run seed:admin` actually succeeded against the real container —
+   nothing else will tell you, because `deploy.sh` runs it as
+   `... || echo "  WARN: seed:admin fehlgeschlagen"` and a failure only
+   prints that warning while the deploy reports success. It is idempotent,
+   exits zero when there is nothing to do, and never resets a changed
+   password (`packages/api/src/db/seed-admin-cli.ts`), but it has only ever
+   run in tests so far.
 6. **Open Item O10 — measure `trustProxy`'s real hop count.** Depends on 5:
    needs one real request over the public internet against the live
    deployment (`SPEC.md` Section 9.4 has the exact procedure). Until it's
@@ -327,21 +336,23 @@ Each cost a round trip. Each looked correct on first reading.
   every step immediately; do not batch commits.
 - **Commit messages with embedded double quotes break shell quoting.** Use
   `git commit -F <file>` with a heredoc.
-- **Three defects came from inferring the platform contract instead of
-  reading it, and none of them was reachable from this repository's own
-  verification loop.** The wrong admin variable name (`ADMIN_USERNAME`
-  where the platform injects `ADMIN_USER`) and the VAPID keys once slated
-  for a file `deploy.sh` overwrites on every deploy would both have produced
-  a deployment that looked complete — container up, pages loading — while
-  silently missing an admin account, or silently losing push weeks later
-  with no error at any point. `pnpm typecheck`/`lint`/`test` cannot catch
-  either: they are compliance with another system's contract, not this
-  codebase's own logic. The missing `seed:admin` script is the one that
-  would have announced itself — but only the first time `deploy.sh` actually
-  ran against the real platform, aborting that whole Pi's deploy run, every
-  other site's rebuild along with it. All three closed only once
-  `PiMultiServiceServer` was read directly (v1.10 changelog) — it had been
-  inferred, not read, for eight phases.
+- **Every defect in the platform contract came from describing it
+  second-hand instead of reading the real files, and none of them was
+  reachable from this repository's own verification loop.** The wrong admin
+  variable name (`ADMIN_USERNAME` where the platform injects `ADMIN_USER`) and
+  the VAPID keys once slated for a file `deploy.sh` overwrites on every deploy
+  would both have produced a deployment that looked complete — container up,
+  pages loading — while silently missing an admin account, or silently losing
+  push weeks later with no error at any point. `pnpm typecheck`/`lint`/`test`
+  cannot catch either: they are compliance with another system's contract, not
+  this codebase's own logic. The missing `seed:admin` script would not have
+  announced itself either, contrary to what this list said until v1.11:
+  `deploy.sh` runs it as `... || echo "  WARN: seed:admin fehlgeschlagen"`, so
+  a failure prints one warning and the deploy carries on — a site up and
+  serving with no admin account. All three closed only once the owner pasted
+  the platform's real files off the Pi (v1.11 changelog). v1.10 had claimed the
+  platform repository was read directly; it never was, which is the fourth
+  defect of the same kind and the one that hid the others.
 
 ---
 

@@ -120,15 +120,35 @@ There are two deployment paths.
 The Raspberry Pi that hosts `tipsytrails.ahultsch.com` runs several
 unrelated projects on a shared platform (`AlexanderHultsch/PiMultiServiceServer`),
 one container per site behind a single Caddy the platform owns, not this
-repository. Registration is one line in the platform's own
+repository. What follows comes from the platform's own files, pasted off
+the running Pi by the owner on 2026-08-19 — the platform repository itself
+has never been readable from here, and earlier versions of this section
+described it second-hand and got several details wrong.
+
+Registering a site takes three files, not one. A line in the platform's
 `~/pi-server/sites.conf` — four fields, `name repo_url host admin`, no port
-field — naming this site `tipsy-trails` with `admin: yes`. The platform's
-`deploy.sh` then builds and runs it locally (`build: ./apps/tipsy-trails`
-plus `docker compose up -d --build` against the root `Dockerfile` in this
-repository — no registry image involved) and routes
-`tipsytrails.ahultsch.com` to the resulting container through its own Caddy.
-`PORT` is a hardcoded convention across the platform, `3000`, set in both
-its `docker-compose.yml` and its `Caddyfile` — not read from `sites.conf`.
+field — naming this site `tipsy-trails`, `admin: yes`, and `host`
+`tipsytrails`, which is a subdomain label rather than a hostname
+(`tipsytrails` → `tipsytrails.ahultsch.com`). A service block in the
+platform's own `docker-compose.yml`. And a host block in its
+`config/caddy/Caddyfile`, without which the site answers 404 from the
+outside however healthy its container is. `sites.conf` is maintained only
+on the platform checkout's `env` branch, which is where the Pi's checkout
+sits. All three blocks are written out ready to copy in
+[`SPEC.md`](SPEC.md) Section 4.3. As of that paste none of them exists:
+nothing about this app has ever run on the Pi.
+
+The platform's `deploy.sh` builds and runs the site locally
+(`build: ./apps/tipsy-trails` plus `docker compose up -d --build` against
+the root `Dockerfile` in this repository — no registry image involved) and
+routes `tipsytrails.ahultsch.com` to the resulting container through its
+own Caddy. `PORT` is `3000`, set in the platform's `docker-compose.yml` and
+matched by its `Caddyfile` — not read from `sites.conf`. There is no
+single-site mode: `deploy.sh` accepts only `--fresh` and `--set-password`,
+and every run pulls, rebuilds and restarts every site on the Pi. A failing
+image build aborts that whole run, every other site included; a failing
+`git pull --ff-only`, by contrast, only warns and then builds whatever
+stale code is already on disk, while the run reports success.
 
 `admin: yes` makes `deploy.sh` write `apps/tipsy-trails/.env` on every
 deploy, containing exactly three variables — `SESSION_SECRET`, `ADMIN_USER`,
@@ -136,8 +156,9 @@ deploy, containing exactly three variables — `SESSION_SECRET`, `ADMIN_USER`,
 survives a redeploy: `deploy.sh` reads the existing value back out before
 overwriting the file and writes the same value back. `ADMIN_USER` and
 `ADMIN_PASSWORD` come from one shared `~/pi-server/admin.env` pair reused
-across every `admin: yes` site on the Pi — the platform has no user store of
-its own; this app's accounts and password hashing are entirely its own.
+across every `admin: yes` site on the Pi — nothing in `deploy.sh` does more
+than supply those three values; this app's accounts and password hashing are
+entirely its own.
 
 Everything else — `PUBLIC_ORIGIN` above all, since the container refuses to
 boot without it — must be added by hand to the platform's own
@@ -151,16 +172,24 @@ environment:
   PORT: "3000"
   DB_PATH: /data/db/tipsy.db
   PUBLIC_ORIGIN: https://tipsytrails.ahultsch.com
+env_file: ./apps/tipsy-trails/.env
 ```
 
+The `env_file:` line is the one not to forget. Without it the three
+variables `deploy.sh` writes into `apps/tipsy-trails/.env` never reach the
+container, and since `SESSION_SECRET` is required the app cannot boot at
+all.
+
 After bringing the containers up, `deploy.sh` runs
-`docker compose exec tipsy-trails npm run seed:admin` under
-`set -euo pipefail` — a missing or failing script aborts the deploy of
-*every* site on the Pi, not just this one, along with the final
-`docker compose restart caddy`. The script must exist and succeed
-idempotently on every run; this app already seeds the admin account at
-boot, so the script has to be safe alongside that, not a replacement for
-it.
+`docker compose exec -T tipsy-trails npm run seed:admin`, followed by
+`|| echo "  WARN: seed:admin fehlgeschlagen"`. That `||` swallows the
+failure: a missing or failing script does not abort the deploy, it prints
+one warning line and the run carries on. The site then comes up looking
+fine and has no working admin account, with nothing to say so but a warning
+in a log nobody may read — worse than a loud failure, not better. The
+script must exist and succeed idempotently on every run; this app already
+seeds the admin account at boot, so the script has to be safe alongside
+that, not a replacement for it.
 
 The data volume is `./data/tipsy-trails:/data` on the platform side — host
 `~/pi-server/data/tipsy-trails/`, container `/data`, created by Docker on
