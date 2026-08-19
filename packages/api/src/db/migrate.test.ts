@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +62,7 @@ describe('runMigrations', () => {
     const db = openDatabase(dbPath);
 
     const firstRun = runMigrations(db, migrationsDir);
-    expect(firstRun).toEqual(['001_init.sql']);
+    expect(firstRun).toEqual(['001_init.sql', '002_clear_admin_must_change_password.sql']);
 
     const secondRun = runMigrations(db, migrationsDir);
     expect(secondRun).toEqual([]);
@@ -70,9 +70,54 @@ describe('runMigrations', () => {
     const row = db
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(row?.count).toBe(1);
+    expect(row?.count).toBe(2);
 
     db.close();
+  });
+
+  it('clears must_change_password for an admin that carried it before the migration', () => {
+    // The live database was created when 001_init.sql was the only migration,
+    // so its flagged admin row already exists by the time 002 first runs.
+    // Reproduce that ordering by migrating from a directory holding 001 alone;
+    // on the second run the real directory's 002 is the only pending file.
+    const initOnlyDir = join(tmpdir(), `tipsytrails-migrate-test-init-${randomUUID()}`);
+    mkdirSync(initOnlyDir);
+    copyFileSync(join(migrationsDir, '001_init.sql'), join(initOnlyDir, '001_init.sql'));
+
+    const db = openDatabase(dbPath);
+    runMigrations(db, initOnlyDir);
+
+    db.prepare(
+      `INSERT INTO users
+        (id, username, password_hash, security_question, security_answer_hash, avatar_seed, is_admin, must_change_password, age_confirmed_at, created_at)
+       VALUES (1, 'admin', 'hash', 'question', 'answer-hash', 'seed', 1, 1, 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO users
+        (id, username, password_hash, security_question, security_answer_hash, avatar_seed, is_admin, must_change_password, age_confirmed_at, created_at)
+       VALUES (2, 'alex', 'hash', 'question', 'answer-hash', 'seed', 0, 1, 0, 0)`,
+    ).run();
+
+    const flagOf = (id: number): number | undefined =>
+      db
+        .prepare<[number], { must_change_password: number }>(
+          'SELECT must_change_password FROM users WHERE id = ?',
+        )
+        .get(id)?.must_change_password;
+
+    expect(flagOf(1)).toBe(1);
+    expect(flagOf(2)).toBe(1);
+
+    const applied = runMigrations(db, migrationsDir);
+    expect(applied).toEqual(['002_clear_admin_must_change_password.sql']);
+
+    expect(flagOf(1)).toBe(0);
+    // Non-admins are outside the migration's scope: the gate still holds for
+    // anyone who legitimately carries the flag.
+    expect(flagOf(2)).toBe(1);
+
+    db.close();
+    rmSync(initOnlyDir, { recursive: true, force: true });
   });
 
   it('takes the write lock before reading the applied set', () => {

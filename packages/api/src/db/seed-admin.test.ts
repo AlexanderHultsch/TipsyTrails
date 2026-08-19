@@ -59,7 +59,7 @@ function getAdmin(): {
 }
 
 describe('seedAdmin', () => {
-  it('seeds a single admin user with is_admin and must_change_password set', async () => {
+  it('seeds a single admin user with is_admin set and must_change_password clear', async () => {
     const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
 
     const result = await seedAdmin(db, env);
@@ -69,7 +69,7 @@ describe('seedAdmin', () => {
 
     const row = getAdmin();
     expect(row.is_admin).toBe(1);
-    expect(row.must_change_password).toBe(1);
+    expect(row.must_change_password).toBe(0);
   });
 
   it('stores an argon2id password hash', async () => {

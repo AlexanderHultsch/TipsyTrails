@@ -52,7 +52,10 @@ describe('initialiseDatabase', () => {
     const migrations = db
       .prepare<[], { filename: string }>('SELECT filename FROM schema_migrations')
       .all();
-    expect(migrations.map((row) => row.filename)).toEqual(['001_init.sql']);
+    expect(migrations.map((row) => row.filename)).toEqual([
+      '001_init.sql',
+      '002_clear_admin_must_change_password.sql',
+    ]);
   });
 
   it('is idempotent on a second call against the same path', async () => {
@@ -63,7 +66,7 @@ describe('initialiseDatabase', () => {
     const migrationRow = firstDb
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(migrationRow?.count).toBe(1);
+    expect(migrationRow?.count).toBe(2);
     const userRow = firstDb
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM users')
       .get();
@@ -75,7 +78,7 @@ describe('initialiseDatabase', () => {
     const migrationRowAfter = db
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(migrationRowAfter?.count).toBe(1);
+    expect(migrationRowAfter?.count).toBe(2);
     expect(usersCount()).toBe(usersBefore);
   });
 
@@ -97,7 +100,7 @@ describe('initialiseDatabase', () => {
       .get('admin');
     expect(row).toBeDefined();
     expect(row?.is_admin).toBe(1);
-    expect(row?.must_change_password).toBe(1);
+    expect(row?.must_change_password).toBe(0);
   });
 
   it('leaves the user table empty when admin variables are absent', async () => {

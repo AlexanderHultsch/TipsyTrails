@@ -310,7 +310,11 @@ CREATE TABLE users (
 
 No email address is collected. Username constraints: 3–20 characters, `[a-zA-Z0-9_-]`, case-insensitively unique.
 
-`must_change_password` exists for the seeded admin account (Section 13.4). While it is set, every endpoint except `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` returns 403 with a machine-readable `code: "password_change_required"`, and the client routes to the change-password screen.
+`must_change_password` gates an account until it sets a new password: while it is set, every endpoint except `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` returns 403 with a machine-readable `code: "password_change_required"`, and the client routes to the change-password screen.
+
+**The seeded admin does not carry it** (`must_change_password = 0`, Section 13.4), and that is deliberate rather than an oversight. The forced change exists to stop a deployment shipping with a credential its operator never chose — a default baked into an image or a repository. The Pi platform's admin credential is the opposite of that: `deploy.sh` asks the operator for it interactively on first run, stores it `0600` in `~/pi-server/admin.env`, and rewrites it into every `admin: yes` site's `.env` on every deploy (Section 4.3). Forcing a per-site change would invalidate the one credential the platform manages, the moment it is first used, and leave the operator tracking a second password the platform knows nothing about. The gate itself stays in place for any account that legitimately carries the flag; only the seeder no longer sets it.
+
+A consequence worth stating plainly: because `seedAdmin` skips an account that already exists and never overwrites a password changed since (Section 13.4), an admin who changes this password inside the app takes it out of the platform's hands permanently — `admin.env` and `deploy.sh --set-password` stop reaching it.
 
 ### 5.4 Sessions
 
@@ -962,7 +966,7 @@ Scaffold monorepo, Docker Compose (Caddy + API), SQLite with migration runner, h
 - [ ] No secret is present anywhere in the repository, and secret scanning with push protection is enabled
 - [ ] `LICENSE` (MIT) and `DATA-LICENSE` (ODbL) exist, and the README states which covers what
 - [ ] `data/db/` and `data/tiles/` are gitignored; a fresh clone contains no database file
-- [ ] The admin account is seeded from environment variables, never from code, with `must_change_password = 1`
+- [ ] The admin account is seeded from environment variables, never from code, with `must_change_password = 0` (Section 5.3: the platform supplies and rotates this credential, so it must stay valid)
 - [ ] Container memory at idle < 150 MB total
 
 ### Phase 1 — Accounts
@@ -1144,7 +1148,7 @@ These are consequences to design around, not reasons to reconsider:
 
 1. **No security through obscurity.** Rate limits, the session model, and the security-question reset flow are all publicly readable. They are specified to hold up under that assumption; the rate limits in Section 9.4 are load-bearing, not decorative — which is precisely why the proxy-header requirement in that section is a correctness issue, not a detail.
 2. **Bar positions are public.** `bars.json` is in the repository, so the "hidden until discovered" mechanic is a gameplay convention, not a secret. This is acceptable — the underlying data is public OSM data regardless. The API still refuses to leak undiscovered bars (Sections 7.4, 9.5), because the convention should not be broken by the app itself.
-3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USER` and `ADMIN_PASSWORD` environment variables with `must_change_password = 1`. A hard-coded admin credential in a public repository is a critical failure.
+3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USER` and `ADMIN_PASSWORD` environment variables. A hard-coded admin credential in a public repository is a critical failure. The account is seeded with `must_change_password = 0`, because on the Pi that credential is chosen by the operator and managed by the platform rather than shipped with the image — Section 5.3 sets out why forcing a change there breaks the managed path in rather than protecting it.
 4. **Secret scanning.** GitHub secret scanning and push protection are enabled on the repository. Any secret that ever lands in history must be rotated, not merely deleted.
 
 ---
