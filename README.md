@@ -181,8 +181,8 @@ open item.
 ### Standalone (this repository's compose)
 
 ```
-git clone https://github.com/AlexanderHultsch/Tipsy-Trails.git
-cd Tipsy-Trails
+git clone https://github.com/AlexanderHultsch/TipsyTrails.git
+cd TipsyTrails
 cp .env.example .env
 # fill in .env: SESSION_SECRET, ADMIN_USER, ADMIN_PASSWORD, etc.
 docker compose up -d --build

@@ -16,14 +16,14 @@ wholesale again — there is no next phase to write it "before" any more.
 
 ## 1. Current state
 
-|                       |                                                |
-| --------------------- | ---------------------------------------------- |
-| Repository            | `AlexanderHultsch/Tipsy-Trails`, branch `main` |
-| Local clone directory | `Tipsy-Trails` — matches the repository name   |
-| Phases complete       | All eight (0–8)                                |
-| Tests                 | 713 green — shared 165, api 347, web 201       |
-| Spec version          | 1.10                                           |
-| `main` at             | `3dc3522`                                      |
+|                       |                                                            |
+| --------------------- | ---------------------------------------------------------- |
+| Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
+| Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
+| Phases complete       | All eight (0–8)                                            |
+| Tests                 | 713 green — shared 165, api 347, web 201                   |
+| Spec version          | 1.10                                                       |
+| `main` at             | `3dc3522`                                                  |
 
 Everything was committed and pushed at handover.
 
