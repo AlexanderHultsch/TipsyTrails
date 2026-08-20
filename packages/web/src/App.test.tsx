@@ -53,6 +53,7 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     remove: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
     container: HTMLDivElement;
+    options: { center?: [number, number]; zoom?: number };
   }[] = [];
   // Section 7.3's fog layer (map/fog/) additionally needs loaded()/
   // getContainer() - loaded() true so FogController mounts synchronously
@@ -77,7 +78,12 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     project = vi.fn(() => ({ x: 0, y: 0 }));
     container = document.createElement('div');
     getContainer = () => this.container;
-    constructor() {
+    // Recorded so a test can assert which centre the screen actually asked
+    // for - the difference between Karlsruhe and Null Island is invisible
+    // to every other assertion here, and was a real shipped bug.
+    options: { center?: [number, number]; zoom?: number };
+    constructor(options: { center?: [number, number]; zoom?: number } = {}) {
+      this.options = options;
       instances.push(this);
     }
   }
@@ -740,6 +746,75 @@ describe('App', () => {
     expect(notice).not.toBeNull();
     expect(notice?.textContent).toContain("aren't installed on this server yet");
     expect(container.querySelector('.map-attribution')).not.toBeNull();
+  });
+
+  // A plain visit to /map, with no lat/lon in the query. This is the single
+  // most common way anyone opens the map, and it shipped centring on
+  // [0, 0]: `params.get` answers null for a missing key, `Number(null)` is
+  // 0, and `Number.isFinite(0)` is true, so the guard never fired and the
+  // `?? INITIAL_CENTER` fallback was unreachable. The map sat off the coast
+  // of Africa, MapLibre correctly requested no tiles for a point the
+  // extract does not cover, raised no error, and drew the paper background
+  // - which looks exactly like a fully fogged city.
+  it('centres on the city when the URL carries no coordinates', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.center).toEqual([8.4037, 49.0069]);
+  });
+
+  it('centres on the coordinates the district overview passes through the URL', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map?lat=49.0123&lon=8.4321');
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.center).toEqual([8.4321, 49.0123]);
+  });
+
+  // Blank and out-of-range values coerce to finite numbers just as null
+  // does, and a centre outside the extract fails silently in exactly the
+  // same way, so both fall back to the city rather than to nowhere.
+  it.each([
+    ['blank values', '/map?lat=&lon='],
+    ['non-numeric values', '/map?lat=abc&lon=def'],
+    ['out-of-range values', '/map?lat=999&lon=999'],
+  ])('falls back to the city centre for %s', async (_label, path) => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp(path);
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.center).toEqual([8.4037, 49.0069]);
   });
 
   // The extract is installed and /tiles/ answers, but MapLibre still cannot

@@ -49,10 +49,30 @@ async function checkTilesAvailable(): Promise<boolean> {
 // passes it through the URL instead. Read once at mount, same as
 // INITIAL_CENTER below - this route has no in-place "recentre" affordance,
 // so a stale value if the query changes without a remount is out of scope.
+//
+// The absent case has to be rejected before the values are converted, not
+// after: `params.get` answers null for a missing key, `Number(null)` is 0,
+// and `Number.isFinite(0)` is true - so a plain visit to /map returned
+// [0, 0] and centred the map on Null Island, five thousand kilometres from
+// any tile this extract contains. MapLibre then requested no tiles at all
+// (correctly - none cover that point), reported no error, and drew the
+// paper background, which is indistinguishable from a fully fogged city.
+// The empty string coerces to 0 the same way, so blank values are rejected
+// too. The range check is here for the same reason: any centre outside the
+// extract fails this silently, and a wrong-but-finite coordinate in a URL
+// should fall back to the city rather than reproduce that.
 function centerFromSearchParams(params: URLSearchParams): [number, number] | null {
-  const lat = Number(params.get('lat'));
-  const lon = Number(params.get('lon'));
+  const rawLat = params.get('lat')?.trim();
+  const rawLon = params.get('lon')?.trim();
+  if (!rawLat || !rawLon) {
+    return null;
+  }
+  const lat = Number(rawLat);
+  const lon = Number(rawLon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     return null;
   }
   return [lon, lat];
