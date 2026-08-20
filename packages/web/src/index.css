@@ -289,7 +289,17 @@ button:focus-visible,
   overflow: hidden;
 }
 
-.map-container {
+/* Scoped to .screen--map on purpose, and it must stay that way. MapLibre
+   adds its own `maplibregl-map` class to whichever element it is given,
+   and maplibre-gl.css sets `.maplibregl-map { position: relative }` on it.
+   That has the same specificity as a bare `.map-container` and arrives
+   later in the cascade (it ships in the lazily loaded map chunk), so it
+   wins: `inset` stops applying and the container collapses to the height
+   of its content - zero, because MapLibre's canvas inside it is itself
+   absolutely positioned. The map then renders into MapLibre's 400x300
+   fallback and the screen looks blank, with no error anywhere. Two
+   classes outrank one whatever the load order. */
+.screen--map .map-container {
   position: absolute;
   inset: 0;
 }
@@ -950,7 +960,11 @@ button:focus-visible,
   overflow: hidden;
 }
 
-.map-picker__map {
+/* Scoped for the same reason as .screen--map .map-container above:
+   MapLibre's own `.maplibregl-map { position: relative }` would otherwise
+   outrank a bare single-class rule and collapse this container to zero
+   height too. */
+.map-picker .map-picker__map {
   position: absolute;
   inset: 0;
 }
