@@ -45,7 +45,15 @@ function ringCount(feature: BoundaryFeatureCollection['features'][number]): numb
 // library. mapInstances lets tests reach the last constructed instance to
 // assert on lifecycle calls such as remove().
 const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoisted(() => {
-  const instances: { remove: ReturnType<typeof vi.fn>; container: HTMLDivElement }[] = [];
+  // `on` is declared here as well as `remove` because the map screen's
+  // MapLibre error handling can only be exercised by reaching into the
+  // registered handlers: the stand-in never fires events by itself, so a
+  // test pulls the 'error' listener back out of this mock and calls it.
+  const instances: {
+    remove: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+    container: HTMLDivElement;
+  }[] = [];
   // Section 7.3's fog layer (map/fog/) additionally needs loaded()/
   // getContainer() - loaded() true so FogController mounts synchronously
   // instead of waiting for a 'load' event this stand-in never fires, and
@@ -732,6 +740,46 @@ describe('App', () => {
     expect(notice).not.toBeNull();
     expect(notice?.textContent).toContain("aren't installed on this server yet");
     expect(container.querySelector('.map-attribution')).not.toBeNull();
+  });
+
+  // The extract is installed and /tiles/ answers, but MapLibre still cannot
+  // build the map - a broken style, a source it cannot parse, a tile request
+  // that fails. MapLibre reports that only through its own `error` event: it
+  // does not throw, and it renders nothing to say so, so the failure looks
+  // exactly like a fully fogged city. This is the case that left the first
+  // real deployment with a blank map and no way to tell why from the device.
+  it('surfaces a MapLibre load failure instead of leaving a blank map', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    expect(container.querySelector('.map-notice')).toBeNull();
+
+    const map = mapInstances[mapInstances.length - 1];
+    const errorHandler = map.on.mock.calls.find((call) => call[0] === 'error')?.[1] as
+      ((event: { error?: { message?: string } }) => void) | undefined;
+    expect(errorHandler).toBeDefined();
+
+    await act(async () => {
+      errorHandler?.({ error: new Error('Unimplemented type: 3') });
+    });
+
+    const notice = container.querySelector('.map-notice');
+    expect(notice).not.toBeNull();
+    expect(notice?.getAttribute('role')).toBe('alert');
+    expect(notice?.textContent).toContain('The map could not be loaded');
+    // The raw message is shown, not swallowed: without it a blank map is not
+    // diagnosable from a phone, which is the whole reason this exists.
+    expect(notice?.textContent).toContain('Unimplemented type: 3');
   });
 
   it('destroys the map instance when navigating away from /map', async () => {

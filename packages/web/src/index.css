@@ -407,6 +407,18 @@ button:focus-visible,
   margin: 0;
 }
 
+/* The raw MapLibre message. Smaller and quieter than the sentence above
+   it, because it is for whoever is diagnosing the deployment rather than
+   for the player - but present, since a blank map cannot be diagnosed
+   from a phone without it. Wraps rather than overflowing: these strings
+   can be long and are not written for this width. */
+.map-notice__detail {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+  opacity: 0.75;
+  overflow-wrap: anywhere;
+}
+
 .map-toast--mastered p {
   font-weight: 600;
 }

@@ -61,6 +61,14 @@ function centerFromSearchParams(params: URLSearchParams): [number, number] | nul
 export function MapScreen() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
+  // MapLibre reports a failed style, source or tile load through its own
+  // `error` event and nowhere else - it does not throw, and it does not
+  // render anything to say so. Without this the map fails to exactly what
+  // an empty map looks like: the paper background and no features, which
+  // is indistinguishable from a fully fogged city. The first error is kept
+  // rather than the last, because later ones are usually consequences of
+  // it (every subsequent tile request against a source that never loaded).
+  const [mapError, setMapError] = useState<string | null>(null);
   // A state, not a ref: Section 7.3's fog layer (useFogLayer below) needs a
   // render to see the map instance once the mount effect creates it - a
   // ref update alone would not schedule one.
@@ -122,6 +130,10 @@ export function MapScreen() {
       zoom: INITIAL_ZOOM,
       attributionControl: false,
     });
+    map.on('error', (event) => {
+      const message = event.error?.message ?? String(event.error ?? 'unknown error');
+      setMapError((previous) => previous ?? message);
+    });
     setMapInstance(map);
 
     return () => {
@@ -153,6 +165,17 @@ export function MapScreen() {
             Map tiles aren&apos;t installed on this server yet. The rest of Tipsy Trails works
             normally - only the map is affected.
           </p>
+        </div>
+      )}
+      {/* Only when the extract is installed: a 503 from /tiles/ produces
+          both states at once, and the notice above is the one that names
+          the actual cause. The raw MapLibre message is shown rather than
+          hidden - a blank map is not diagnosable without it, and this is
+          the only place it is ever visible outside a browser console. */}
+      {!tilesUnavailable && mapError !== null && (
+        <div className="map-notice" role="alert">
+          <p>The map could not be loaded.</p>
+          <p className="map-notice__detail">{mapError}</p>
         </div>
       )}
       {/* Phase 8 task brief, part C: a new account's first view of the map
