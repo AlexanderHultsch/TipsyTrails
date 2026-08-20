@@ -212,7 +212,12 @@ else
 fi
 
 mkdir -p "$output_dir"
-tmp_path="$output_dir/.$tiles_filename.tmp-$$"
+# The PID marker goes before the real filename, not after: Planetiler infers
+# its output format from the path's own extension (TileArchiveConfig), so a
+# temp path ending in anything other than .pmtiles - such as the previous
+# ".$tiles_filename.tmp-$$", whose final extension was "tmp-$$" - fails with
+# "Unsupported format tmp-<pid>" before Planetiler writes a single tile.
+tmp_path="$output_dir/.tmp-$$-$tiles_filename"
 cleanup() {
   rm -f "$tmp_path"
 }
