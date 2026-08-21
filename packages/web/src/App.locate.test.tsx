@@ -670,7 +670,7 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
   // Instant, and no permission round-trip, so it wins over asking again.
   it('prefers the stored position and does not ask the browser at all', async () => {
     const geo = stubGeolocation();
-    setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10 });
+    setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10, heading: null });
     stubPickerFetch();
 
     await renderAt('/suggest');
@@ -718,7 +718,7 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
 
     it('appears straight away on the position the map screen last accepted', async () => {
       stubGeolocation();
-      setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10 });
+      setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10, heading: null });
       stubPickerFetch();
 
       await renderAt('/suggest');

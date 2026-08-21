@@ -114,6 +114,11 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     // position (map/bars/bar-markers.test.ts covers real reprojection
     // against its own hand-built fake map).
     project = vi.fn(() => ({ x: 0, y: 0 }));
+    // The own-position marker's direction cone is drawn at the course minus
+    // this bearing (map/position/own-position-marker.ts), so a fix carrying
+    // a course reaches for it. North-up here; the rotation itself is
+    // asserted against a turned map in that file's own tests.
+    getBearing = vi.fn(() => 0);
     container = document.createElement('div');
     getContainer = () => this.container;
     // Recorded so a test can assert which centre the screen actually asked
@@ -243,7 +248,11 @@ async function renderMapWithFakeTimers() {
 interface GeolocationStub {
   watchPosition: ReturnType<typeof vi.fn>;
   clearWatch: ReturnType<typeof vi.fn>;
-  triggerPosition: (overrides?: { accuracy?: number; speed?: number | null }) => void;
+  triggerPosition: (overrides?: {
+    accuracy?: number;
+    speed?: number | null;
+    heading?: number | null;
+  }) => void;
 }
 
 // jsdom implements no Geolocation API at all, so navigator.geolocation is
@@ -271,6 +280,7 @@ function stubGeolocation(): GeolocationStub {
           longitude: 8.4037,
           accuracy: overrides.accuracy ?? 10,
           speed: overrides.speed ?? null,
+          heading: overrides.heading ?? null,
         },
         timestamp: Date.now(),
       } as GeolocationPosition);
@@ -1435,6 +1445,44 @@ describe('App', () => {
       expect(sampleCalls).toHaveLength(1);
       const body = JSON.parse((sampleCalls[0][1] as RequestInit).body as string);
       expect(body.samples).toHaveLength(1);
+    });
+
+    // Constraint C4 / Section 10.2: the GPS course turns the own-position
+    // marker's direction cone on this device and goes nowhere else. It is
+    // deliberately not a field of Sample (api/types.ts), and this is the
+    // test that says so about the request that actually leaves the browser.
+    it('keeps the reported course out of the posted sample', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10, heading: 90 });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
+      expect(sampleCalls).toHaveLength(1);
+      const body = JSON.parse((sampleCalls[0][1] as RequestInit).body as string);
+      expect(body.samples).toHaveLength(1);
+      expect(Object.keys(body.samples[0]).sort()).toEqual([
+        'accuracy',
+        'lat',
+        'lon',
+        'speed',
+        'timestamp',
+      ]);
     });
 
     it('accumulates several samples into one batch rather than one request per position', async () => {

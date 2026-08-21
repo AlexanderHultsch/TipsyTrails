@@ -733,7 +733,7 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in |
-| Map (main) | Fog map, own position, discovered bars, pending-visit banner, GPS/network indicator |
+| Map (main) | Fog map, own position and direction of travel, discovered bars, pending-visit banner, GPS/network indicator |
 | Bar detail | Name, address, district, mastered status, community tag if applicable, Check in button |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
@@ -741,6 +741,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Settings | Anonymous toggle, push permission, change password, how-it-works, privacy, delete account, logout |
 | Privacy | Static page at `/privacy`, see 10.3 |
 | Admin (admins only) | Bar management, community bar moderation, user list |
+
+**Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
 
 ### 8.4 Navigation
 

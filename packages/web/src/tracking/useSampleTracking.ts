@@ -16,6 +16,14 @@ export interface LastAcceptedPosition {
   lat: number;
   lon: number;
   accuracy: number;
+  // The GPS course - degrees clockwise from true north, null when the
+  // device is stationary or cannot tell. Display-only: it turns the own
+  // position marker's direction cone (map/position/own-position-marker.ts)
+  // and goes nowhere else. Deliberately not part of the Sample posted to
+  // the server (api/types.ts) - constraint C4 / Section 10.2 keeps raw
+  // positional data in memory, and the server needs no course for
+  // anything.
+  heading: number | null;
 }
 
 export interface SampleTrackingState {
@@ -118,6 +126,9 @@ export function useSampleTracking(): SampleTrackingState {
         lat: sample.lat,
         lon: sample.lon,
         accuracy: sample.accuracy,
+        // Read off the fix rather than off `sample`: the course is not part
+        // of what is posted, and must not become part of it.
+        heading: position.coords.heading,
       };
       setLastPosition(accepted);
       // Also outside this component's state, for map/MapPicker.tsx - see
