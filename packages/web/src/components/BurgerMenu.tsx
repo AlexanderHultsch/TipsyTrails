@@ -3,13 +3,19 @@ import { Link } from 'react-router-dom';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { useLogout } from '../auth/useLogout.js';
 
-// Single burger menu, top right, on every authenticated screen (Section
-// 8.4). Phase 2 adds Map, City and Districts; Phase 5 adds "How mastering
-// works" (Section 7.5: reachable from here regardless of the auto-shown
-// explainer); Phase 6 adds Leaderboard and Profile; Phase 8 task brief part
-// A adds Privacy, reachable from here even though this menu itself only
-// ever renders on authenticated screens - screens/Register.tsx is the other
-// way in, for a signed-out reader.
+// Single burger menu, top right (Section 8.4). Phase 2 adds Map, City and
+// Districts; Phase 5 adds "How mastering works" (Section 7.5: reachable
+// from here regardless of the auto-shown explainer); Phase 6 adds
+// Leaderboard and Profile; Phase 8 task brief part A adds Privacy.
+//
+// It renders on signed-out screens too, not only authenticated ones:
+// /privacy sits outside RequireAuth (App.tsx) and carries this menu, so a
+// signed-out reader can leave it - without one it is a dead end in the
+// installed PWA, which has no browser chrome. Entries that only mean
+// something to a signed-in user are guarded on `user` for that reason:
+// Profile, Admin, and Log out. The remaining links point at auth-guarded
+// routes and land a signed-out visitor on /login, which is ordinary for an
+// app whose content is behind an account.
 export function BurgerMenu() {
   const [open, setOpen] = useState(false);
   const { user } = useCurrentUser();
