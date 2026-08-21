@@ -104,7 +104,7 @@ CREATE TABLE visits (
   last_sample_at  INTEGER NOT NULL,   -- latest accepted on-site sample, seconds
   onsite_samples  INTEGER NOT NULL DEFAULT 1,   -- includes the check-in itself
   confirmed_s     INTEGER NOT NULL DEFAULT 0,   -- last_sample_at - started_at
-  status          TEXT NOT NULL,      -- 'pending' | 'completed' | 'expired'
+  status          TEXT NOT NULL,      -- 'pending' | 'completed' | 'expired' | 'cancelled'
   completed_at    INTEGER,
   push_sent_at    INTEGER             -- set when the 21-minute reminder went out
 );

@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.17
+**Version:** 1.18
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -1074,10 +1074,11 @@ Visit creation, presence evaluation, 20-minute rule, expiry, pending banner, mai
 
 `[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the part that needs a real device named — no browser, no GPU, no push service and no phone here, so those cannot be ticked and must not be.
 
-- [ ] Check-in is only offered within the on-site radius, is server-re-validated, and lists multiple candidates by distance — **unticked in v1.14**: the radius rule and the server re-validation are still proven, but Section 7.5 now puts the check-in action at the bar's own marker and leaves the nearby panel without a control, and the tests behind this line still exercise the panel's button. It is re-earned when they exercise the marker route instead.
+- [x] Check-in is only offered within the on-site radius, is server-re-validated, and named by the player rather than suggested — **re-earned in v1.17** on the terms its v1.14 note set: the tests drive the marker route, the sheet's action is proven disabled out of range, and one case checks in at the bar whose marker was tapped rather than the nearest. A further case clicks through the whole nearby panel and requires that no request results, so the panel cannot quietly become a control again. "Lists multiple candidates by distance" is still proven, of the panel, which now only lists them.
 - [~] Two samples ≥ 20 minutes apart complete the visit — covered end to end against the API with nothing sent in between; "with the app closed" itself needs a phone
 - [x] A second check-in at a bar with an open pending visit returns the existing visit, not a duplicate
-- [ ] The pending banner shows confirmed and remaining time accurately at all times — **unticked in v1.14**: the test behind this line asserts that the figure advances with the wall clock, which is precisely the behaviour Section 7.5 now forbids. The tick was never earned; it recorded that a number moved, not that it was true. It is re-earned by a test that shows the figure following the server's `confirmed_s` — stepping forward on an accepted on-site sample and holding still once the player is out of range.
+- [x] The pending banner shows confirmed and remaining time accurately at all times — **re-earned in v1.17** on exactly the terms its v1.14 note set: one test drives a real sample through the app and watches the figure step from 0:00 to 10:00 off the server's own response, then takes the player out of range and holds it there across 65 seconds of wall clock. Both directions of the defect — the clock that lied and the frozen banner that would have replaced it — fail that test.
+- [x] A pending visit can be cancelled by the player alone, and only their own pending one — the endpoint answers one identical 404 for another user's visit, a completed, expired or already-cancelled one, and an id that never existed; cancelling releases the partial unique index so the same bar can be checked into again immediately; a maintenance tick run against a cancelled row backdated past both the expiry and the push threshold leaves it untouched. The banner's control is proven to need its confirmation, and to cancel the visit whose control was tapped rather than the first in the list
 - [~] The push notification fires once at 21 minutes, and not at all if the visit already completed — the once-only guarantee, the not-while-completed rule and the 404/410 deletion are tested with the sender faked at a seam; **delivery on Android and on an installed iOS PWA is unverified**
 - [x] Moving out of range shows the explicit "still pending" message
 - [x] A visit expires after 6 hours and the user can immediately check in again
@@ -1213,10 +1214,36 @@ These are consequences to design around, not reasons to reconsider:
 | O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
 | O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
 | O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
+| O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. `POST /api/samples` deliberately reports only the visits its sample touched, and `GET /api/visits/pending` is fetched once per mount, so a visit that reaches `VISIT_EXPIRY_S` with the app open keeps rendering as pending until the screen is remounted. It is the same family as the confirmed-time defect v1.14 named — the banner asserting a state the server does not hold — and it was found while fixing that one, not by it. Closing it means either the sample response reporting the visits it expired, or the banner refetching; both are small, and neither was done at the time because it was outside that task's scope. | Open |
 
 ---
 
 ## 15. Changelog
+
+### v1.18 — a visit can be ended, and the banner stops lying about it
+
+The last two items of the third feedback round. `POST /api/visits/:id/cancel` acts only on the
+caller's own pending visit and answers one identical 404 for every other case — another
+player's visit, a completed or expired or already-cancelled one, an id that never existed —
+for the reason Section 9.5 gives about bars, which applies with more force here: visit ids are
+one global sequence, so a distinguishable response would let any signed-in player enumerate
+how many visits everyone else holds. A pending row that is already stale by time is expired
+rather than cancelled: the six-hour rule ending a visit and the player choosing to end it are
+different things and the row records which happened.
+
+The banner now renders the server's `confirmedS` and `remainingS` instead of a client-side
+clock counting from check-in. That clock is what produced "Confirmed 120:21 - 0:00 remaining"
+on a visit walked away from two hours earlier. Section 7.5's rule about what the figure does
+over time is now proven by a test that both steps it on a real sample and holds it still once
+the player is out of range, so neither the lie nor its over-correction can come back. The
+guidance moved inside the list item, which is where it always belonged: several simultaneous
+pending visits are allowed, so one sentence under the whole list could not be true of all of
+them, and that is why the away wording used to appear directly beneath its own contradiction.
+
+Two Phase 5 Definition-of-Done ticks withdrawn in v1.14 are re-earned here, each on the exact
+terms its note set. One new Open Item, O14: an expired visit is still never removed from the
+banner while the map stays open — the same family of defect as the one just fixed, found while
+fixing it, and left recorded rather than quietly folded into an unrelated change.
 
 ### v1.17 — checking in moves onto the marker
 
@@ -1617,4 +1644,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.17*
+*End of specification v1.18*

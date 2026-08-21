@@ -586,9 +586,42 @@ button:focus-visible,
   margin: 0.25rem 0 0;
 }
 
-.pending-visit-banner__hint {
+/* Section 7.5: the guidance is per visit, not one line under the whole
+   list - on site "stay and reopen", away "return to the bar and finish" -
+   so it sits inside the item and one replaces the other. */
+.pending-visit-banner__guidance {
   font-size: 0.8125rem;
-  margin: 0.75rem 0 0;
+  margin: 0.25rem 0 0;
+}
+
+/* Section 7.5's cancel control and its confirmation. Both steps are
+   ordinary .button elements, so Section 8.2's 44px minimum tap target comes
+   from that class rather than being restated here. */
+.pending-visit-banner__cancel,
+.pending-visit-banner__confirm-cancel,
+.pending-visit-banner__keep {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.pending-visit-banner__confirm {
+  margin-top: 0.5rem;
+}
+
+.pending-visit-banner__confirm-question {
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+.pending-visit-banner__confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pending-visit-banner__error {
+  margin: 0.5rem 0 0;
 }
 
 /* Section 8.3, "no map overlay may obscure another": the two full-width

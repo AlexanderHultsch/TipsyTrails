@@ -8,6 +8,8 @@ import type Database from 'better-sqlite3';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.js';
+import { runMaintenanceTick } from '../maintenance.js';
+import type { PushSender } from '../push/sender.js';
 import { openDatabase } from '../db/index.js';
 import { runMigrations } from '../db/migrate.js';
 import { seedBars } from '../db/seed-bars.js';
@@ -172,6 +174,20 @@ function checkIn(
     headers: { cookie, origin: baseEnv.PUBLIC_ORIGIN },
     payload: { barId },
   });
+}
+
+function cancelVisit(cookie: string, visitId: number | string): Promise<LightMyRequestResponse> {
+  return injectWithOrigin({
+    method: 'POST',
+    url: `/api/visits/${visitId}/cancel`,
+    headers: { cookie },
+  });
+}
+
+function statusOfVisit(visitId: number): string | undefined {
+  return db
+    .prepare<[number], { status: string }>('SELECT status FROM visits WHERE id = ?')
+    .get(visitId)?.status;
 }
 
 function getPending(cookie: string): Promise<LightMyRequestResponse> {
@@ -423,5 +439,205 @@ describe('GET /api/visits/pending', () => {
     expect(response.statusCode).toBe(200);
     const barIds = response.json().visits.map((visit: { barId: number }) => visit.barId);
     expect(barIds.sort()).toEqual([schlossId, nearbyId].sort());
+  });
+});
+
+// SPEC.md Sections 5.7, 7.5 ("A pending visit can be cancelled"), 9.2, 9.5.
+describe('POST /api/visits/:id/cancel', () => {
+  it('requires a session', async () => {
+    const response = await injectWithOrigin({ method: 'POST', url: '/api/visits/1/cancel' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("moves the caller's own pending visit to cancelled, keeps the row, and drops it from the banner", async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const created = await checkIn(cookie, barId);
+    const visitId = created.json().id as number;
+
+    const response = await cancelVisit(cookie, visitId);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ id: visitId, barId, status: 'cancelled' });
+
+    // Section 5.7: "The row is kept rather than deleted" — a record of what
+    // happened, not a mistake to erase.
+    const count = db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM visits').get();
+    expect(count?.count).toBe(1);
+    expect(statusOfVisit(visitId)).toBe('cancelled');
+    // Nothing was completed, so nothing may claim to have been.
+    const row = db
+      .prepare<[number], { completed_at: number | null }>(
+        'SELECT completed_at FROM visits WHERE id = ?',
+      )
+      .get(visitId);
+    expect(row?.completed_at).toBeNull();
+
+    const pending = await getPending(cookie);
+    expect(pending.json().visits).toEqual([]);
+  });
+
+  // Section 5.7's whole reason for keeping cancel a status change rather
+  // than a deletion: leaving `pending` releases the partial unique index
+  // `idx_visits_one_pending`, so the same bar is checkable again at once.
+  it('releases the one-pending-visit index so the same bar can be checked into again immediately', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const first = await checkIn(cookie, barId);
+    const firstId = first.json().id as number;
+
+    await cancelVisit(cookie, firstId);
+    const second = await checkIn(cookie, barId);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json().id).not.toBe(firstId);
+    expect(second.json()).toMatchObject({ barId, status: 'pending', confirmedS: 0 });
+
+    // Two rows, one cancelled and one pending — the second check-in created
+    // a new visit rather than reviving or replacing the cancelled one.
+    const rows = db
+      .prepare<[], { id: number; status: string }>('SELECT id, status FROM visits ORDER BY id')
+      .all();
+    expect(rows.map((visit) => visit.status)).toEqual(['cancelled', 'pending']);
+  });
+
+  it("does not cancel another user's pending visit", async () => {
+    const ownerCookie = await registerUser('walker');
+    await postSamples(ownerCookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const created = await checkIn(ownerCookie, barId);
+    const visitId = created.json().id as number;
+
+    const strangerCookie = await registerUser('stranger');
+    const response = await cancelVisit(strangerCookie, visitId);
+
+    expect(response.statusCode).toBe(404);
+    expect(statusOfVisit(visitId)).toBe('pending');
+    expect((await getPending(ownerCookie)).json().visits).toHaveLength(1);
+  });
+
+  it('does not cancel a completed visit', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const created = await checkIn(cookie, barId);
+    const visitId = created.json().id as number;
+    const completedAtS = Math.floor(Date.now() / 1000);
+    db.prepare(`UPDATE visits SET status = 'completed', completed_at = ? WHERE id = ?`).run(
+      completedAtS,
+      visitId,
+    );
+
+    const response = await cancelVisit(cookie, visitId);
+
+    expect(response.statusCode).toBe(404);
+    // Mastering is permanent (Section 5.7) — a cancel must not be able to
+    // reach back and unmaster a bar.
+    expect(statusOfVisit(visitId)).toBe('completed');
+  });
+
+  it('does not cancel an expired visit, and cannot cancel the same visit twice', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const schlossId = barIdByName('Zum Schlossgarten');
+    const nearbyId = barIdByName('Nahe Ecke');
+
+    const stale = await checkIn(cookie, schlossId);
+    const staleId = stale.json().id as number;
+    db.prepare('UPDATE visits SET last_sample_at = ? WHERE id = ?').run(
+      Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S - 60,
+      staleId,
+    );
+
+    const staleResponse = await cancelVisit(cookie, staleId);
+
+    expect(staleResponse.statusCode).toBe(404);
+    // Section 7.9's lazy expiry, and Section 5.7's "cancelled ... only by
+    // the caller's own explicit request": the six-hour rule already ended
+    // this visit, so the row records `expired` and not the player's choice.
+    expect(statusOfVisit(staleId)).toBe('expired');
+
+    const live = await checkIn(cookie, nearbyId);
+    const liveId = live.json().id as number;
+    expect((await cancelVisit(cookie, liveId)).statusCode).toBe(200);
+    const second = await cancelVisit(cookie, liveId);
+    expect(second.statusCode).toBe(404);
+    expect(statusOfVisit(liveId)).toBe('cancelled');
+  });
+
+  // SPEC.md Section 9.5: `visits.id` is a global sequence, so telling these
+  // cases apart would make this route an oracle for other players' visits —
+  // the same argument that makes `GET /api/bars/:id` answer one identical
+  // 404 for "does not exist" and "not discovered by you".
+  it("returns byte-identical 404s for another user's visit, a terminal visit, and ids that never existed", async () => {
+    const ownerCookie = await registerUser('walker');
+    await postSamples(ownerCookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const created = await checkIn(ownerCookie, barId);
+    const otherUsersVisitId = created.json().id as number;
+
+    const cookie = await registerUser('stranger');
+    const nearbyId = barIdByName('Nahe Ecke');
+    await postSamples(cookie, [sample()]);
+    const own = await checkIn(cookie, nearbyId);
+    const ownVisitId = own.json().id as number;
+    await cancelVisit(cookie, ownVisitId);
+
+    const responses = [
+      await cancelVisit(cookie, otherUsersVisitId),
+      await cancelVisit(cookie, ownVisitId),
+      await cancelVisit(cookie, 999999),
+      await cancelVisit(cookie, 'not-a-number'),
+    ];
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(404);
+      expect(response.body).toBe(responses[0].body);
+    }
+  });
+
+  // SPEC.md Section 5.7: "it is never reached by a sample or by the
+  // maintenance tick". The tick's two visit passes (expiry and the
+  // 21-minute push) both select `status = 'pending'`, so a cancelled row is
+  // outside both — proven here rather than asserted, because a fourth
+  // status is exactly the kind of change a status-blind sweep would swallow.
+  it('leaves cancelled rows alone in the maintenance tick, however stale they are', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = barIdByName('Zum Schlossgarten');
+    const created = await checkIn(cookie, barId);
+    const visitId = created.json().id as number;
+
+    await cancelVisit(cookie, visitId);
+    // Older than both VISIT_EXPIRY_S and VISIT_PUSH_AFTER_S, so a sweep that
+    // ignored `status` would expire it and push for it.
+    const longAgoS = Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S - 3600;
+    db.prepare('UPDATE visits SET started_at = ?, last_sample_at = ? WHERE id = ?').run(
+      longAgoS,
+      longAgoS,
+      visitId,
+    );
+
+    const sent: string[] = [];
+    const pushSender: PushSender = {
+      send: async (subscription) => {
+        sent.push(subscription.endpoint);
+        return { delivered: true };
+      },
+    };
+    const result = await runMaintenanceTick(db, Math.floor(Date.now() / 1000), { pushSender });
+
+    expect(result.expiredVisits).toBe(0);
+    expect(result.pushDispatched).toBe(0);
+    expect(sent).toEqual([]);
+    expect(statusOfVisit(visitId)).toBe('cancelled');
+    const row = db
+      .prepare<[number], { push_sent_at: number | null }>(
+        'SELECT push_sent_at FROM visits WHERE id = ?',
+      )
+      .get(visitId);
+    expect(row?.push_sent_at).toBeNull();
   });
 });

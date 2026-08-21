@@ -299,7 +299,13 @@ export function MapScreen() {
       <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
       <LocateButton disabled={trackingState.lastPosition === null} onClick={handleGoToMyLocation} />
-      <PendingVisitBanner visits={visits.pendingVisits} outOfRangeVisitIds={outOfRangeVisitIds} />
+      <PendingVisitBanner
+        visits={visits.pendingVisits}
+        outOfRangeVisitIds={outOfRangeVisitIds}
+        cancellingVisitId={visits.cancellingVisitId}
+        cancelError={visits.cancelError}
+        onCancel={(visitId) => void visits.cancelVisit(visitId)}
+      />
       {/* Both bottom-edge overlays live in one stacking container rather
           than being positioned against the map independently, so the sheet
           cannot land on top of the panel (Section 8.3: "no map overlay may

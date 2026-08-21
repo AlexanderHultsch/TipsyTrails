@@ -11,7 +11,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { isOnSite, onsiteCandidates, onsiteRadiusM } from '@tipsytrails/shared';
 import type { OnsiteCandidate } from '@tipsytrails/shared';
-import { ApiError, checkIn as postCheckIn, getPendingVisits } from '../api/client.js';
+import {
+  ApiError,
+  cancelVisit as postCancelVisit,
+  checkIn as postCheckIn,
+  getPendingVisits,
+} from '../api/client.js';
 import type { Bar, VisitSummary } from '../api/types.js';
 import type { LastAcceptedPosition } from './useSampleTracking.js';
 
@@ -24,6 +29,13 @@ export interface UseVisitsResult {
   checkInError: string | null;
   checkIn: (barId: number) => Promise<boolean>;
   clearCheckInError: () => void;
+  // Section 7.5's "A pending visit can be cancelled". The id of the visit a
+  // cancel request is currently in flight for, so the banner can disable
+  // that one visit's control without touching the others - the banner is a
+  // list, and a second pending visit must stay cancellable meanwhile.
+  cancellingVisitId: number | null;
+  cancelError: string | null;
+  cancelVisit: (visitId: number) => Promise<boolean>;
 }
 
 export function useVisits(
@@ -36,6 +48,8 @@ export function useVisits(
   const [justMastered, setJustMastered] = useState<string[]>([]);
   const [checkingIn, setCheckingIn] = useState(false);
   const [checkInError, setCheckInError] = useState<string | null>(null);
+  const [cancellingVisitId, setCancellingVisitId] = useState<number | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   // GET /api/visits/pending (Section 9.2): the banner's starting state, for
   // visits that were already pending before this mount (e.g. a reload).
@@ -127,6 +141,28 @@ export function useVisits(
     }
   }
 
+  // Section 7.5: the player's own way out of a pending visit. The visit
+  // leaves the banner only once the server has actually moved it to
+  // `cancelled` (Section 5.7) - dropping it optimistically would show a
+  // player who is still checked in a screen saying they are not, and the
+  // next GET /api/visits/pending would put it back.
+  async function cancelVisit(visitId: number): Promise<boolean> {
+    setCancellingVisitId(visitId);
+    setCancelError(null);
+    try {
+      await postCancelVisit(visitId);
+      setPendingVisits((current) => current.filter((visit) => visit.id !== visitId));
+      return true;
+    } catch (err) {
+      setCancelError(
+        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
+      );
+      return false;
+    } finally {
+      setCancellingVisitId(null);
+    }
+  }
+
   // The error belongs to the attempt that produced it, and since Section 7.5
   // the attempt is made at one named bar (components/BarSheet.tsx). Opening
   // or closing that surface clears it, so a failure at one bar is never shown
@@ -144,5 +180,8 @@ export function useVisits(
     checkInError,
     checkIn,
     clearCheckInError,
+    cancellingVisitId,
+    cancelError,
+    cancelVisit,
   };
 }

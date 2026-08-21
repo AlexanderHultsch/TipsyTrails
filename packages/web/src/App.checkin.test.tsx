@@ -252,6 +252,50 @@ function remainingSecondsFrom(text: string): number {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
+function confirmedSecondsFrom(text: string): number {
+  const match = /Confirmed (\d+):(\d{2})/.exec(text);
+  if (!match) {
+    throw new Error(`No confirmed-time text found in: ${text}`);
+  }
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+const ON_SITE_GUIDANCE = "Open Tipsy Trails again while you're still here to complete this visit.";
+
+function bannerText(): string {
+  return container.querySelector('.pending-visit-banner')?.textContent ?? '';
+}
+
+function bannerItems(): HTMLElement[] {
+  return Array.from(container.querySelectorAll('.pending-visit-banner__item'));
+}
+
+function itemFor(barName: string): HTMLElement {
+  const item = bannerItems().find(
+    (entry) => entry.querySelector('.pending-visit-banner__bar')?.textContent === barName,
+  );
+  if (!item) {
+    throw new Error(`No banner item rendered for ${barName}`);
+  }
+  return item;
+}
+
+function pendingVisit(overrides: Record<string, unknown> = {}) {
+  const nowS = Math.floor(Date.now() / 1000);
+  return {
+    id: 1,
+    barId: 1,
+    barName: 'The Fox',
+    startedAt: nowS,
+    lastSampleAt: nowS,
+    onsiteSamples: 1,
+    confirmedS: 0,
+    remainingS: DERIVED.VISIT_REQUIRED_S,
+    status: 'pending',
+    ...overrides,
+  };
+}
+
 beforeAll(async () => {
   await import('./screens/Map.js');
 });
@@ -669,7 +713,20 @@ describe('check-in and mastering', () => {
     expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
   });
 
-  it("counts the banner's remaining time down between posts, driven by the clock rather than the last server response", async () => {
+  // Section 7.5: "The confirmed figure is the server's confirmed_s for that
+  // visit ... It is not the wall-clock time since check-in." It steps
+  // forward on each accepted on-site sample, holds between samples, and
+  // stops at the last confirmed value once the player is out of range. This
+  // replaces a test that asserted the figure advanced with the wall clock -
+  // behaviour Section 7.5 now forbids, and which recorded only that a number
+  // moved, not that it was true.
+  it("follows the server's confirmed time: it steps on an accepted sample and holds still once out of range", async () => {
+    // The player starts at the bar. One sample post reports the visit's new
+    // confirmed_s; every later post reports nothing, standing in for a
+    // player who has walked away and whose samples are no longer on site.
+    let sampleCalls = 0;
+    const geo = stubGeolocation();
+    stubWakeLock();
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -678,7 +735,7 @@ describe('check-in and mastering', () => {
         return jsonResponse(206, {});
       }
       if (url === '/api/bars') {
-        return jsonResponse(200, { bars: [] });
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
       }
       if (url === '/api/visits/pending') {
         const nowS = Math.floor(Date.now() / 1000);
@@ -698,21 +755,73 @@ describe('check-in and mastering', () => {
           ],
         });
       }
+      if (url === '/api/samples') {
+        sampleCalls += 1;
+        const nowS = Math.floor(Date.now() / 1000);
+        return jsonResponse(200, {
+          newCells: 0,
+          newBars: [],
+          visitUpdates:
+            sampleCalls === 1
+              ? [
+                  {
+                    id: 1,
+                    barId: 1,
+                    barName: 'The Fox',
+                    startedAt: nowS - 600,
+                    lastSampleAt: nowS,
+                    onsiteSamples: 2,
+                    confirmedS: 600,
+                    remainingS: DERIVED.VISIT_REQUIRED_S - 600,
+                    status: 'pending',
+                  },
+                ]
+              : [],
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
     vi.useFakeTimers();
     await renderMapWithFakeTimers();
 
+    // Straight off GET /api/visits/pending: nothing is confirmed yet.
     const initialText = container.querySelector('.pending-visit-banner__time')?.textContent ?? '';
+    expect(confirmedSecondsFrom(initialText)).toBe(0);
     expect(remainingSecondsFrom(initialText)).toBe(DERIVED.VISIT_REQUIRED_S);
 
+    // A fix at the bar, then a sample post that comes back with ten minutes
+    // confirmed - the figure steps to what the server confirmed, in one go.
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const steppedText = container.querySelector('.pending-visit-banner__time')?.textContent ?? '';
+    expect(confirmedSecondsFrom(steppedText)).toBe(600);
+    expect(remainingSecondsFrom(steppedText)).toBe(DERIVED.VISIT_REQUIRED_S - 600);
+
+    // The player walks away: further samples are accepted but touch no
+    // visit, and more than a minute of wall clock passes. The figure holds
+    // at the last value the server confirmed - it neither ticks up nor
+    // resets.
+    act(() => {
+      geo.triggerPosition({ lat: 49.05, accuracy: 10 });
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(65_000);
     });
 
-    const laterText = container.querySelector('.pending-visit-banner__time')?.textContent ?? '';
-    expect(remainingSecondsFrom(laterText)).toBe(DERIVED.VISIT_REQUIRED_S - 65);
+    expect(container.querySelector('.pending-visit-banner__out-of-range')).not.toBeNull();
+    const heldText = container.querySelector('.pending-visit-banner__time')?.textContent ?? '';
+    expect(confirmedSecondsFrom(heldText)).toBe(600);
+    expect(remainingSecondsFrom(heldText)).toBe(DERIVED.VISIT_REQUIRED_S - 600);
+    expect(sampleCalls).toBeGreaterThan(1);
   });
 
   it('shows the mastered message when POST /api/samples reports a completed visit', async () => {
@@ -811,6 +920,9 @@ describe('check-in and mastering', () => {
 
     expect(container.querySelector('.pending-visit-banner')).not.toBeNull();
     expect(container.querySelector('.pending-visit-banner__out-of-range')).toBeNull();
+    // No position yet, so nothing says the player has moved away: the
+    // on-site guidance is what stands.
+    expect(bannerText()).toContain(ON_SITE_GUIDANCE);
 
     act(() => {
       geo.triggerPosition({ accuracy: 10 });
@@ -824,6 +936,245 @@ describe('check-in and mastering', () => {
     const message = container.querySelector('.pending-visit-banner__out-of-range')?.textContent;
     expect(message).toContain("You've moved away from The Fox");
     expect(message).toContain('still pending');
+
+    // Section 7.5: the away wording *replaces* the on-site one. "You've
+    // moved away" directly above "stay where you are and reopen the app" is
+    // two sentences that cannot both be true, so the on-site sentence must
+    // be gone from the banner entirely - not merely pushed further down it.
+    expect(bannerText()).not.toContain(ON_SITE_GUIDANCE);
+    expect(bannerText()).toContain(
+      'Go back to The Fox and open Tipsy Trails there to finish this visit.',
+    );
+  });
+
+  // Section 7.5: multiple simultaneous pending visits are allowed, so the
+  // guidance belongs to a visit and not to the list. One line under the
+  // whole banner cannot be right for two visits in different states, which
+  // is the structural half of the defect above.
+  it('gives each pending visit its own guidance when one bar is in range and another is not', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'Near Bar', lat: FIXED_LAT, lon: FIXED_LON }),
+            bar({ id: 2, name: 'Far Bar', lat: 49.05, lon: FIXED_LON }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, {
+          visits: [
+            pendingVisit({ id: 1, barId: 1, barName: 'Near Bar' }),
+            pendingVisit({ id: 2, barId: 2, barName: 'Far Bar' }),
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const near = itemFor('Near Bar');
+    expect(near.textContent).toContain(ON_SITE_GUIDANCE);
+    expect(near.querySelector('.pending-visit-banner__out-of-range')).toBeNull();
+
+    const far = itemFor('Far Bar');
+    expect(far.textContent).toContain("You've moved away from Far Bar");
+    expect(far.textContent).toContain(
+      'Go back to Far Bar and open Tipsy Trails there to finish this visit.',
+    );
+    expect(far.textContent).not.toContain(ON_SITE_GUIDANCE);
+  });
+
+  // Section 7.5: the banner carries the cancel control "behind a
+  // confirmation, because cancelling throws away whatever confirmed time the
+  // visit has accumulated and there is no route back to it".
+  it('cancels a pending visit only after a second confirmation that names the bar', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [pendingVisit({ id: 77, confirmedS: 300 })] });
+      }
+      if (url === '/api/visits/77/cancel' && init?.method === 'POST') {
+        return jsonResponse(200, pendingVisit({ id: 77, confirmedS: 300, status: 'cancelled' }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const cancelCalls = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === '/api/visits/77/cancel');
+
+    // First tap: nothing is cancelled yet, and the confirmation names the
+    // bar so it can never be answered about the wrong one.
+    await act(async () => {
+      (container.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(cancelCalls()).toHaveLength(0);
+    const confirm = container.querySelector('.pending-visit-banner__confirm');
+    expect(confirm?.textContent).toContain('Cancel your visit to The Fox?');
+    const confirmButton = container.querySelector(
+      '.pending-visit-banner__confirm-cancel',
+    ) as HTMLButtonElement;
+    expect(confirmButton.textContent).toContain('The Fox');
+
+    // Second tap: now it goes, and the banner stops claiming a visit the
+    // player has ended.
+    await act(async () => {
+      confirmButton.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(cancelCalls()).toHaveLength(1);
+    expect(cancelCalls()[0][1]?.method).toBe('POST');
+    expect(container.querySelector('.pending-visit-banner')).toBeNull();
+  });
+
+  // Section 7.5 allows several simultaneous pending visits at adjacent bars,
+  // so the banner is a list and every cancel control in it looks identical.
+  // Nothing above this test would notice a control that cancelled the first
+  // visit in the list instead of its own - the single-visit tests pass either
+  // way, because with one visit the two are the same row. That is the same
+  // defect class the check-in tests already guard against on the map ("checks
+  // in at the bar whose marker was tapped, not at the nearest one"), and it is
+  // worse here: it ends something the player did not choose to end, and
+  // cancelling has no route back.
+  it('cancels the visit whose control was tapped, not the first one in the list', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [bar({ id: 1, name: 'The Fox' }), bar({ id: 2, name: 'The Hound' })],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, {
+          visits: [
+            pendingVisit({ id: 77, barId: 1, barName: 'The Fox' }),
+            pendingVisit({ id: 88, barId: 2, barName: 'The Hound' }),
+          ],
+        });
+      }
+      if (url.endsWith('/cancel') && init?.method === 'POST') {
+        return jsonResponse(200, pendingVisit({ id: 88, barId: 2, status: 'cancelled' }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Deliberately the second item, so a control that reached for
+    // `visits[0]` would cancel The Fox and this would catch it.
+    const hound = itemFor('The Hound');
+    await act(async () => {
+      (hound.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const confirmButton = itemFor('The Hound').querySelector(
+      '.pending-visit-banner__confirm-cancel',
+    ) as HTMLButtonElement;
+    expect(confirmButton.textContent).toContain('The Hound');
+    await act(async () => {
+      confirmButton.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const cancelPaths = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((path) => path.endsWith('/cancel'));
+    expect(cancelPaths).toEqual(['/api/visits/88/cancel']);
+  });
+
+  it('keeps the visit when the confirmation is dismissed', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [pendingVisit({ id: 77 })] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      (container.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      (container.querySelector('.pending-visit-banner__keep') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/cancel'))).toBe(false);
+    expect(container.querySelector('.pending-visit-banner__confirm')).toBeNull();
+    expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
   });
 
   it('shows the explainer once, automatically, after the first check-in but not after a second', async () => {

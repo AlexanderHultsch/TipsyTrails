@@ -248,6 +248,16 @@ export function checkIn(input: { barId: number }): Promise<VisitSummary> {
   });
 }
 
+// POST /api/visits/:id/cancel (Section 9.2/5.7/7.5): ends the caller's own
+// pending visit and answers with it in its `cancelled` state. Not a DELETE,
+// deliberately - the row survives as the record of what happened, so there
+// is nothing here to mirror `deleteAdminBar` above. A visit the caller may
+// not act on comes back as one indistinguishable 404 (Section 9.5), which
+// this function surfaces as an ordinary ApiError like every other call.
+export function cancelVisit(visitId: number): Promise<VisitSummary> {
+  return request<VisitSummary>(`/api/visits/${visitId}/cancel`, { method: 'POST' });
+}
+
 // GET /api/visits/pending (Section 9.2): the caller's active pending
 // visits, for the persistent banner (Section 7.5).
 export function getPendingVisits(): Promise<PendingVisitsResponse> {
