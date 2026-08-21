@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.11
+**Version:** 1.12
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -49,7 +49,7 @@ Tipsy Trails is a location-based exploration game for the city of Karlsruhe, Ger
 
 The city map is fully covered by fog. Players reveal the map by physically walking through the city. Bars are hidden until a player comes within 100 m of them; once discovered they remain visible forever. A bar is "mastered" by checking in and remaining on site for at least 20 minutes.
 
-Progress is measured as **percentage of area explored** (per district and city-wide) and **number of bars mastered**. Badges are awarded weekly, monthly, and yearly to players who exceed fixed thresholds.
+Progress is measured as **percentage of area explored** (per district and city-wide) and **number of bars mastered**. Badges are a weekly, monthly, and yearly contest: each one goes to the period's top player, provided they clear a fixed floor that is never published (Section 7.7).
 
 **Core loop:** walk → fog clears → hidden bars appear → check in → stay 20 minutes → bar mastered → progress and badges.
 
@@ -559,10 +559,12 @@ export const CONFIG = {
     suggest:         { limit: 10, windowMs: 24 * 60 * 60 * 1000, by: 'user' },
   },
 
-  // Badges are ACTIVITY FLOORS, not competitive targets. Their only job is to
-  // separate someone who actually went out during the period from someone who
-  // just opened the app or was inactive. Set them low. A badge is awarded when
-  // value >= threshold (minimum, not "strictly greater").
+  // Badges are a per-period COMPETITION, and these are its FLOORS. A badge
+  // goes to the highest-scoring user of the period, and to nobody at all if
+  // no one reaches the floor — its only job is to stop the badge being won by
+  // being the least inactive person. Set them low: they are qualification, not
+  // the target. A user qualifies when value >= threshold (minimum, not
+  // "strictly greater"). Never sent to a client — see Section 7.7.
   BADGE_THRESHOLDS: {
     // Percent of playable city area newly revealed in the period.
     // Deliberately not linear across periods: after the first weeks most walking
@@ -666,13 +668,15 @@ Two kinds, three periods, fixed thresholds (Section 7.1). Thresholds are constan
 - `explorer`: percent of **playable city area** newly revealed within the period, summed from `fog_daily_progress` over the period's days and divided by `cities.playable_cells`.
 - `barfly`: bars newly mastered within the period — that is, bars whose *earliest* completed visit falls inside the period. A second completed visit at an already-mastered bar counts for nothing.
 
-**Design intent — read this before tuning any threshold.** Badges are an *activity floor*, not a competition. They exist to do exactly two things: prevent a user who has just registered and merely opened the app from receiving a badge, and prevent an inactive user from receiving one. Anyone who genuinely went out during the period should earn the badge. Thresholds are therefore deliberately easy, and should be lowered rather than raised if real-world use shows them excluding active players.
+**Design intent — read this before tuning any threshold.** A badge is a *competition*, decided once per period: it goes to the period's highest scorer, not to everyone who was active. The threshold is a **floor, not a target** — it exists only so the badge cannot be won by being the least inactive person in a quiet period. Thresholds are therefore deliberately easy, and should be lowered rather than raised if real-world use shows them excluding genuinely active players; raising one does not make the badge harder to win, it only makes "nobody won" more likely.
 
-**Awarding.** A badge is granted to every user whose value is **greater than or equal to** the threshold for that period. Any number of users can hold the same badge — badges are never exclusive and are never taken away. Evaluation runs as a scheduled job shortly after each period closes (weekly Monday 04:00, monthly 1st 04:00, yearly Jan 1st 04:00, Europe/Berlin), and badges are written to the `badges` table.
+The threshold is **never shown to users and no endpoint returns it**. Neither is any rank or standing: not "you are 2nd", not "0.3% to go". The profile shows a player their own value for the running period and nothing else, so the only thing a player can read off the game is what they themselves did.
+
+**Awarding.** Candidates for a period are the users whose value is **greater than or equal to** the threshold for that period. If there are none, the badge is not awarded at all. Otherwise the badge goes to the candidate with the highest value, and to **every candidate tied at that highest value** — a tie awards all of them rather than being broken. (Section 7.8's "earliest achievement" tie-break orders the leaderboard and has no part in deciding a badge.) Badges already awarded are a permanent record of the periods a player won and are never revoked. Evaluation runs as a scheduled job shortly after each period closes (weekly Monday 04:00, monthly 1st 04:00, yearly Jan 1st 04:00, Europe/Berlin), and badges are written to the `badges` table.
 
 The job is idempotent through the `UNIQUE (user_id, kind, period, period_key)` constraint plus `INSERT ... ON CONFLICT DO NOTHING`. It takes the period key as an optional argument so a missed period can be re-run by hand.
 
-Live "on track" progress against the current period's threshold is shown on the profile, computed from the same `fog_daily_progress` sums.
+The player's own value for the running period is shown on the profile, per kind and period, computed from the same `fog_daily_progress` sums. It is a plain reading of what they have done — no bar, no target, no percentage of a target, no rank.
 
 Badges are prominent and public: rendered on the profile as a badge shelf, and as compact icons inline in leaderboard rows. Anonymous users' badges are shown against their anonymous handle.
 
@@ -731,7 +735,7 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | District overview | All districts with individual progress percentages; tap to zoom in |
 | Map (main) | Fog map, own position, discovered bars, pending-visit banner, GPS/network indicator |
 | Bar detail | Name, address, district, mastered status, community tag if applicable, Check in button |
-| Profile | Username, avatar, badge shelf, area %, bars mastered, current-period progress |
+| Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
 | Suggest a bar | Map picker + name + address |
 | Settings | Anonymous toggle, push permission, change password, how-it-works, privacy, delete account, logout |
@@ -1056,11 +1060,12 @@ Profile, badge shelf, leaderboard with metric and period switching, anonymity to
 - [x] A bar mastered twice counts once, in the period of its first completion — `packages/api/src/badges.test.ts`: `a bar mastered twice counts once, in the period of its first completion`, `fails the "mastered twice" DoD item if the earliest-completion rule is replaced by a plain count`; `packages/api/src/routes/leaderboard.test.ts`: `a bar mastered twice counts once, at the leaderboard level, in the period of its first completion`
 - [x] Toggling anonymous masks the name immediately while preserving rank and statistics — `packages/api/src/routes/leaderboard.test.ts`: `toggling isAnonymous changes the displayed name on the very next read, without changing rank or statistics`
 - [x] An anonymous user's profile is unreachable by username and reachable by handle — `packages/api/src/routes/profile.test.ts`, describe `an anonymous user`: `404s by username`, `resolves by handle, masked, with badges shown against the masked handle`
-- [x] Badges are awarded at or above the configured thresholds, verified with seeded test data — `packages/api/src/badges.test.ts`: `awards a user at exactly the week threshold` (explorer and barfly), `does not award a user just below the threshold`
+- [x] The threshold is a floor: a user below it is never awarded, a user at it qualifies, and nobody is awarded when even the best user of the period is below it — `packages/api/src/badges.test.ts`: `awards a user at exactly the week threshold` (explorer and barfly), `does not award a user just below the threshold`, describe `evaluateBadges — awarding`: `awards nobody when even the best user is below the threshold`, `awards the single user above the threshold`
 - [x] A user who registered but never moved receives no badge for the period — `packages/api/src/badges.test.ts`: `a user who registered but never moved receives nothing`
-- [x] Multiple users can hold the same badge for the same period — `packages/api/src/badges.test.ts`: `multiple users hold the same badge for the same period (badges are not exclusive)`
+- [x] The badge for a period goes only to the highest scorer above the threshold, and to everyone tied at that top value — `packages/api/src/badges.test.ts`, describe `evaluateBadges — awarding`: `awards only the highest scorer when several users clear the threshold`, `awards every user tied at the top, so several users can hold the same badge for the same period`
+- [x] The threshold is never returned by any endpoint — `packages/api/src/routes/profile.test.ts`: `returns no threshold anywhere in the badge progress`; `packages/api/src/badges.test.ts`, describe `currentBadgeProgress`: `reports the player's own value from the same computation evaluateBadges scores, and no threshold`
 - [x] Badges are visible on profiles and inline in leaderboard rows — `packages/api/src/routes/profile.test.ts`: `surfaces the badge shelf (all badges ever awarded)`; `packages/api/src/routes/leaderboard.test.ts`: `are ranked and counted, with identity masked but badges present`; `packages/web/src/App.leaderboard.test.tsx`: `shows an anonymous row masked, still ranked, with its badges`
-- [x] Current-period progress toward each threshold is shown on the profile — `packages/api/src/badges.test.ts`, describe `currentBadgeProgress`: `computes live progress from the same values evaluateBadges would award`; `packages/web/src/App.leaderboard.test.tsx`: `renders the badge shelf and current-period progress toward each threshold`
+- [x] The player's own value for the running period is shown on the profile, with no threshold, target, or rank beside it — `packages/api/src/badges.test.ts`, describe `currentBadgeProgress`: `reports the player's own value from the same computation evaluateBadges scores, and no threshold`; `packages/web/src/App.leaderboard.test.tsx`: `renders the badge shelf and the player's own value for each kind and period`
 - [x] The evaluation job is idempotent — running it twice awards nothing twice — and catches up a period missed while the Pi was off — `packages/api/src/badges.test.ts`: `running the evaluation twice awards nothing the second time and does not change value or awarded_at`; describe `runBadgeCatchUp`: `evaluates a period that closed while the process was down, and does not re-evaluate one already done`
 
 ### Phase 7 — Community Submissions and Admin
@@ -1172,6 +1177,16 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.12 — badges become a competition, and the threshold goes back behind the server
+
+**This reverses the design intent every version since v1.x has stated, deliberately and on the owner's decision.** Section 7.7 used to open with "Badges are an *activity floor*, not a competition" and award the badge to every user who cleared the threshold. It now awards the badge for a period to the highest scorer alone. The old rule made a badge a participation marker: with thresholds set as low as they must be to avoid excluding real players (0.1% of the city in a week is roughly 900 m of new ground), everyone who went out at all collected the same shelf, and a shelf everyone has says nothing about anyone. A badge that marks the best week in the city is worth something to win; one that marks having left the house is not.
+
+**The threshold survives, in the one role that still makes sense: a floor.** It is not a target and never was — it exists only so the badge cannot be won in a dead period by whoever was least inactive. If nobody reaches it, nobody wins it, and the period simply has no holder. This is why raising a threshold does not make the badge harder to win; it only makes an empty period more likely. `CONFIG.BADGE_THRESHOLDS` keeps its values and its home in `config.ts`; only the comment above it changed, because half of what that comment claimed ("not competitive targets") is now the opposite of the rule.
+
+**Ties award everyone tied at the top rather than being broken.** Section 7.8's "earliest achievement" tie-break exists to make a *listing* deterministic, and reusing it here would silently turn a genuine draw into a loss for whoever moved later in the week — a rule nobody would choose if asked outright. Two users on identical values both won; the schema already permits it, since `UNIQUE (user_id, kind, period, period_key)` is per user. Equality is compared exactly: both metrics derive every value from integer counts through one identical computation, so equal users produce bit-identical floats and a tolerance would only promote near-misses into ties.
+
+**Neither the threshold nor any standing is published.** No endpoint returns the threshold — `GET /api/profile/:handle`'s badge progress carries the player's own value and nothing else — and the profile shows no rank, no "2nd place", no "0.3% to go". The progress bar it used to draw is gone with the number it was drawn against, along with its CSS. A hidden floor keeps the badge from being farmed to the decimal, and withholding rank keeps the surface a record of what a player did rather than a running scoreboard of what everyone else did. Badges already awarded are untouched by any of this: they are a record of periods won and are never revoked.
 
 ### v1.11 — the Pi contract, read from the actual files this time
 
@@ -1337,4 +1352,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.11*
+*End of specification v1.12*

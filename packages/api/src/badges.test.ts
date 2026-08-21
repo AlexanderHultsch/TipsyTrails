@@ -253,20 +253,68 @@ describe('evaluateBadges — barfly', () => {
   });
 });
 
+// Section 7.7's competition: the threshold qualifies, the highest value
+// wins, and a tie at the top wins for everyone tied.
 describe('evaluateBadges — awarding', () => {
-  it('multiple users hold the same badge for the same period (badges are not exclusive)', () => {
+  const THRESHOLD_CELLS = Math.ceil((CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS);
+
+  it('awards only the highest scorer when several users clear the threshold', () => {
     const alex = insertUser('alex');
     const sam = insertUser('sam');
-    const thresholdCells = Math.ceil(
-      (CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
+    insertDailyProgress(alex, PERIOD_DAYS[0], THRESHOLD_CELLS * 2);
+    insertDailyProgress(sam, PERIOD_DAYS[0], THRESHOLD_CELLS);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    const explorerAwards = result.awarded.filter((a) => a.kind === 'explorer');
+    expect(explorerAwards.map((a) => a.userId)).toEqual([alex]);
+    expect(badgeRow(alex, 'explorer')?.value).toBeCloseTo(
+      ((THRESHOLD_CELLS * 2) / PLAYABLE_CELLS) * 100,
     );
-    insertDailyProgress(alex, PERIOD_DAYS[0], thresholdCells);
-    insertDailyProgress(sam, PERIOD_DAYS[0], thresholdCells);
+    expect(badgeRow(sam, 'explorer')).toBeUndefined();
+  });
+
+  it('awards every user tied at the top, so several users can hold the same badge for the same period', () => {
+    const alex = insertUser('alex');
+    const sam = insertUser('sam');
+    const robin = insertUser('robin');
+    insertDailyProgress(alex, PERIOD_DAYS[0], THRESHOLD_CELLS * 2);
+    insertDailyProgress(sam, PERIOD_DAYS[0], THRESHOLD_CELLS * 2);
+    // Above the threshold, below the tied top — qualifies, does not win.
+    insertDailyProgress(robin, PERIOD_DAYS[0], THRESHOLD_CELLS);
 
     const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
 
     const explorerAwards = result.awarded.filter((a) => a.kind === 'explorer');
     expect(explorerAwards.map((a) => a.userId).sort()).toEqual([alex, sam].sort());
+    expect(badgeRow(robin, 'explorer')).toBeUndefined();
+    expect(badgeCount()).toBe(2);
+  });
+
+  it('awards nobody when even the best user is below the threshold', () => {
+    const alex = insertUser('alex');
+    const sam = insertUser('sam');
+    insertDailyProgress(alex, PERIOD_DAYS[0], THRESHOLD_CELLS - 1);
+    insertDailyProgress(sam, PERIOD_DAYS[0], THRESHOLD_CELLS - 2);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(result.awarded).toHaveLength(0);
+    expect(badgeCount()).toBe(0);
+  });
+
+  it('awards the single user above the threshold', () => {
+    const alex = insertUser('alex');
+    const sam = insertUser('sam');
+    insertDailyProgress(alex, PERIOD_DAYS[0], THRESHOLD_CELLS);
+    insertDailyProgress(sam, PERIOD_DAYS[0], THRESHOLD_CELLS - 1);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(result.awarded.filter((a) => a.kind === 'explorer').map((a) => a.userId)).toEqual([
+      alex,
+    ]);
+    expect(badgeRow(sam, 'explorer')).toBeUndefined();
   });
 
   it('running the evaluation twice awards nothing the second time and does not change value or awarded_at', () => {
@@ -319,7 +367,7 @@ describe('runBadgeCatchUp', () => {
 });
 
 describe('currentBadgeProgress', () => {
-  it('computes live progress from the same values evaluateBadges would award', () => {
+  it("reports the player's own value from the same computation evaluateBadges scores, and no threshold", () => {
     const userId = insertUser('alex');
     const barId = seedBar('On Track Bar');
     const nowMs = (PERIOD_START_S + 3600) * 1000;
@@ -333,9 +381,12 @@ describe('currentBadgeProgress', () => {
     const barfly = progress.find((p) => p.kind === 'barfly');
 
     expect(explorer?.value).toBeCloseTo((10 / PLAYABLE_CELLS) * 100);
-    expect(explorer?.threshold).toBe(CONFIG.BADGE_THRESHOLDS.explorer.week);
     expect(barfly?.value).toBe(1);
-    expect(barfly?.threshold).toBe(CONFIG.BADGE_THRESHOLDS.barfly.week);
+    // Section 7.7: the threshold never leaves the server. Key-exact, so
+    // reintroducing the field fails here rather than going unnoticed.
+    for (const entry of progress) {
+      expect(Object.keys(entry).sort()).toEqual(['kind', 'value']);
+    }
 
     const evaluated = evaluateBadges(db, 'week', currentWeekKey);
     expect(evaluated.awarded.find((a) => a.userId === userId && a.kind === 'barfly')?.value).toBe(

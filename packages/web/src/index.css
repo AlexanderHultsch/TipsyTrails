@@ -991,24 +991,6 @@ button:focus-visible,
   font-size: 0.9375rem;
 }
 
-.profile__progress-bar {
-  margin-top: 0.375rem;
-  height: 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--color-paper);
-}
-
-.profile__progress-fill {
-  height: 100%;
-  background: var(--color-ink);
-}
-
-.profile__progress-fill--met {
-  background: var(--color-accent);
-}
-
 .profile__progress-detail {
   display: block;
   margin-top: 0.25rem;

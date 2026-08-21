@@ -35,7 +35,6 @@ export interface BadgeEvaluationResult {
 export interface BadgeProgress {
   kind: BadgeKind;
   value: number;
-  threshold: number;
 }
 
 // Section 7.8's leaderboard and profile need the same per-user value this
@@ -175,6 +174,16 @@ interface InsertedRow {
   user_id: number;
 }
 
+// Section 7.7's competition: the threshold is a floor, not a target, so the
+// candidates are everyone at or above it — and among those, only the highest
+// value wins the period. Everyone tied at that top value wins; the
+// `achievedAtS` tie-break belongs to Section 7.8's leaderboard ordering and
+// is deliberately not used to break a tie into a single winner here.
+// Equality is compared exactly: both metrics derive every user's value from
+// integer counts by one identical computation, so two genuinely equal users
+// produce bit-identical floats and a tolerance would only turn near-misses
+// into ties.
+//
 // Section 7.7's stated idempotency mechanism: the `UNIQUE (user_id, kind,
 // period, period_key)` constraint plus `INSERT ... ON CONFLICT DO NOTHING`,
 // not a SELECT-then-INSERT check — the constraint is what does the work.
@@ -190,6 +199,16 @@ function awardCandidates(
   values: Map<number, MetricStanding>,
 ): BadgeAward[] {
   const threshold: number = CONFIG.BADGE_THRESHOLDS[kind][period];
+  const candidates = [...values].filter(([, standing]) => standing.value >= threshold);
+  if (candidates.length === 0) {
+    return [];
+  }
+  let topValue = candidates[0][1].value;
+  for (const [, standing] of candidates) {
+    if (standing.value > topValue) {
+      topValue = standing.value;
+    }
+  }
   const insert = db.prepare<[number, string, string, string, number, number], InsertedRow>(
     `INSERT INTO badges (user_id, kind, period, period_key, value, awarded_at)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -197,8 +216,8 @@ function awardCandidates(
      RETURNING user_id`,
   );
   const awarded: BadgeAward[] = [];
-  for (const [userId, standing] of values) {
-    if (standing.value < threshold) {
+  for (const [userId, standing] of candidates) {
+    if (standing.value !== topValue) {
       continue;
     }
     const row = insert.get(userId, kind, period, periodKey, standing.value, awardedAt);
@@ -252,14 +271,14 @@ export function runBadgeCatchUp(db: Database.Database, nowMs: number): BadgeEval
   });
 }
 
-// Section 7.7's last-but-two paragraph: live "on track" progress against the
-// current period's threshold, computed by this same module's per-user value
-// functions so it can never disagree with the award value those same
-// functions produce inside `evaluateBadges` — "a user shown 'on track' who
-// then does not receive the badge is the bug this shares code to prevent."
-// Unlike `evaluateBadges`, this reads the clock (via `nowMs`) because "the
-// current period" is inherently a live, moving target, not a fixed key a
-// caller already knows.
+// Section 7.7's last-but-two paragraph: the player's own value for the
+// running period, computed by this same module's per-user value functions so
+// it can never disagree with the award value those same functions produce
+// inside `evaluateBadges`. The threshold is deliberately absent — Section 7.7
+// keeps the floor on the server, and neither it nor any standing against
+// other players leaves this function. Unlike `evaluateBadges`, this reads the
+// clock (via `nowMs`) because "the current period" is inherently a live,
+// moving target, not a fixed key a caller already knows.
 export function currentBadgeProgress(
   db: Database.Database,
   userId: number,
@@ -281,8 +300,8 @@ export function currentBadgeProgress(
   const barflyValue = barflyValuesByUser(db, startS, endS).get(userId)?.value ?? 0;
 
   return [
-    { kind: 'explorer', value: explorerValue, threshold: CONFIG.BADGE_THRESHOLDS.explorer[period] },
-    { kind: 'barfly', value: barflyValue, threshold: CONFIG.BADGE_THRESHOLDS.barfly[period] },
+    { kind: 'explorer', value: explorerValue },
+    { kind: 'barfly', value: barflyValue },
   ];
 }
 

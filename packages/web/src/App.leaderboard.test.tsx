@@ -502,7 +502,7 @@ describe('leaderboard', () => {
 });
 
 describe('profile', () => {
-  it('renders the badge shelf and current-period progress toward each threshold', async () => {
+  it("renders the badge shelf and the player's own value for each kind and period", async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -522,16 +522,16 @@ describe('profile', () => {
           ],
           badgeProgress: {
             week: [
-              { kind: 'explorer', value: 0.05, threshold: 0.1 },
-              { kind: 'barfly', value: 1, threshold: 1 },
+              { kind: 'explorer', value: 0.05 },
+              { kind: 'barfly', value: 1 },
             ],
             month: [
-              { kind: 'explorer', value: 0.2, threshold: 0.3 },
-              { kind: 'barfly', value: 2, threshold: 2 },
+              { kind: 'explorer', value: 0.2 },
+              { kind: 'barfly', value: 2 },
             ],
             year: [
-              { kind: 'explorer', value: 1, threshold: 2 },
-              { kind: 'barfly', value: 1, threshold: 3 },
+              { kind: 'explorer', value: 1 },
+              { kind: 'barfly', value: 1 },
             ],
           },
         });
@@ -557,17 +557,20 @@ describe('profile', () => {
     const weekExplorer = Array.from(progressItems).find((item) =>
       item.textContent?.includes('This week'),
     );
-    expect(weekExplorer?.querySelector('.profile__progress-detail')?.textContent).toBe(
-      '0.05% of 0.10% (0.05% to go)',
-    );
+    expect(weekExplorer?.querySelector('.profile__progress-detail')?.textContent).toBe('0.05%');
 
     const monthBarfly = Array.from(progressItems).find(
       (item) =>
         item.textContent?.includes('This month') && item.textContent?.includes('Bars mastered'),
     );
-    expect(monthBarfly?.querySelector('.profile__progress-detail')?.textContent).toBe(
-      '2 of 2 — earned',
-    );
+    expect(monthBarfly?.querySelector('.profile__progress-detail')?.textContent).toBe('2');
+
+    // SPEC.md Section 7.7: no threshold, no target, no rank reaches the
+    // player — the section shows the player's own value and nothing else.
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    const progressSection = weekExplorer?.closest('.profile__section');
+    expect(progressSection?.textContent).not.toContain('to go');
+    expect(progressSection?.textContent).not.toContain(' of ');
   });
 
   it('renders an empty badge shelf without breaking the layout for a new user', async () => {
@@ -587,16 +590,16 @@ describe('profile', () => {
           badges: [],
           badgeProgress: {
             week: [
-              { kind: 'explorer', value: 0, threshold: 0.1 },
-              { kind: 'barfly', value: 0, threshold: 1 },
+              { kind: 'explorer', value: 0 },
+              { kind: 'barfly', value: 0 },
             ],
             month: [
-              { kind: 'explorer', value: 0, threshold: 0.3 },
-              { kind: 'barfly', value: 0, threshold: 2 },
+              { kind: 'explorer', value: 0 },
+              { kind: 'barfly', value: 0 },
             ],
             year: [
-              { kind: 'explorer', value: 0, threshold: 2 },
-              { kind: 'barfly', value: 0, threshold: 3 },
+              { kind: 'explorer', value: 0 },
+              { kind: 'barfly', value: 0 },
             ],
           },
         });

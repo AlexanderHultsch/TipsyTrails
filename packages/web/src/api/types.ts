@@ -143,14 +143,14 @@ export interface BadgeSummary {
   awardedAt: number;
 }
 
-// Live "on track" progress toward one badge's threshold for the current
-// period (packages/api/src/badges.ts's BadgeProgress, Section 7.7's last
-// paragraph) - value and threshold both come from the server, never
-// recomputed client-side.
+// The player's own value for one badge kind in the running period
+// (packages/api/src/badges.ts's BadgeProgress, Section 7.7's last paragraph)
+// - the value comes from the server, never recomputed client-side. There is
+// no threshold and no standing here by design: Section 7.7 keeps the floor on
+// the server and publishes neither it nor a rank.
 export interface BadgeProgress {
   kind: BadgeKind;
   value: number;
-  threshold: number;
 }
 
 // GET /api/leaderboard response shape (packages/api/src/routes/leaderboard.ts).

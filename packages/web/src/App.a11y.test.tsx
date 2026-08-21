@@ -300,7 +300,12 @@ describe('the accent colour is never the only carrier of meaning (SPEC.md Sectio
     expect(otherRow?.textContent).not.toContain('(you)');
   });
 
-  it("the profile's 'met' progress fill is paired with an 'earned' text label", async () => {
+  // Section 7.7 removed the profile's progress bar along with the threshold
+  // it was drawn against, and with it the accent-coloured "met" fill. What
+  // replaced it carries every value as text, which is the strongest form of
+  // this section's rule: there is no colour signal left to pair anything
+  // with.
+  it("the profile's current-progress section carries each value as text, with no coloured state", async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -317,8 +322,8 @@ describe('the accent colour is never the only carrier of meaning (SPEC.md Sectio
           badges: [],
           badgeProgress: {
             week: [
-              { kind: 'explorer', value: 1, threshold: 1 },
-              { kind: 'barfly', value: 0, threshold: 3 },
+              { kind: 'explorer', value: 1 },
+              { kind: 'barfly', value: 0 },
             ],
             month: [],
             year: [],
@@ -331,10 +336,11 @@ describe('the accent colour is never the only carrier of meaning (SPEC.md Sectio
     await renderApp('/profile/player-1');
 
     const items = Array.from(container.querySelectorAll('.profile__progress-item'));
-    const met = items.find((item) => item.querySelector('.profile__progress-fill--met'));
-    const notMet = items.find((item) => !item.querySelector('.profile__progress-fill--met'));
-    expect(met?.querySelector('.profile__progress-detail')?.textContent).toContain('earned');
-    expect(notMet?.querySelector('.profile__progress-detail')?.textContent).not.toContain('earned');
+    expect(
+      items.map((item) => item.querySelector('.profile__progress-detail')?.textContent),
+    ).toEqual(['1.00%', '0']);
+    expect(container.querySelector('.profile__progress-fill--met')).toBeNull();
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
   });
 });
 

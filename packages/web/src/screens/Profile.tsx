@@ -25,11 +25,12 @@ function formatMetric(kind: BadgeKind, value: number): string {
 }
 
 // SPEC.md Section 8.3/7.6/7.7: username or masked handle, avatar, badge
-// shelf, area %, bars mastered, and live "on track" progress toward each
-// period's threshold - all read from the single GET /api/profile/:handle
+// shelf, area %, bars mastered, and the player's own value for each kind in
+// each running period - all read from the single GET /api/profile/:handle
 // response (task brief: "the server already returns all of it in one
-// response — do not make a second request"). Thresholds and progress values
-// are never recomputed here, only formatted.
+// response — do not make a second request"). Values are never recomputed
+// here, only formatted. Section 7.7 publishes no threshold and no rank, so
+// there is nothing here to render a value against.
 export function Profile() {
   const { handle } = useParams<{ handle: string }>();
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
@@ -97,39 +98,16 @@ export function Profile() {
               <h2>Current progress</h2>
               <ul className="profile__progress-list">
                 {PROGRESS_PERIODS.flatMap((period) =>
-                  profile.badgeProgress[period].map((entry) => {
-                    const met = entry.value >= entry.threshold;
-                    const gap = Math.max(0, entry.threshold - entry.value);
-                    const fillPercent = Math.min(100, (entry.value / entry.threshold) * 100);
-                    return (
-                      <li key={`${period}-${entry.kind}`} className="profile__progress-item">
-                        <span className="profile__progress-label">
-                          {PROGRESS_KIND_LABEL[entry.kind]} — {PROGRESS_PERIOD_LABEL[period]}
-                        </span>
-                        <div
-                          className="profile__progress-bar"
-                          role="progressbar"
-                          aria-valuenow={Math.min(entry.value, entry.threshold)}
-                          aria-valuemin={0}
-                          aria-valuemax={entry.threshold}
-                        >
-                          <div
-                            className={
-                              met
-                                ? 'profile__progress-fill profile__progress-fill--met'
-                                : 'profile__progress-fill'
-                            }
-                            style={{ width: `${fillPercent}%` }}
-                          />
-                        </div>
-                        <span className="profile__progress-detail">
-                          {met
-                            ? `${formatMetric(entry.kind, entry.value)} of ${formatMetric(entry.kind, entry.threshold)} — earned`
-                            : `${formatMetric(entry.kind, entry.value)} of ${formatMetric(entry.kind, entry.threshold)} (${formatMetric(entry.kind, gap)} to go)`}
-                        </span>
-                      </li>
-                    );
-                  }),
+                  profile.badgeProgress[period].map((entry) => (
+                    <li key={`${period}-${entry.kind}`} className="profile__progress-item">
+                      <span className="profile__progress-label">
+                        {PROGRESS_KIND_LABEL[entry.kind]} — {PROGRESS_PERIOD_LABEL[period]}
+                      </span>
+                      <span className="profile__progress-detail">
+                        {formatMetric(entry.kind, entry.value)}
+                      </span>
+                    </li>
+                  )),
                 )}
               </ul>
             </section>

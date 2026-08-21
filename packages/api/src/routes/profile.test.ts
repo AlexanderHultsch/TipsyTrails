@@ -3,7 +3,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { badgePeriodKey, CONFIG } from '@tipsytrails/shared';
+import { badgePeriodKey } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -172,9 +172,40 @@ describe('GET /api/profile/:handle', () => {
     expect(body.badgeProgress).toHaveProperty('month');
     expect(body.badgeProgress).toHaveProperty('year');
     expect(body.badgeProgress.week).toEqual([
-      { kind: 'explorer', value: 0, threshold: CONFIG.BADGE_THRESHOLDS.explorer.week },
-      { kind: 'barfly', value: 0, threshold: CONFIG.BADGE_THRESHOLDS.barfly.week },
+      { kind: 'explorer', value: 0 },
+      { kind: 'barfly', value: 0 },
     ]);
+  });
+
+  // Section 7.7: the threshold is a floor the server keeps to itself — no
+  // endpoint returns it. Walks the whole badge-progress subtree rather than
+  // naming the two entries it happens to hold today, so reintroducing the
+  // field anywhere beneath it fails here.
+  it('returns no threshold anywhere in the badge progress', async () => {
+    const { cookie, userId } = await registerUser('walker');
+    insertFogState(userId, 250, 1000);
+
+    const response = await getProfile(cookie, 'walker');
+
+    const keys = new Set<string>();
+    const collectKeys = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          collectKeys(item);
+        }
+        return;
+      }
+      if (value !== null && typeof value === 'object') {
+        for (const [key, child] of Object.entries(value)) {
+          keys.add(key);
+          collectKeys(child);
+        }
+      }
+    };
+    collectKeys(response.json().badgeProgress);
+
+    expect(keys).toEqual(new Set(['week', 'month', 'year', 'kind', 'value']));
+    expect(response.body).not.toContain('threshold');
   });
 
   it('a non-anonymous user also resolves by their player-{id} handle, unmasked', async () => {

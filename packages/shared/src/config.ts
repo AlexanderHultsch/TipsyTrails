@@ -57,10 +57,12 @@ export const CONFIG = {
     suggest: { limit: 10, windowMs: 24 * 60 * 60 * 1000, by: 'user' },
   },
 
-  // Badges are ACTIVITY FLOORS, not competitive targets. Their only job is to
-  // separate someone who actually went out during the period from someone who
-  // just opened the app or was inactive. Set them low. A badge is awarded when
-  // value >= threshold (minimum, not "strictly greater").
+  // Badges are a per-period COMPETITION, and these are its FLOORS. A badge
+  // goes to the highest-scoring user of the period, and to nobody at all if
+  // no one reaches the floor — its only job is to stop the badge being won by
+  // being the least inactive person. Set them low: they are qualification, not
+  // the target. A user qualifies when value >= threshold (minimum, not
+  // "strictly greater"). Never sent to a client — see Section 7.7.
   BADGE_THRESHOLDS: {
     // Percent of playable city area newly revealed in the period.
     // Deliberately not linear across periods: after the first weeks most walking
