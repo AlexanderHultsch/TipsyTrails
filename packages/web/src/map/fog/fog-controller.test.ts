@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GridParams } from '@tipsytrails/shared';
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { ROAD_HIGHWAY_LAYER_ID } from '../ink-style.js';
 import { FOG_LAYER_ID, FogController } from './fog-controller.js';
 import { WebGLFogLayer } from './webgl-fog-layer.js';
 
@@ -17,12 +18,16 @@ function emptyMask(): Uint8Array {
   return new Uint8Array(Math.ceil((GRID.width * GRID.height) / 8));
 }
 
-function createFakeMap(loaded: boolean) {
+// `styleLayerIds` stands in for the layers the loaded style already holds.
+// It defaults to what ink-style.ts gives a real map - the layer the fog is
+// inserted before - so every test here exercises the ordering the app runs
+// on; the one test about a style missing it passes an empty list.
+function createFakeMap(loaded: boolean, styleLayerIds: string[] = [ROAD_HIGHWAY_LAYER_ID]) {
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
   Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  const layers = new Map<string, unknown>();
+  const layers = new Map<string, unknown>(styleLayerIds.map((id) => [id, { id }]));
   const map = {
     loaded: vi.fn(() => loaded),
     getContainer: () => container,
@@ -34,8 +39,13 @@ function createFakeMap(loaded: boolean) {
     off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       listeners.get(event)?.delete(handler);
     }),
-    addLayer: vi.fn((layer: { id: string }) => {
-      layers.set(layer.id, layer);
+    // Rest-typed so `mock.calls` keeps the optional second argument, which
+    // is what carries the fog's `beforeId`.
+    addLayer: vi.fn((...args: [layer: { id: string }, beforeId?: string]) => {
+      if (args[1] !== undefined && !layers.has(args[1])) {
+        throw new Error(`Layer with id "${args[1]}" does not exist on this map.`);
+      }
+      layers.set(args[0].id, args[0]);
     }),
     removeLayer: vi.fn((id: string) => {
       layers.delete(id);
@@ -102,6 +112,48 @@ describe('FogController', () => {
     const [addedLayer] = rawMap.addLayer.mock.calls[0];
     expect(addedLayer).toBeInstanceOf(WebGLFogLayer);
     expect(addedLayer.id).toBe(FOG_LAYER_ID);
+    controller.destroy();
+  });
+
+  // Section 7.3: the fog must land *below* the major-road layer, which
+  // ink-style.ts keeps last. Passing the id, rather than appending, is the
+  // entire mechanism by which motorways stay crisp on unrevealed ground.
+  it('inserts the fog beneath the major-road layer instead of on top of the style', () => {
+    const { map, rawMap } = createFakeMap(true);
+    const controller = new FogController({
+      map,
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      detectWebGL2: () => ({}) as WebGL2RenderingContext,
+    });
+
+    expect(rawMap.addLayer).toHaveBeenCalledTimes(1);
+    const [, beforeId] = rawMap.addLayer.mock.calls[0];
+    expect(beforeId).toBe(ROAD_HIGHWAY_LAYER_ID);
+    controller.destroy();
+  });
+
+  // MapLibre's addLayer throws on a beforeId the style does not have, and
+  // nothing above the controller catches it - that exception would take the
+  // map down rather than degrade it.
+  it('adds the fog on top and warns, rather than throwing, when the style lacks the major-road layer', () => {
+    const { map, rawMap } = createFakeMap(true, []);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const controller = new FogController({
+      map,
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      detectWebGL2: () => ({}) as WebGL2RenderingContext,
+    });
+
+    expect(rawMap.addLayer).toHaveBeenCalledTimes(1);
+    const [addedLayer, beforeId] = rawMap.addLayer.mock.calls[0];
+    expect(addedLayer.id).toBe(FOG_LAYER_ID);
+    expect(beforeId).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalled();
     controller.destroy();
   });
 

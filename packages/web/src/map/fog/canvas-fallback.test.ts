@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
+import { CONFIG, cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
 import type { GridParams } from '@tipsytrails/shared';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { CanvasFogFallback } from './canvas-fallback.js';
@@ -24,14 +24,15 @@ function setCell(mask: Uint8Array, index: number): Uint8Array {
 }
 
 function createFakeCtx() {
-  const fillRectCalls: { x: number; y: number; w: number; h: number; op: string }[] = [];
+  const fillRectCalls: { x: number; y: number; w: number; h: number; op: string; style: string }[] =
+    [];
   const ctx = {
     globalCompositeOperation: 'source-over',
     fillStyle: '',
     setTransform: vi.fn(),
     clearRect: vi.fn(),
     fillRect: vi.fn((x: number, y: number, w: number, h: number) => {
-      fillRectCalls.push({ x, y, w, h, op: ctx.globalCompositeOperation });
+      fillRectCalls.push({ x, y, w, h, op: ctx.globalCompositeOperation, style: ctx.fillStyle });
     }),
   };
   return { ctx: ctx as unknown as CanvasRenderingContext2D, fillRectCalls };
@@ -100,6 +101,22 @@ describe('CanvasFogFallback', () => {
     // One fillRect for the whole-canvas fog fill, drawn before any moveend.
     expect(ctxRig.fillRectCalls.length).toBeGreaterThanOrEqual(1);
     expect(ctxRig.fillRectCalls[0].op).toBe('source-over');
+  });
+
+  // Both renderers read one fog opacity (CONFIG.FOG_MAX_OPACITY) so they
+  // cannot drift apart on how dense the fog is - the WebGL shader's half of
+  // this is asserted in webgl-fog-layer.test.ts.
+  it('fills the fog at the configured opacity rather than a literal of its own', () => {
+    const { map } = createFakeMap();
+    new CanvasFogFallback({
+      map: map as unknown as MaplibreMap,
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      getMask: emptyMask,
+    });
+
+    const fogFill = ctxRig.fillRectCalls.find((call) => call.op === 'source-over');
+    expect(fogFill?.style).toBe(`rgba(199, 194, 182, ${CONFIG.FOG_MAX_OPACITY})`);
   });
 
   it('punches exactly one destination-out hole per revealed cell', () => {

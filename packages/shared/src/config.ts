@@ -3,6 +3,12 @@ export const CONFIG = {
   FOG_MAX_SPEED_KMH: 30, // above this, no reveal
   FOG_MAX_ACCURACY_M: 200, // samples worse than this are discarded entirely
   FOG_REVEAL_ANIMATION_MS: 600, // SPEC.md Section 7.3
+  // Alpha of fully unrevealed fog, 0..1 — SPEC.md Section 7.3. Read by both
+  // renderers: the WebGL shader's FOG_MAX_OPACITY (webgl-fog-layer.ts) and
+  // the 2D canvas fallback's rgba() fill (canvas-fallback.ts). High enough
+  // that the fog hides detail rather than merely tinting it; the motorway
+  // layer stays legible by being drawn above the fog, not through it.
+  FOG_MAX_OPACITY: 0.88,
 
   BAR_DISCOVERY_RADIUS_M: 100,
   BAR_ONSITE_RADIUS_M: 50,

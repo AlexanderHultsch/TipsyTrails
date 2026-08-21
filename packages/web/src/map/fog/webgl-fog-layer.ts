@@ -26,6 +26,16 @@ import { fogTexelAt, revealProgress } from './reveal-animation.js';
 // vector base style are two independent MapLibre layers.
 const FOG_COLOR: readonly [number, number, number] = [0.78, 0.76, 0.71];
 
+/**
+ * Formats a number as a GLSL float literal. GLSL has no implicit int→float
+ * conversion, so `const float x = 1;` is a compile error - and a failed
+ * compile throws out of `compileShader` below, uncaught. A whole-number
+ * opacity must therefore still carry a decimal point.
+ */
+export function glslFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : String(value);
+}
+
 const VERTEX_SHADER = `#version 300 es
 uniform mat4 u_matrix;
 in vec2 a_position;
@@ -68,12 +78,12 @@ float valueNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// "Opaque grey fog" reads as solid at a glance but is not literally
-// alpha 1: Section 7.3 also requires major roads and water to "remain
-// faintly visible beneath it, at roughly 25% opacity" - capping fog alpha
-// at 0.75 instead of 1.0 is what leaves that 25% of the base map showing
-// through a fully unrevealed cell.
-const float FOG_MAX_OPACITY = 0.75;
+// Section 7.3: fog dense enough to hide detail, short of literal alpha 1 so
+// unrevealed ground still reads as fogged terrain rather than as a blank
+// panel. Orientation on unrevealed ground comes from the motorway layer,
+// which is drawn *above* this one (ink-style.ts, fog-controller.ts), not
+// from what shows through here.
+const float FOG_MAX_OPACITY = ${glslFloat(CONFIG.FOG_MAX_OPACITY)};
 
 void main() {
   // The quad reaches past the grid into the map's padding ring

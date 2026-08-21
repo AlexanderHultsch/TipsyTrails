@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GridParams } from '@tipsytrails/shared';
-import { WebGLFogLayer } from './webgl-fog-layer.js';
+import { CONFIG } from '@tipsytrails/shared';
+import { WebGLFogLayer, glslFloat } from './webgl-fog-layer.js';
 
 // jsdom has no WebGL2 context (the task brief: "do not try to instantiate a
 // real GL context"), so WebGLFogLayer is exercised here against a hand-built
@@ -328,5 +329,47 @@ describe('WebGLFogLayer', () => {
     expect(gl.deleteTexture).toHaveBeenCalledTimes(1);
     expect(gl.deleteBuffer).toHaveBeenCalledTimes(1);
     expect(gl.deleteProgram).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the fog opacity in its shader from CONFIG, not from a literal of its own', () => {
+    const { gl } = createFakeGl();
+    const layer = new WebGLFogLayer({
+      id: 'fog',
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      reducedMotion: () => false,
+    });
+
+    layer.onAdd(fakeMap(), gl);
+
+    const sources = (gl.shaderSource as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, source]) => source as string,
+    );
+    const fragment = sources.find((source) => source.includes('FOG_MAX_OPACITY'));
+    expect(fragment).toBeDefined();
+    expect(fragment).toContain(
+      `const float FOG_MAX_OPACITY = ${glslFloat(CONFIG.FOG_MAX_OPACITY)};`,
+    );
+  });
+});
+
+// GLSL has no implicit int->float conversion, so a whole-number opacity that
+// stringified as "1" would make the shader fail to compile - and that throw
+// is uncaught, taking the map down. There is no GPU here to compile against,
+// so this pins the literal's syntax instead.
+describe('glslFloat', () => {
+  it('gives a whole number a decimal point, so it is a float literal and not an int', () => {
+    expect(glslFloat(1)).toBe('1.0');
+    expect(glslFloat(0)).toBe('0.0');
+  });
+
+  it('leaves a fractional value with its leading zero and its digits intact', () => {
+    expect(glslFloat(0.88)).toBe('0.88');
+    expect(glslFloat(0.9)).toBe('0.9');
+  });
+
+  it('formats the configured fog opacity as valid GLSL float syntax', () => {
+    expect(glslFloat(CONFIG.FOG_MAX_OPACITY)).toMatch(/^\d+\.\d+$/);
   });
 });

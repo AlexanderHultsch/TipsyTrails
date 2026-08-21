@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.12
+**Version:** 1.13
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -615,7 +615,7 @@ Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_dis
 **Rendering.** A MapLibre custom layer draws the fog as a single full-screen quad. The fog mask is uploaded to the GPU as a texture (one texel per grid cell, `R8` format, ~140 KiB for Karlsruhe) and sampled in the fragment shader. Reveals update the texture via `texSubImage2D` on the affected region only.
 
 Visual behaviour:
-- Unrevealed: opaque grey fog. Major roads (`highway` in `motorway|trunk|primary|secondary`) and water remain faintly visible beneath it, at roughly 25% opacity.
+- Unrevealed: opaque grey fog, at `FOG_MAX_OPACITY` alpha, dense enough that it hides detail rather than tinting it. The fog is inserted into the style directly **beneath** the motorway/trunk road layer, so those roads draw over it and stay fully crisp, while everything below the fog — water, primary and secondary roads, green areas, buildings — is dimmed to near nothing. This replaces the earlier rule that all major roads and water stay faintly visible beneath the fog at roughly 25% opacity. The point of that rule was orientation in unexplored ground, and drawing the largest roads above the fog serves it better than dimming every one of them did: the player keeps a legible skeleton of the city, and the fog gets to do its job on everything else.
 - Revealed: fog alpha 0. The edge is softened with a two-cell blur plus a low-frequency noise offset so the boundary never reads as a hard circle or as visible squares.
 - Newly revealed cells animate from opaque to clear over 600 ms.
 - Buildings and minor streets are only rendered where revealed.
@@ -710,7 +710,7 @@ Because the tick is cheap and idempotent, a missed tick after a restart is self-
 
 ### 8.1 Visual direction
 
-A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Only major roads are rendered as fine black lines; water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a soft, irregular edge. Exactly one accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states. The overall impression is quiet, near-monochrome, and generous with empty space.
+A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Only major roads are rendered as fine black lines; water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a soft, irregular edge, dense enough to hide detail; only the motorway/trunk roads stay legible there, and they do so by being drawn above the fog rather than showing through it (Section 7.3). Exactly one accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states. The overall impression is quiet, near-monochrome, and generous with empty space.
 
 This direction applies to the whole application, not only the map. Chrome, typography, and controls follow the same restraint.
 
@@ -1174,10 +1174,46 @@ These are consequences to design around, not reasons to reconsider:
 | O10 | Section 9.4's `trustProxy` hop count for the Pi deployment is unverified — Cloudflare's edge and `cloudflared` may together add entries to `X-Forwarded-For` before Caddy ever sees the request, and neither this repository nor the platform's settles the real count; nor does either settle whether the platform's Caddy configures `trusted_proxies` or a `header_up` override that would change what the header holds by the time the API reads it. Verify by logging the raw header from one real external request against the running deployment and counting the entries, and by reading the platform `Caddyfile`'s global options, then set `trustProxy` to match. | Open — needs verification on the Pi |
 | O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
 | O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
+| O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted beneath the motorway layer, so motorways stay crisp above the fog and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, motorways included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
 
 ---
 
 ## 15. Changelog
+
+### v1.13 — the fog hides detail instead of tinting it
+
+The owner walked the city with the app open for the first time and reported the fog as too
+low-contrast: zoomed in, every detail still read through it, and revealed ground was only a
+faintly lighter shade. Measured against the palette, he was right, and the cause was two
+deliberate decisions meeting badly. Section 7.3 required roads and water to stay "faintly
+visible beneath [the fog], at roughly 25% opacity", and Section 8.1's near-monochrome style
+draws building fills at `fill-opacity: 0.04`. So a building differed from bare paper by 8 of
+255 levels before any fog, and by 2 underneath it, while a motorway kept 46 — the fog had
+almost nothing to hide, and could not create a difference where none existed.
+
+**The fog now sits beneath the motorway layer rather than on top of the whole style.** It was
+added with no `beforeId` at all, so it dimmed motorway and building alike. Ordering does the
+work instead: everything below it is dimmed away, the motorway layer above it stays crisp on
+unrevealed ground. This serves 7.3's own reason better than 7.3's rule did — that rule existed
+so players could orient themselves, and a sharp motorway orients better than a dimmed one.
+Minor roads and buildings deliberately stay below and disappear, which is the "only high-level
+features" the report asked for. One accepted consequence: motorways now draw over building
+fills rather than under them, imperceptible at 0.04.
+
+**Fog opacity rises from 0.75 to 0.88**, which it can now afford because it no longer carries
+orientation. It had been hardcoded twice — once as a GLSL `const float`, once inside an
+`rgba()` string — and in neither `config.ts` nor `DERIVED`, so the two renderers could have
+drifted apart silently. It is now `CONFIG.FOG_MAX_OPACITY`, read by both.
+
+**A divergence between the two renderers is now permanent and recorded as O13.** The 2D canvas
+fallback is a DOM overlay appended above the entire map, not a style layer, so it cannot be
+interleaved with vector layers and cannot reproduce the ordering. On a device without WebGL2
+the fog still covers motorways and detail still shows through, now at 0.88. There is no clean
+workaround, so it is documented rather than papered over.
+
+Two further options from the same concept — a colder fog hue, and a stronger base map — were
+deliberately not taken, pending a look at this on a real device. Changing all four levers at
+once would have left nobody able to say which one worked.
 
 ### v1.12 — badges become a competition, and the threshold goes back behind the server
 
@@ -1353,4 +1389,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.12*
+*End of specification v1.13*

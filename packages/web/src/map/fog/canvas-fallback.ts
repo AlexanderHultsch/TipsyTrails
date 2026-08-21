@@ -5,21 +5,30 @@
 // this is a plain flat-grey overlay with holes punched over revealed
 // cells.
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { cellCenterXY } from '@tipsytrails/shared';
+import { CONFIG, cellCenterXY } from '@tipsytrails/shared';
 import type { GridParams } from '@tipsytrails/shared';
 import { isRevealed } from './mask.js';
 import { cellToTexel } from './grid-texture.js';
 import type { GridSize } from './grid-texture.js';
 
-// Same "milky grey fog" family and the same 0.75 max opacity as
-// WebGLFogLayer's FOG_COLOR / FOG_MAX_OPACITY (webgl-fog-layer.ts),
-// converted to CSS rgba - Section 7.3 requires roads and water to stay
-// faintly visible (~25%) beneath unrevealed fog, which is why this isn't
-// closer to fully opaque. The two renderers are independent
-// implementations of the one visual direction (Section 8.1), not a shared
-// constant, the same way the WebGL shader's colour isn't imported from
-// ink-style.ts either.
-const FOG_CSS_COLOR = 'rgba(199, 194, 182, 0.75)';
+// Same "milky grey fog" family as WebGLFogLayer's FOG_COLOR
+// (webgl-fog-layer.ts), converted to CSS rgba. The colour stays an
+// independent implementation of the one visual direction (Section 8.1), the
+// same way the WebGL shader's colour isn't imported from ink-style.ts
+// either; the alpha does not - both renderers read CONFIG.FOG_MAX_OPACITY,
+// so the two paths cannot drift apart on how dense the fog is.
+//
+// WHAT THIS RENDERER CANNOT DO. The WebGL path is a MapLibre style layer and
+// is inserted directly beneath the motorway layer (fog-controller.ts), so
+// motorways draw over the fog and stay crisp while everything below it is
+// dimmed. This one is a <canvas> appended to the map container - a DOM
+// overlay above the entire map, not a style layer - so there is no way to
+// interleave it with the vector layers. On a device without WebGL2 the fog
+// therefore covers everything uniformly, motorways included, and every
+// detail of the base map keeps showing through it at 1 - FOG_MAX_OPACITY.
+// This is a real divergence in what a user sees, not an approximation; it
+// is recorded as an Open Item in SPEC.md Section 14.
+const FOG_CSS_COLOR = `rgba(199, 194, 182, ${CONFIG.FOG_MAX_OPACITY})`;
 
 export interface CanvasFogFallbackOptions {
   map: MaplibreMap;

@@ -29,6 +29,13 @@ const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 // texture stand-in here rather than as filled colour.
 const GREEN_LANDCOVER_CLASSES = ['wood', 'grass'];
 
+// The last layer in `layers`, and it must stay last: the fog custom layer is
+// inserted directly beneath it (fog-controller.ts), so everything before it
+// is dimmed by the fog and this one alone stays crisp on unrevealed ground.
+// Exported rather than repeated as a string literal there, so renaming the
+// layer cannot silently break that ordering.
+export const ROAD_HIGHWAY_LAYER_ID = 'road-highway';
+
 // A true stipple/hatch texture needs a pattern image (a sprite, or a
 // canvas-generated one registered with map.addImage at runtime) - see the
 // report for why that is not attempted here. Water and green areas instead
@@ -117,24 +124,8 @@ export const inkStyle: StyleSpecification = {
     // Section 7.3 calls "major roads" (motorway|trunk|primary|secondary),
     // split in two only so weight can taper in earlier for the busier
     // classes; no other transportation class is drawn (Section 8.1: "only
-    // major roads").
-    {
-      id: 'road-highway',
-      type: 'line',
-      source: SOURCE_ID,
-      'source-layer': 'transportation',
-      minzoom: 4,
-      filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk']]],
-      layout: {
-        'line-cap': 'round',
-        'line-join': 'round',
-      },
-      paint: {
-        'line-color': INK,
-        'line-opacity': 0.85,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 12, 1.25, 18, 2],
-      },
-    },
+    // major roads"). road-primary stays here, below the fog: Section 7.3
+    // wants minor roads to disappear on unrevealed ground.
     {
       id: 'road-primary',
       type: 'line',
@@ -173,6 +164,27 @@ export const inkStyle: StyleSpecification = {
         'line-color': INK,
         'line-opacity': 0.3,
         'line-width': 0.5,
+      },
+    },
+    // Last on purpose - see ROAD_HIGHWAY_LAYER_ID. Drawing motorways above
+    // the fog also puts them above the building fills they used to sit
+    // under; at fill-opacity 0.04 that is barely perceptible, and a road
+    // not occluded by a building is the better reading anyway.
+    {
+      id: ROAD_HIGHWAY_LAYER_ID,
+      type: 'line',
+      source: SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 4,
+      filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk']]],
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round',
+      },
+      paint: {
+        'line-color': INK,
+        'line-opacity': 0.85,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 12, 1.25, 18, 2],
       },
     },
   ],

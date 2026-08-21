@@ -7,6 +7,7 @@
 // available" here always means an injected detector, never a real context.
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { GridParams } from '@tipsytrails/shared';
+import { ROAD_HIGHWAY_LAYER_ID } from '../ink-style.js';
 import { CanvasFogFallback } from './canvas-fallback.js';
 import type { GridSize } from './grid-texture.js';
 import { detectWebGL2 } from './webgl-detect.js';
@@ -88,7 +89,24 @@ export class FogController {
         initialMask: this.mask,
         reducedMotion: this.reducedMotion,
       });
-      this.map.addLayer(this.webglLayer);
+      // Section 7.3: the fog goes *below* the motorway layer, so those roads
+      // stay crisp on unrevealed ground while everything under the fog is
+      // dimmed. `addLayer` throws when `beforeId` names a layer the style
+      // does not have, and nothing above this catches it - an exception here
+      // would take the whole map down - so a style without that layer falls
+      // back to the fog on top of everything, which is what it was before.
+      // `getLayer` is called defensively for the same reason it is in
+      // `destroy`: some map stand-ins only implement `on`/`off`/`addLayer`.
+      const hasRoadHighway =
+        typeof this.map.getLayer === 'function' && this.map.getLayer(ROAD_HIGHWAY_LAYER_ID) != null;
+      if (hasRoadHighway) {
+        this.map.addLayer(this.webglLayer, ROAD_HIGHWAY_LAYER_ID);
+      } else {
+        console.warn(
+          `[fog] Style has no "${ROAD_HIGHWAY_LAYER_ID}" layer; drawing the fog above the whole style instead.`,
+        );
+        this.map.addLayer(this.webglLayer);
+      }
       return;
     }
 
