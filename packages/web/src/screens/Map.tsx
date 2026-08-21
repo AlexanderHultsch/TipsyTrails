@@ -5,9 +5,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
+import { BarSheet } from '../components/BarSheet.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
-import { CheckInPanel } from '../components/CheckInPanel.js';
 import { LocateButton } from '../components/LocateButton.js';
+import { NearbyBarsPanel } from '../components/NearbyBarsPanel.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
@@ -120,8 +121,17 @@ export function MapScreen() {
   useFogLayer(mapInstance, trackingState.revealVersion, user?.id ?? null);
   const city = useCityMaxBounds(mapInstance);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
-  // Section 8.3: "opening a marker leads to the [bar] detail" screen.
-  useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));
+  // Section 7.5 step 1: tapping a marker leads to that bar, where the
+  // check-in action is offered - and it does so without leaving the map.
+  // Navigating to /bars/:id would unmount this screen and with it
+  // useSampleTracking above, the only place position tracking runs: fog
+  // reveal and sample posting would stop while the player was on the bar
+  // screen, and that screen would have no live position to judge on-site
+  // eligibility against. So the marker opens a sheet here instead
+  // (components/BarSheet.tsx). The bar is held by id rather than by value so
+  // an updated discoveredBars list (a later GET /api/bars) cannot leave the
+  // sheet showing a stale copy of the bar.
+  const [selectedBarId, setSelectedBarId] = useState<number | null>(null);
   useOwnPositionMarker(mapInstance, trackingState.lastPosition);
   const visits = useVisits(
     discoveredBars,
@@ -129,7 +139,26 @@ export function MapScreen() {
     trackingState.visitVersion,
     trackingState.lastPosition,
   );
+  // Declared after useVisits so the tap handler below can clear a check-in
+  // error left over from a different bar - opening a bar's sheet should not
+  // show the failure of the last attempt at another one.
+  useBarMarkers(mapInstance, discoveredBars, (bar) => {
+    setSelectedBarId(bar.id);
+    visits.clearCheckInError();
+  });
   const outOfRangeVisitIds = new Set(visits.outOfRangeVisits.map((visit) => visit.id));
+  const selectedBar = discoveredBars.find((bar) => bar.id === selectedBarId) ?? null;
+  // Eligibility for the sheet's action is exactly membership of the shared
+  // on-site rule's result (onsiteCandidates, packages/shared/src/visits.ts,
+  // via tracking/useVisits.ts) - the same list the nearby panel names, so
+  // there is one distance rule on this screen and not two. The raw position
+  // itself is never held here (constraint C4, Section 10.2).
+  const selectedBarOnSite =
+    selectedBar !== null &&
+    visits.checkInCandidates.some((candidate) => candidate.bar.id === selectedBar.id);
+  // Section 5.7: at most one pending visit per bar.
+  const selectedBarHasPendingVisit =
+    selectedBar !== null && visits.pendingVisits.some((visit) => visit.barId === selectedBar.id);
 
   // Section 7.5: the new pending visit appears in the banner immediately
   // (useVisits.ts's own state update), and the explainer is shown once,
@@ -271,12 +300,27 @@ export function MapScreen() {
       <div ref={containerRef} className="map-container" />
       <LocateButton disabled={trackingState.lastPosition === null} onClick={handleGoToMyLocation} />
       <PendingVisitBanner visits={visits.pendingVisits} outOfRangeVisitIds={outOfRangeVisitIds} />
-      <CheckInPanel
-        candidates={visits.checkInCandidates}
-        onCheckIn={(barId) => void handleCheckIn(barId)}
-        checkingIn={visits.checkingIn}
-        checkInError={visits.checkInError}
-      />
+      {/* Both bottom-edge overlays live in one stacking container rather
+          than being positioned against the map independently, so the sheet
+          cannot land on top of the panel (Section 8.3: "no map overlay may
+          obscure another"). */}
+      <div className="map-bottom">
+        {selectedBar !== null && (
+          <BarSheet
+            bar={selectedBar}
+            onSite={selectedBarOnSite}
+            hasPendingVisit={selectedBarHasPendingVisit}
+            checkingIn={visits.checkingIn}
+            checkInError={visits.checkInError}
+            onCheckIn={(barId) => void handleCheckIn(barId)}
+            onClose={() => {
+              setSelectedBarId(null);
+              visits.clearCheckInError();
+            }}
+          />
+        )}
+        <NearbyBarsPanel candidates={visits.checkInCandidates} />
+      </div>
       {tilesUnavailable && (
         <div className="map-notice" role="status">
           <p>

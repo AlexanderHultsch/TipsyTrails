@@ -2020,7 +2020,13 @@ describe('App', () => {
       ).not.toBeNull();
     });
 
-    it('opens the bar detail screen from a marker', async () => {
+    // Section 7.5 step 1: tapping a marker leads to that bar, where the
+    // check-in action is offered - and it does so without leaving the map,
+    // because screens/Map.tsx is the only place position tracking runs
+    // (components/BarSheet.tsx says why in full). It used to navigate to
+    // /bars/:id; that route is still the linkable detail page, it is just no
+    // longer where a marker tap goes.
+    it('opens the bar sheet from a marker, without leaving the map screen', async () => {
       const discovered = bar({ id: 9, name: 'Navigate Bar', address: 'Somewhere 1' });
       stubFetch((url) => {
         if (url.startsWith('/api/auth/me')) {
@@ -2063,9 +2069,13 @@ describe('App', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
-      expect(container.querySelector('.bar-detail')).not.toBeNull();
-      expect(container.textContent).toContain('Navigate Bar');
-      expect(container.textContent).toContain('Somewhere 1');
+      expect(container.querySelector('.bar-sheet__name')?.textContent).toBe('Navigate Bar');
+      expect(container.querySelector('.bar-sheet__address')?.textContent).toBe('Somewhere 1');
+      expect(container.querySelector('.bar-sheet__check-in')?.textContent).toBe(
+        'Check in at Navigate Bar',
+      );
+      expect(container.querySelector('.map-container')).not.toBeNull();
+      expect(container.querySelector('.bar-detail')).toBeNull();
     });
 
     it('renders the bar detail screen with name, address and district from the response', async () => {

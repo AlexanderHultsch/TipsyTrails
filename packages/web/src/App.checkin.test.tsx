@@ -201,6 +201,49 @@ async function renderMapWithFakeTimers() {
   });
 }
 
+// BarMarkers (map/bars/bar-markers.ts) appends its buttons to
+// map.getContainer() - MockMap's own `container` field, a detached div that
+// is never itself part of the React tree (it stands in for the DOM MapLibre
+// would own). Reading markers back out means going through that field, the
+// same way App.test.tsx's own marker tests do. The latest instance rather
+// than the first: the explainer test below leaves the map screen and returns
+// to it, which builds a second map.
+function markerContainer(): HTMLElement {
+  return mapInstances[mapInstances.length - 1].container;
+}
+
+function markerFor(name: string): HTMLButtonElement {
+  const element = markerContainer().querySelector(`button.bar-marker[aria-label="${name}"]`);
+  if (!element) {
+    throw new Error(`No marker rendered for ${name}`);
+  }
+  return element as HTMLButtonElement;
+}
+
+// Section 7.5 step 1: the marker is the only route to a check-in, so every
+// test that checks in goes through one.
+async function tapMarker(name: string) {
+  await act(async () => {
+    markerFor(name).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+function sheetCheckInButton(): HTMLButtonElement {
+  const button = container.querySelector('.bar-sheet__check-in');
+  if (!button) {
+    throw new Error('The bar sheet is not showing a check-in action');
+  }
+  return button as HTMLButtonElement;
+}
+
+async function clickSheetCheckIn() {
+  await act(async () => {
+    sheetCheckInButton().click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 function remainingSecondsFrom(text: string): number {
   const match = /(\d+):(\d{2}) remaining/.exec(text);
   if (!match) {
@@ -236,7 +279,10 @@ afterEach(() => {
 });
 
 describe('check-in and mastering', () => {
-  it('offers check-in only for discovered bars within range, sorted by distance when several qualify', async () => {
+  // Section 7.5 step 1: the nearby panel "names the bars currently in range,
+  // sorted by distance, and tells the player to tap one on the map. It
+  // carries no button and performs no check-in."
+  it('names the bars in range, sorted by distance, and tells the player to tap one on the map', async () => {
     const geo = stubGeolocation();
     stubWakeLock();
     stubFetch((url) => {
@@ -249,8 +295,8 @@ describe('check-in and mastering', () => {
       if (url === '/api/bars') {
         return jsonResponse(200, {
           bars: [
-            bar({ id: 1, name: 'Near Bar', lat: FIXED_LAT, lon: FIXED_LON }),
-            bar({ id: 2, name: 'Mid Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.00034 }),
+            bar({ id: 1, name: 'Mid Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.00034 }),
+            bar({ id: 2, name: 'Near Bar', lat: FIXED_LAT, lon: FIXED_LON }),
             bar({ id: 3, name: 'Too Far Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.0069 }),
           ],
         });
@@ -263,7 +309,7 @@ describe('check-in and mastering', () => {
 
     await renderMap();
 
-    expect(container.querySelector('.check-in-panel')).toBeNull();
+    expect(container.querySelector('.nearby-bars-panel')).toBeNull();
 
     act(() => {
       geo.triggerPosition({ accuracy: 10 });
@@ -272,11 +318,300 @@ describe('check-in and mastering', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    const buttons = container.querySelectorAll('.check-in-panel__button');
-    expect(Array.from(buttons).map((button) => button.textContent)).toEqual([
-      'Check in at Near Bar',
-      'Check in at Mid Bar',
-    ]);
+    const names = container.querySelectorAll('.nearby-bars-panel__bar');
+    expect(Array.from(names).map((name) => name.textContent)).toEqual(['Near Bar', 'Mid Bar']);
+    expect(container.querySelector('.nearby-bars-panel__hint')?.textContent).toBe(
+      "Tap a bar's marker on the map to check in there.",
+    );
+  });
+
+  // The whole point of this change: the panel is a statement, not a control.
+  // A suggestion made from a position that cannot tell two neighbouring bars
+  // apart is exactly what Section 7.5 removed, so the panel must not be able
+  // to check in at all - not merely refrain from doing so.
+  it('the nearby panel is informational: it renders no control and cannot check in', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      if (url === '/api/visits') {
+        return jsonResponse(200, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const panel = container.querySelector('.nearby-bars-panel');
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute('role')).toBe('status');
+
+    // Everything the panel renders is clicked, and no check-in may come of
+    // it - the assertion that the panel cannot check in, rather than merely
+    // that it currently shows no button. Done before the count below so a
+    // panel that grew a control back is caught by both.
+    await act(async () => {
+      for (const element of Array.from(panel?.querySelectorAll('*') ?? [])) {
+        (element as HTMLElement).click();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/visits')).toBe(false);
+
+    const controls = Array.from(panel?.querySelectorAll('button, a, input') ?? []);
+    expect(controls).toHaveLength(0);
+  });
+
+  it('opens a sheet for the tapped bar without leaving the map, and closes it again', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'The Fox', address: 'Kaiserstraße 1' }),
+            bar({ id: 2, name: 'Anchor Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.00034 }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('.bar-sheet')).toBeNull();
+
+    await tapMarker('Anchor Bar');
+
+    expect(container.querySelector('.bar-sheet__name')?.textContent).toBe('Anchor Bar');
+    // Section 7.5's separability property: the action names the bar it would
+    // check into, and it is the tapped one - not the nearest one.
+    expect(sheetCheckInButton().textContent).toBe('Check in at Anchor Bar');
+    // The map screen is still mounted, so tracking never stopped.
+    expect(container.querySelector('.map-container')).not.toBeNull();
+    expect(container.querySelector('.bar-detail')).toBeNull();
+
+    const close = container.querySelector('.bar-sheet__close') as HTMLButtonElement;
+    expect(close.getAttribute('aria-label')).toBe('Close Anchor Bar');
+    await act(async () => {
+      close.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('.bar-sheet')).toBeNull();
+  });
+
+  // Section 7.5 step 1: the action is "enabled only while the player is
+  // within BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)".
+  // Disabled rather than hidden, with a sentence saying why.
+  it('enables the sheet action only inside the on-site radius, and says why when it is off', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'Near Bar', lat: FIXED_LAT, lon: FIXED_LON }),
+            bar({ id: 2, name: 'Too Far Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.0069 }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      if (url === '/api/visits') {
+        return jsonResponse(200, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await tapMarker('Too Far Bar');
+
+    expect(sheetCheckInButton().disabled).toBe(true);
+    expect(container.querySelector('.bar-sheet__reason')?.textContent).toContain(
+      "You're too far away from Too Far Bar to check in",
+    );
+
+    await clickSheetCheckIn();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/visits')).toBe(false);
+
+    await tapMarker('Near Bar');
+
+    expect(sheetCheckInButton().disabled).toBe(false);
+    expect(container.querySelector('.bar-sheet__reason')).toBeNull();
+  });
+
+  // Section 5.7: at most one pending visit per bar - POST /api/visits would
+  // answer with the visit that is already open, so the sheet must reflect
+  // that state rather than make the round trip.
+  it('does not offer a second check-in at a bar that already has a pending visit', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        const nowS = Math.floor(Date.now() / 1000);
+        return jsonResponse(200, {
+          visits: [
+            {
+              id: 77,
+              barId: 1,
+              barName: 'The Fox',
+              startedAt: nowS,
+              lastSampleAt: nowS,
+              onsiteSamples: 1,
+              confirmedS: 0,
+              remainingS: DERIVED.VISIT_REQUIRED_S,
+              status: 'pending',
+            },
+          ],
+        });
+      }
+      if (url === '/api/visits') {
+        return jsonResponse(200, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await tapMarker('The Fox');
+
+    expect(sheetCheckInButton().disabled).toBe(true);
+    expect(container.querySelector('.bar-sheet__reason')?.textContent).toContain(
+      "You're already checked in at The Fox",
+    );
+
+    await clickSheetCheckIn();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/visits')).toBe(false);
+  });
+
+  it('checks in at the bar whose marker was tapped, not at the nearest one', async () => {
+    markMasteringExplainerSeen();
+    const geo = stubGeolocation();
+    stubWakeLock();
+    const fetchMock = stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'Near Bar', lat: FIXED_LAT, lon: FIXED_LON }),
+            bar({ id: 2, name: 'Mid Bar', lat: FIXED_LAT, lon: FIXED_LON + 0.00034 }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      if (url === '/api/visits' && init?.method === 'POST') {
+        const { barId } = parseBody(init);
+        const nowS = Math.floor(Date.now() / 1000);
+        return jsonResponse(200, {
+          id: 502,
+          barId,
+          barName: barId === 1 ? 'Near Bar' : 'Mid Bar',
+          startedAt: nowS,
+          lastSampleAt: nowS,
+          onsiteSamples: 1,
+          confirmedS: 0,
+          remainingS: DERIVED.VISIT_REQUIRED_S,
+          status: 'pending',
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Both bars are in range and Near Bar is the closer of the two, so a
+    // check-in that followed the position rather than the tap would post
+    // barId 1.
+    await tapMarker('Mid Bar');
+    await clickSheetCheckIn();
+
+    const postCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === '/api/visits' && init?.method === 'POST',
+    );
+    expect(postCall).not.toBeUndefined();
+    expect(parseBody(postCall?.[1]).barId).toBe(2);
+    expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('Mid Bar');
   });
 
   it('shows the banner immediately after checking in, without waiting for a sample post', async () => {
@@ -327,13 +662,8 @@ describe('check-in and mastering', () => {
 
     expect(container.querySelector('.pending-visit-banner')).toBeNull();
 
-    const checkInButton = container.querySelector('.check-in-panel__button') as HTMLButtonElement;
-    expect(checkInButton).not.toBeNull();
-
-    await act(async () => {
-      checkInButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await tapMarker('The Fox');
+    await clickSheetCheckIn();
 
     expect(container.querySelector('.pending-visit-banner')).not.toBeNull();
     expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
@@ -540,13 +870,8 @@ describe('check-in and mastering', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    const firstButton = Array.from(container.querySelectorAll('.check-in-panel__button')).find(
-      (button) => button.textContent === 'Check in at The Fox',
-    ) as HTMLButtonElement;
-    await act(async () => {
-      firstButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await tapMarker('The Fox');
+    await clickSheetCheckIn();
 
     expect(container.querySelector('h1')?.textContent).toBe('How mastering works');
 
@@ -565,13 +890,8 @@ describe('check-in and mastering', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    const secondButton = Array.from(container.querySelectorAll('.check-in-panel__button')).find(
-      (button) => button.textContent === 'Check in at Anchor Bar',
-    ) as HTMLButtonElement;
-    await act(async () => {
-      secondButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await tapMarker('Anchor Bar');
+    await clickSheetCheckIn();
 
     expect(container.querySelector('.map-container')).not.toBeNull();
     expect(container.querySelector('h1')?.textContent).not.toBe('How mastering works');

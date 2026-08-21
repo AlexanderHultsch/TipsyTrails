@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.16
+**Version:** 1.17
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -649,6 +649,11 @@ Bars sit close together in Karlsruhe's centre and GPS alone cannot distinguish n
 **Flow:**
 
 1. **A check-in starts at the bar's marker on the map, and nowhere else.** Tapping a discovered bar's marker leads to that bar, where a check-in action is offered and is enabled only while the player is within `BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)` of it. This is what makes two bars next door to each other separable: the player names the one they mean by pointing at it, instead of accepting a suggestion the app derived from a position that cannot tell the two apart. The nearby panel on the map screen stays and stops being a control — it names the bars currently in range, sorted by distance, and tells the player to tap one on the map. It carries no button and performs no check-in.
+
+  **"Leads to that bar" means a sheet on the map screen, not the `/bars/:id` route**, and the reason is worth recording because the wording invites the opposite reading. Position tracking runs in exactly one place — the map screen — so navigating away to a separate route unmounts it: fog reveal and sample posting stop, and the screen that is supposed to judge on-site eligibility has no live position to judge it against. Powering a check-in there would mean lifting tracking into a shared provider, a real change to the sample pipeline, bought for nothing the player can see. A sheet on the map keeps tracking alive and still has the player name the bar they mean by pointing at it, which is the whole property this step exists for. `/bars/:id` keeps its job as the linkable detail page and deliberately carries no check-in action.
+
+  The sheet's action is **disabled rather than hidden** when it cannot be used, with a sentence saying why: a control that vanishes is harder to understand than one that is visibly inert, which is the same argument the "to my location" control already rests on. It always names the bar it would check into, so a bare "Check in" can never float over a map with two bars a few metres apart on it. A bar that already has a pending visit offers no second check-in, and says so rather than making a request whose answer (Section 5.7) is the visit already open — and it says that *before* any out-of-range wording, since a player standing in the bar they are checked into is on site and "too far away" would be a plain lie.
+
 2. `POST /api/visits` creates a `pending` visit with `started_at = now`, `last_sample_at = now`, `onsite_samples = 1`. The server re-validates proximity using the caller's last accepted sample; a check-in without a recent on-site sample is rejected with 422.
 3. Every subsequent accepted sample within the on-site radius of that bar updates `last_sample_at`, increments `onsite_samples`, and recomputes `confirmed_s = last_sample_at - started_at`.
 4. When `confirmed_s >= VISIT_REQUIRED_S` **and** `onsite_samples >= VISIT_MIN_ONSITE_SAMPLES`, the visit becomes `completed`, `completed_at = now`, and the bar is mastered.
@@ -749,8 +754,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in |
-| Map (main) | Fog map, own position and direction of travel, discovered bar markers (tapping one opens its detail), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
-| Bar detail | Name, address, district, mastered status, community tag if applicable, check-in action — the only place a check-in can be made, enabled only while on site (7.5) |
+| Map (main) | Fog map, own position and direction of travel, discovered bar markers (tapping one opens that bar's sheet **on this screen**, carrying the check-in action — 7.5), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
+| Bar detail (`/bars/:id`) | Name, address, district, mastered status, community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
 | Suggest a bar | Map picker + name + address |
@@ -1213,6 +1218,20 @@ These are consequences to design around, not reasons to reconsider:
 
 ## 15. Changelog
 
+### v1.17 — checking in moves onto the marker
+
+v1.14 specified this and the code caught up here. The bar's own marker is now the only route
+into a check-in; the nearby panel keeps naming what is in range and has stopped being a
+control. That is what makes two bars a few metres apart separable — the player names the one
+they mean instead of accepting a suggestion made from a position that cannot tell them apart.
+
+One thing v1.14 left ambiguous is now settled and written down. "Leads to that bar" reads as a
+navigation, and taken literally it is impossible: position tracking runs only on the map
+screen, so routing away from it stops fog reveal and sample posting and leaves the destination
+with no live position to judge on-site eligibility against. The check-in therefore lives in a
+sheet on the map screen, and `/bars/:id` is recorded as carrying no check-in at all. Section
+8.3's screen table said the opposite in two rows and is corrected with them.
+
 ### v1.16 — the fourth round: the fog edge, a rotated map, minor streets, and the locate zoom
 
 The owner walked the city again with the layer ordering of v1.14 in place and reported it
@@ -1598,4 +1617,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.16*
+*End of specification v1.17*

@@ -408,14 +408,19 @@ describe('prefers-reduced-motion (SPEC.md Section 8.2/12)', () => {
 describe('minimum tap targets (SPEC.md Section 8.2)', () => {
   const css = readFileSync(CSS_PATH, 'utf-8');
 
-  it.each(['.burger-menu__button', '.tracking-indicator__button', '.bar-marker', '.map-locate'])(
-    '%s reserves at least 44px in both dimensions',
-    (selector) => {
-      const body = cssRuleBody(css, selector);
-      expect(body).toMatch(/(?:min-)?width:\s*44px/);
-      expect(body).toMatch(/(?:min-)?height:\s*44px/);
-    },
-  );
+  it.each([
+    '.burger-menu__button',
+    '.tracking-indicator__button',
+    '.bar-marker',
+    '.map-locate',
+    // Section 7.5's bar sheet closes with a square icon-only button, the
+    // same shape as the controls above and the same regression risk.
+    '.bar-sheet__close',
+  ])('%s reserves at least 44px in both dimensions', (selector) => {
+    const body = cssRuleBody(css, selector);
+    expect(body).toMatch(/(?:min-)?width:\s*44px/);
+    expect(body).toMatch(/(?:min-)?height:\s*44px/);
+  });
 });
 
 // SPEC.md Section 8.1, a Definition-of-Done item: "no state signalled by the

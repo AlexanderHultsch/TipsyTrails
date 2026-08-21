@@ -23,6 +23,7 @@ export interface UseVisitsResult {
   checkingIn: boolean;
   checkInError: string | null;
   checkIn: (barId: number) => Promise<boolean>;
+  clearCheckInError: () => void;
 }
 
 export function useVisits(
@@ -126,6 +127,14 @@ export function useVisits(
     }
   }
 
+  // The error belongs to the attempt that produced it, and since Section 7.5
+  // the attempt is made at one named bar (components/BarSheet.tsx). Opening
+  // or closing that surface clears it, so a failure at one bar is never shown
+  // against another.
+  function clearCheckInError(): void {
+    setCheckInError(null);
+  }
+
   return {
     pendingVisits,
     checkInCandidates,
@@ -134,5 +143,6 @@ export function useVisits(
     checkingIn,
     checkInError,
     checkIn,
+    clearCheckInError,
   };
 }

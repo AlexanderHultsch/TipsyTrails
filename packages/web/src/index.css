@@ -591,31 +591,125 @@ button:focus-visible,
   margin: 0.75rem 0 0;
 }
 
-/* Section 7.5 step 1 / Section 8.2: the check-in affordance, bottom-anchored
-   for thumb reach - offered for every discovered bar within
-   onsiteRadiusM(accuracy) of the current position (tracking/useVisits.ts). */
-.check-in-panel {
+/* Section 8.3, "no map overlay may obscure another": the two full-width
+   overlays along the bottom edge - the bar sheet (Section 7.5's check-in
+   surface) and the nearby-bars panel - stack inside one container instead of
+   each being positioned against the map on its own, so opening the sheet
+   pushes the panel down rather than covering it. Pointer events are handed
+   to the children only: the container spans the width of the screen even
+   when both are absent, and the map underneath has to stay draggable there. */
+.map-bottom {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 6;
-  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  pointer-events: none;
+}
+
+.map-bottom > * {
+  pointer-events: auto;
+}
+
+/* Section 7.5 step 1: the sheet a bar's marker opens, carrying the check-in
+   action for that one named bar. Bottom-anchored for thumb reach, like the
+   affordance it replaces. */
+.bar-sheet {
+  padding: 0.75rem 1rem;
+  background: rgba(244, 239, 230, 0.98);
+  border-top: 1px solid var(--color-border);
+}
+
+.bar-sheet__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.bar-sheet__name {
+  font-family: var(--font-serif);
+  font-size: 1.125rem;
+  margin: 0;
+}
+
+/* Section 8.2: minimum tap target 44 x 44 px, the same square icon-only
+   treatment .map-locate gets. */
+.bar-sheet__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -0.5rem -0.5rem 0 0;
+  border: none;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bar-sheet__address {
+  font-size: 0.9375rem;
+  margin: 0.25rem 0 0;
+}
+
+.bar-sheet__check-in {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+/* Why the action above is inert, in a plain sentence - it is disabled rather
+   than hidden (components/BarSheet.tsx says why), and a control that is
+   visibly off without saying why is its own kind of puzzle. */
+.bar-sheet__reason {
+  font-size: 0.875rem;
+  margin: 0.5rem 0 0;
+}
+
+.bar-sheet .error-message {
+  margin: 0.5rem 0 0;
+}
+
+/* Section 7.5 step 1 / Section 8.3: the nearby-bars panel. It names what is
+   in range (onsiteCandidates, tracking/useVisits.ts) and carries no
+   check-in - the action lives on the bar's own marker. */
+.nearby-bars-panel {
+  padding: 0.75rem 1rem;
   background: rgba(244, 239, 230, 0.95);
   border-top: 1px solid var(--color-border);
 }
 
-.check-in-panel__list {
-  list-style: none;
+.nearby-bars-panel__title {
+  font-size: 0.8125rem;
+  font-weight: 600;
   margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nearby-bars-panel__list {
+  list-style: none;
+  margin: 0.25rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.125rem;
 }
 
-.check-in-panel__button {
-  width: 100%;
+.nearby-bars-panel__bar {
+  font-weight: 600;
+}
+
+.nearby-bars-panel__hint {
+  font-size: 0.8125rem;
+  margin: 0.5rem 0 0;
 }
 
 /* Section 8.1/8.3: bar markers - solid black pictograms, no gradient,
