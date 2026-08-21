@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.14
+**Version:** 1.15
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -780,6 +780,10 @@ Tapping the indicator opens the same short explanation of each state as before. 
 
 **Colour-only state has an accessibility cost, and the mitigation is a requirement.** WCAG 2.1 SC 1.4.1 is about colour not being the only *visual* means of conveying information, so an `aria-label` does not discharge it: it serves a screen-reader user and does nothing whatsoever for a sighted colour-blind one. The shapes are fixed by decision, which removes the usual mitigation, so the one that remains is luminance. **The status colours must differ in luminance as well as in hue**, far enough apart that the states stay distinguishable under colour blindness and in a greyscale rendering of the screen — verified by converting the rendered icons to greyscale, not by judging the hues by eye. The specific values are a later decision and are deliberately not fixed here; the constraint on them is.
 
+**The deferred decision, taken (v1.15).** The bounds are: each of the three clears 3:1 against its own background — not only the paper ground but the indicator's translucent button composited over the fogged ground the fog produces, which is the darker and therefore binding case — adjacent states clear 2.2:1 against each other, and the two extremes clear 4:1. Luminance runs in the direction of severity, `ok` lightest and `bad` darkest, so that a greyscale or colour-blind reader recovers the *ordering* of the three states and not merely the fact that they differ. The values themselves live in `packages/web/src/index.css` as `--color-status-ok` / `--color-status-degraded` / `--color-status-bad`, with the whole of the above asserted from those tokens in `packages/web/src/App.a11y.test.tsx`, so a badly chosen replacement fails the suite rather than the eye.
+
+Two consequences of that arithmetic are worth recording, because they look like mistakes and are not. First, **the darkest status colour is darker than the ink the rest of the map is drawn in**, and it has to be: the 3:1 rule caps the lightest of the three at a relative luminance of about 0.24, and two 2.2:1 steps down from a cap that low land below ink. Second, and following from it, **at that luminance hue is nearly imperceptible** — the `bad` colour reads as black however it is specified, so the hue requirement above is satisfied numerically but does almost no perceptual work at the bottom of the scale. The separation there is carried by luminance alone. That is the honest cost of fixing the shapes and excluding the accent's red from the set; it is not a reason to reopen either decision, but it is the first thing to revisit if the indicator turns out to be hard to read on the street.
+
 Each icon additionally carries an accessible name that states its state in words rather than naming the icon — "GPS signal: poor", not "GPS" — so assistive technology announces what the colour means. That is for assistive technology and is **not** a substitute for the luminance rule. Both are required, and neither covers for the absence of the other.
 
 ---
@@ -1123,7 +1127,7 @@ PWA manifest and install prompt, offline shell, privacy page, performance pass, 
 - [ ] API p95 latency < 150 ms measured on the Pi under 10 concurrent users — needs the Pi
 - [x] `/privacy` is live, mentions the per-day reveal counters, and links to the main site's policy and legal notice — `packages/web/src/App.privacy.test.tsx`, describe `/privacy`
 - [~] `prefers-reduced-motion` disables the dissolve animation and all transitions — the CSS rule itself is asserted structurally: `packages/web/src/App.a11y.test.tsx`, describe `prefers-reduced-motion` (the universal `*, *::before, *::after` selector, durations collapsed to zero with `!important`). The JS-driven fog dissolve's own listener is exercised against a real `matchMedia`: `packages/web/src/map/fog/fog-controller.test.ts`, `packages/web/src/map/fog/webgl-fog-layer.test.ts`. Neither proves a real browser applying the rule — this project's jsdom test config applies no real stylesheet
-- [~] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1) — contrast, the focus ring's own contrast, labelled form fields, and the accent-plus-label rule are all automated in `packages/web/src/App.a11y.test.tsx`. Nothing here can run a screen reader, so whether any of this is announced sensibly is unverified. **Added in v1.14:** the status icons of Section 8.6 are the one place where colour does carry state alone, so this item is not complete until their luminance separation is checked as well — the accent-plus-label rule says nothing about them
+- [~] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1) — contrast, the focus ring's own contrast, labelled form fields, and the accent-plus-label rule are all automated in `packages/web/src/App.a11y.test.tsx`. Nothing here can run a screen reader, so whether any of this is announced sensibly is unverified. **Added in v1.14, narrowed in v1.15:** the status icons of Section 8.6 are the one place where colour does carry state alone, and the accent-plus-label rule says nothing about them. Their luminance separation, hue separation, distance from the accent and severity ordering are now all automated in the same file, derived from the palette tokens themselves. What remains unverified is what Section 8.6 asks for in the same breath and no test here can do: how the three actually read, in colour and in greyscale, on a phone screen in daylight
 - [x] Every network failure produces a user-facing message, never a silent failure — the same centralized network-error path (`packages/web/src/api/client.ts`) is exercised failing at three independent call sites: login (`packages/web/src/App.test.tsx`, `shows a message rather than failing silently on a network failure during login`), the city boundary fetch (`packages/web/src/App.test.tsx`, `shows a message rather than an empty screen when the city boundary fetch fails`), and the district overview fetch (`packages/web/src/App.privacy.test.tsx`, describe `network failures surface a message`)
 - [ ] Total container memory under load < 400 MB — needs the Pi under load, and a Docker image, which has never been built here
 
@@ -1202,6 +1206,26 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.15 — the status palette's deferred values are decided
+
+v1.14 specified the three status icons and expressly left their colours open: "the specific
+values are a later decision and are deliberately not fixed here; the constraint on them is."
+The code landed, so the decision is taken and Section 8.6 records it — the 3:1 floor against
+the binding background, 2.2:1 between adjacent states, 4:1 across the extremes, and luminance
+descending with severity so the ordering survives greyscale. The values live in `index.css` and
+are asserted from those tokens in `App.a11y.test.tsx`, which is what closes the half of Phase
+8's accessibility item that v1.14 opened; the other half, how the three read on a real screen,
+stays a human step.
+
+Recording the numbers also surfaced two things the arithmetic forces rather than chooses, and
+Section 8.6 now says both. The darkest status colour comes out darker than the ink the map
+itself is drawn in, because the 3:1 rule caps the lightest of the three near a relative
+luminance of 0.24 and two steps down from there land below ink. And at that luminance hue
+barely registers, so the `bad` colour reads as black whatever hue it is given and its
+separation is carried by luminance alone. Neither reopens the fixed-shape decision or the
+exclusion of the accent's red — they are the price of both, written down so the next person
+does not mistake them for sloppiness.
 
 ### v1.14 — the third round of feedback from the street
 
@@ -1526,4 +1550,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.14*
+*End of specification v1.15*

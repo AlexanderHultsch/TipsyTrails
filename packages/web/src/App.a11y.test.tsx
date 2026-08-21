@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONFIG } from '@tipsytrails/shared';
 import { App } from './App.js';
 
 // SPEC.md Section 8.1/8.2/12 (Phase 8 task brief, step 3, the accessibility
@@ -202,6 +203,176 @@ describe('colour contrast (SPEC.md Section 8.1)', () => {
 
   it('ink text stays readable on the --color-border hover background used by list rows and menu items', () => {
     expect(contrastRatio(ink, hoverBackground)).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+  });
+});
+
+// Hue and saturation, needed only to prove the palette below is not a grey
+// ramp and does not sit in the accent's red family. Plain HSV, from the
+// same hex the contrast helpers above read.
+function hueDegrees(hex: string): number {
+  const [r, g, b] = hexToRgb(hex);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  if (delta === 0) {
+    return Number.NaN;
+  }
+  let sector: number;
+  if (max === r) {
+    sector = ((g - b) / delta) % 6;
+  } else if (max === g) {
+    sector = (b - r) / delta + 2;
+  } else {
+    sector = (r - g) / delta + 4;
+  }
+  const degrees = sector * 60;
+  return degrees < 0 ? degrees + 360 : degrees;
+}
+
+function saturation(hex: string): number {
+  const [r, g, b] = hexToRgb(hex);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max === 0 ? 0 : (max - min) / max;
+}
+
+// Shortest distance between two hues on the 360-degree circle.
+function hueGap(hexA: string, hexB: string): number {
+  const raw = Math.abs(hueDegrees(hexA) - hueDegrees(hexB)) % 360;
+  return raw > 180 ? 360 - raw : raw;
+}
+
+// SPEC.md Section 8.6, and the Phase 8 accessibility item that names it as
+// outstanding: the three status icons are the one place in this application
+// where colour carries state on its own, because their shapes are fixed by
+// decision. WCAG 2.1 SC 1.4.1 is about colour not being the only *visual*
+// signal, so the icons' aria-labels (asserted in App.test.tsx) do nothing
+// for a sighted colour-blind player - the mitigation that does is
+// luminance, and it is the one thing here that can be measured rather than
+// judged. Everything below is derived from the real tokens in index.css and
+// from the indicator's own button rule, so this is a live check on the
+// palette: change a token badly and it fails. It is the automated discharge
+// of Section 8.6's luminance requirement.
+describe('the status-icon palette (SPEC.md Section 8.1/8.6)', () => {
+  const css = readFileSync(CSS_PATH, 'utf-8');
+  const paper = cssToken(css, 'color-paper');
+  const accent = cssToken(css, 'color-accent');
+  const ok = cssToken(css, 'color-status-ok');
+  const degraded = cssToken(css, 'color-status-degraded');
+  const bad = cssToken(css, 'color-status-bad');
+  const levels: [string, string][] = [
+    ['ok', ok],
+    ['degraded', degraded],
+    ['bad', bad],
+  ];
+
+  // The worst realistic background these icons are read against. The
+  // indicator sits on the map, its button is a translucent paper fill (read
+  // out of the button's own rule rather than repeated here), and the
+  // darkest ground that fill can sit over is fully fogged terrain - the fog
+  // layer's own colour at CONFIG.FOG_MAX_OPACITY over paper, which
+  // composites to rgb(204, 199, 187). FOG_COLOR is not exported from
+  // map/fog/webgl-fog-layer.ts, so it is mirrored here by hand, the same
+  // way map/ink-style.ts mirrors PAPER and INK; the paper it is blended
+  // over and the button fill on top of it are both read live.
+  const FOG_COLOR: [number, number, number] = [0.78 * 255, 0.76 * 255, 0.71 * 255];
+  const foggedGround = blendOverBackground(FOG_COLOR, CONFIG.FOG_MAX_OPACITY, paper);
+  const buttonRule = cssRuleBody(css, '.tracking-indicator__button');
+  const buttonFill = buttonRule.match(
+    /background:\s*rgba\(([\d.]+),\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/,
+  );
+  if (!buttonFill) {
+    throw new Error('No rgba background found on .tracking-indicator__button');
+  }
+  const buttonOverFog = blendOverBackground(
+    [Number(buttonFill[1]), Number(buttonFill[2]), Number(buttonFill[3])],
+    Number(buttonFill[4]),
+    foggedGround,
+  );
+
+  // Section 8.1: icons meet 3:1 against their background (WCAG 2.1 SC
+  // 1.4.11).
+  const ICON_MIN = 3.0;
+  // Section 8.6: far enough apart to survive a greyscale rendering. Two
+  // steps of 2.2:1 put the extremes at 4.84:1, so the pair of bounds is
+  // reachable - but only just: with every colour under the luminance
+  // ceiling ICON_MIN imposes, the widest possible spread is about 5.9:1.
+  const ADJACENT_MIN = 2.2;
+  const EXTREMES_MIN = 4.0;
+  // Enough hue between them that they are not a grey ramp with a tint, and
+  // enough between each of them and the accent that none reads as it.
+  const HUE_GAP_MIN = 30;
+
+  it('the fogged ground the button sits over is the one Section 7.3 produces', () => {
+    expect(foggedGround).toBe('#ccc7bb');
+  });
+
+  it.each(levels)('%s clears 3:1 against the paper ground', (_name, colour) => {
+    expect(contrastRatio(colour, paper)).toBeGreaterThanOrEqual(ICON_MIN);
+  });
+
+  it.each(levels)(
+    "%s clears 3:1 against the indicator's own button over fogged ground",
+    (_name, colour) => {
+      expect(contrastRatio(colour, buttonOverFog)).toBeGreaterThanOrEqual(ICON_MIN);
+    },
+  );
+
+  it('adjacent states separate by 2.2:1 in luminance, not only in hue', () => {
+    expect(contrastRatio(ok, degraded)).toBeGreaterThanOrEqual(ADJACENT_MIN);
+    expect(contrastRatio(degraded, bad)).toBeGreaterThanOrEqual(ADJACENT_MIN);
+  });
+
+  it('the two extremes separate by 4:1', () => {
+    expect(contrastRatio(ok, bad)).toBeGreaterThanOrEqual(EXTREMES_MIN);
+  });
+
+  // On light paper a darker mark reads as the more prominent one, so
+  // severity and prominence agree and a greyscale reader gets the ordering
+  // of the three states for free rather than merely being able to tell them
+  // apart.
+  it('luminance runs in the direction of severity: ok lightest, bad darkest', () => {
+    const luminance = (hex: string) => relativeLuminance(hexToRgb(hex));
+    expect(luminance(ok)).toBeGreaterThan(luminance(degraded));
+    expect(luminance(degraded)).toBeGreaterThan(luminance(bad));
+  });
+
+  // Section 8.6 asks for luminance *as well as* hue. A grey ramp would pass
+  // every assertion above.
+  it('the three differ in hue as well as luminance, and none of them is a grey', () => {
+    for (const [, colour] of levels) {
+      expect(saturation(colour)).toBeGreaterThan(0.2);
+    }
+    expect(hueGap(ok, degraded)).toBeGreaterThanOrEqual(HUE_GAP_MIN);
+    expect(hueGap(degraded, bad)).toBeGreaterThanOrEqual(HUE_GAP_MIN);
+    expect(hueGap(ok, bad)).toBeGreaterThanOrEqual(HUE_GAP_MIN);
+  });
+
+  // Section 8.1: the accent stays reserved for the player's own position
+  // and for active states. A status colour in its hue family would compete
+  // with it, which is exactly what the narrowing was written to avoid.
+  it.each(levels)('%s is neither the accent nor in the accent hue family', (_name, colour) => {
+    expect(colour.toLowerCase()).not.toBe(accent.toLowerCase());
+    expect(hueGap(colour, accent)).toBeGreaterThanOrEqual(HUE_GAP_MIN);
+  });
+
+  // "Small and named" (Section 8.1): three tokens is the whole set - no
+  // fourth for a hover or focus tint, and nothing outside the indicator may
+  // reach for one.
+  it('is exactly three tokens, used only by the status icons', () => {
+    const tokens = css.match(/--color-status-[a-z-]+:/g) ?? [];
+    expect(tokens.sort()).toEqual([
+      '--color-status-bad:',
+      '--color-status-degraded:',
+      '--color-status-ok:',
+    ]);
+    const users = css.match(/var\(--color-status-[a-z-]+\)/g) ?? [];
+    expect(users).toHaveLength(3);
+    for (const level of ['ok', 'degraded', 'bad']) {
+      expect(cssRuleBody(css, `.tracking-indicator__icon--${level}`)).toContain(
+        `var(--color-status-${level})`,
+      );
+    }
   });
 });
 

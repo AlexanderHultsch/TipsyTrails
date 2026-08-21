@@ -1403,6 +1403,54 @@ describe('App', () => {
   });
 
   describe('position sampling and the status indicator', () => {
+    // Section 8.6: the indicator carries no words any more - the three
+    // icons keep a fixed shape and say their state in colour, and the state
+    // is readable as text only in the panel and in each icon's accessible
+    // name. These read the two surfaces that replaced the button's text:
+    // the per-state colour class (which is what a sighted player sees) and
+    // the aria-label (which is what a screen reader hears).
+    const STATUS_LEVELS = ['ok', 'degraded', 'bad'];
+
+    function statusIcon(name: 'gps' | 'connection' | 'tracking') {
+      const icon = container.querySelector(`.tracking-indicator__icon--${name}`);
+      if (!icon) {
+        throw new Error(`No ${name} status icon rendered`);
+      }
+      return icon;
+    }
+
+    function statusLevel(name: 'gps' | 'connection' | 'tracking'): string | undefined {
+      return STATUS_LEVELS.find((level) =>
+        statusIcon(name).classList.contains(`tracking-indicator__icon--${level}`),
+      );
+    }
+
+    function statusLabel(name: 'gps' | 'connection' | 'tracking'): string | null {
+      return statusIcon(name).getAttribute('aria-label');
+    }
+
+    // The panel is a disclosure, so opening it is a click on the same
+    // button.
+    function openStatusPanel(): void {
+      const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
+      act(() => {
+        button.click();
+      });
+      if (!container.querySelector('.tracking-indicator__panel')) {
+        throw new Error('The tracking status panel did not open');
+      }
+    }
+
+    // The three "Right now: ..." lines in the open panel, in the panel's own
+    // order (GPS, connection, foreground tracking). Read separately from the
+    // definitions beside them, which name every state and would match any
+    // assertion about the current one.
+    function panelCurrentStates(): string[] {
+      return Array.from(
+        container.querySelectorAll('.tracking-indicator__panel .tracking-indicator__current'),
+      ).map((line) => line.textContent ?? '');
+    }
+
     function stubMapFetch(handler?: FetchHandler) {
       return stubFetch((url, init) => {
         if (url.startsWith('/api/auth/me')) {
@@ -1537,7 +1585,14 @@ describe('App', () => {
       });
 
       expect(fetchMock.mock.calls.some(([input]) => input === '/api/samples')).toBe(false);
-      expect(container.textContent).toContain('Offline (1 queued)');
+      // Same behaviour, read through the surface that replaced the button's
+      // text: the connection icon goes to the bad level and says so by
+      // name, and the queue depth - which used to sit on the button - now
+      // lives in the panel.
+      expect(statusLevel('connection')).toBe('bad');
+      expect(statusLabel('connection')).toBe('Connection: offline');
+      openStatusPanel();
+      expect(panelCurrentStates()[1]).toBe('Right now: Offline (1 queued)');
 
       setOnline(true);
       await act(async () => {
@@ -1547,8 +1602,9 @@ describe('App', () => {
 
       const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
       expect(sampleCalls).toHaveLength(1);
-      expect(container.textContent).not.toContain('queued');
-      expect(container.textContent).toContain('Online');
+      expect(statusLevel('connection')).toBe('ok');
+      expect(statusLabel('connection')).toBe('Connection: online');
+      expect(panelCurrentStates()[1]).toBe('Right now: Online');
     });
 
     it('leaves a sample queued when posting it fails, rather than dropping it', async () => {
@@ -1573,12 +1629,11 @@ describe('App', () => {
       });
 
       expect(fetchMock.mock.calls.filter(([input]) => input === '/api/samples')).toHaveLength(1);
-      expect(container.textContent).toContain('Syncing (1 queued)');
+      expect(statusLevel('connection')).toBe('degraded');
+      expect(statusLabel('connection')).toBe('Connection: syncing');
 
-      const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
-      act(() => {
-        button.click();
-      });
+      openStatusPanel();
+      expect(panelCurrentStates()[1]).toBe('Right now: Syncing (1 queued)');
       expect(container.querySelector('.tracking-indicator__panel')?.textContent).toContain(
         'Sync failed.',
       );
@@ -1597,23 +1652,39 @@ describe('App', () => {
       vi.useFakeTimers();
       await renderMapWithFakeTimers();
 
+      // Section 8.6: the GPS icon's shape is the same mark at every
+      // accuracy, so what has to move with the state is its level class and
+      // its accessible name - and the three states share one scale with the
+      // other two icons, so good is `ok`, fair `degraded`, poor `bad`.
+      openStatusPanel();
+
       act(() => {
         geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M });
       });
-      expect(container.textContent).toContain('GPS: Good');
+      expect(statusLevel('gps')).toBe('ok');
+      expect(statusLabel('gps')).toBe('GPS signal: good');
+      expect(panelCurrentStates()[0]).toBe('Right now: Good');
 
       act(() => {
         geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_FAIR_M });
       });
-      expect(container.textContent).toContain('GPS: Fair');
+      expect(statusLevel('gps')).toBe('degraded');
+      expect(statusLabel('gps')).toBe('GPS signal: fair');
+      expect(panelCurrentStates()[0]).toBe('Right now: Fair');
 
       act(() => {
         geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_FAIR_M + 1 });
       });
-      expect(container.textContent).toContain('GPS: Poor');
+      expect(statusLevel('gps')).toBe('bad');
+      expect(statusLabel('gps')).toBe('GPS signal: poor');
+      expect(panelCurrentStates()[0]).toBe('Right now: Poor');
     });
 
-    it('goes to GPS poor after GPS_STALE_MS with no further fix', async () => {
+    // The shape is fixed by decision (Section 8.6), so nothing but the
+    // colour class may differ between two states of the same icon. This is
+    // what stops a future edit from quietly reintroducing a per-state shape
+    // and leaving the palette carrying nothing.
+    it('draws the same GPS mark whatever the GPS is doing, and changes only its level class', async () => {
       const geo = stubGeolocation();
       stubWakeLock();
       stubMapFetch((url) => {
@@ -1629,12 +1700,42 @@ describe('App', () => {
       act(() => {
         geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M });
       });
-      expect(container.textContent).toContain('GPS: Good');
+      const good = statusIcon('gps').innerHTML;
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_FAIR_M + 1 });
+      });
+      expect(statusIcon('gps').innerHTML).toBe(good);
+      expect(statusLevel('gps')).toBe('bad');
+    });
+
+    it('goes to GPS poor after GPS_STALE_MS with no further fix', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      openStatusPanel();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M });
+      });
+      expect(statusLevel('gps')).toBe('ok');
+      expect(panelCurrentStates()[0]).toBe('Right now: Good');
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(CONFIG.GPS_STALE_MS);
       });
-      expect(container.textContent).toContain('GPS: Poor');
+      expect(statusLevel('gps')).toBe('bad');
+      expect(statusLabel('gps')).toBe('GPS signal: poor');
+      expect(panelCurrentStates()[0]).toBe('Right now: Poor');
     });
 
     it('stops the geolocation watch and releases the wake lock when leaving the map screen', async () => {
@@ -1676,7 +1777,7 @@ describe('App', () => {
       await renderMapWithFakeTimers();
 
       expect(container.querySelector('.tracking-indicator__button')).not.toBeNull();
-      expect(container.textContent).toContain('Tracking');
+      expect(statusLabel('tracking')).toBe('Foreground tracking: active');
     });
 
     it('opens the tracking status explanation when the indicator is tapped', async () => {
@@ -1694,7 +1795,47 @@ describe('App', () => {
 
       const panel = container.querySelector('.tracking-indicator__panel');
       expect(panel).not.toBeNull();
+      // The panel keeps the definitions - they are what makes an icon-only
+      // indicator learnable - and now also says which state each of the
+      // three is in (Section 8.6).
       expect(panel?.textContent).toContain('Foreground tracking');
+      expect(panel?.textContent).toContain(`Good: within ${CONFIG.GPS_ACCURACY_GOOD_M} m`);
+      // No geolocation stub on this render, so tracking never started -
+      // the panel says so rather than claiming it is running.
+      expect(panelCurrentStates()).toEqual([
+        'Right now: Poor',
+        'Right now: Online',
+        'Right now: Paused',
+      ]);
+    });
+
+    // Section 8.6: each icon states its state in words rather than naming
+    // itself, for assistive technology. The button takes no aria-label of
+    // its own, so its accessible name is computed from its contents - a
+    // hidden lead-in saying what it opens, then the three states - and a
+    // screen reader never reaches a bare "button".
+    it('names the button from its contents: what it opens, then the three states', async () => {
+      stubMapFetch();
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+
+      const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
+      expect(button.getAttribute('aria-label')).toBeNull();
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+      expect(button.querySelector('.visually-hidden')?.textContent).toBe('Tracking status.');
+      expect(button.textContent).toBe('Tracking status.');
+      expect([statusLabel('gps'), statusLabel('connection'), statusLabel('tracking')]).toEqual([
+        'GPS signal: poor',
+        'Connection: online',
+        'Foreground tracking: paused',
+      ]);
+      // Paused is degraded, not bad: tracking stops when the app is not in
+      // the foreground, which is how phones work and not a fault.
+      expect(statusLevel('tracking')).toBe('degraded');
+      for (const name of ['gps', 'connection', 'tracking'] as const) {
+        expect(statusIcon(name).getAttribute('role')).toBe('img');
+      }
     });
   });
 

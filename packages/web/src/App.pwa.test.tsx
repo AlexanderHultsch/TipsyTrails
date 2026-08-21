@@ -293,6 +293,42 @@ describe('registerServiceWorker', () => {
 });
 
 describe('offline indicator and queued samples', () => {
+  function connectionIcon(): Element {
+    const icon = container.querySelector('.tracking-indicator__icon--connection');
+    if (!icon) {
+      throw new Error('No connection status icon rendered');
+    }
+    return icon;
+  }
+
+  function connectionIconLevel(): string | undefined {
+    return ['ok', 'degraded', 'bad'].find((level) =>
+      connectionIcon().classList.contains(`tracking-indicator__icon--${level}`),
+    );
+  }
+
+  function connectionIconLabel(): string | null {
+    return connectionIcon().getAttribute('aria-label');
+  }
+
+  // The panel's second "Right now: ..." line - GPS, connection, foreground
+  // tracking, in that order. Read on its own rather than from the whole
+  // panel, whose definitions name every connection state.
+  function panelConnectionState(): string {
+    const lines = container.querySelectorAll(
+      '.tracking-indicator__panel .tracking-indicator__current',
+    );
+    return lines[1]?.textContent ?? '';
+  }
+
+  function openPanelConnectionState(): string {
+    const button = container.querySelector('.tracking-indicator__button') as HTMLButtonElement;
+    act(() => {
+      button.click();
+    });
+    return panelConnectionState();
+  }
+
   it('shows the offline indicator while the browser reports offline, queues the sample instead of posting it, then posts and clears on reconnect', async () => {
     setOnline(false);
     const geo = stubGeolocation();
@@ -329,9 +365,12 @@ describe('offline indicator and queued samples', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(container.querySelector('.tracking-indicator__button')?.textContent).toContain(
-      'Offline',
-    );
+    // Section 8.6: the indicator is three icons with fixed shapes, so the
+    // offline state is carried by the connection icon's colour class and by
+    // its accessible name, and the queue depth is read in the panel the
+    // button opens - the button itself carries no words any more.
+    expect(connectionIconLevel()).toBe('bad');
+    expect(connectionIconLabel()).toBe('Connection: offline');
 
     act(() => {
       geo.triggerPosition({ accuracy: 10 });
@@ -341,9 +380,8 @@ describe('offline indicator and queued samples', () => {
     });
 
     expect(fetchMock.mock.calls.some(([input]) => input === '/api/samples')).toBe(false);
-    expect(container.querySelector('.tracking-indicator__button')?.textContent).toContain(
-      'Offline (1 queued)',
-    );
+    expect(connectionIconLevel()).toBe('bad');
+    expect(openPanelConnectionState()).toBe('Right now: Offline (1 queued)');
 
     setOnline(true);
     await act(async () => {
@@ -352,10 +390,9 @@ describe('offline indicator and queued samples', () => {
     });
 
     expect(fetchMock.mock.calls.filter(([input]) => input === '/api/samples')).toHaveLength(1);
-    expect(container.querySelector('.tracking-indicator__button')?.textContent).toContain('Online');
-    expect(container.querySelector('.tracking-indicator__button')?.textContent).not.toContain(
-      'queued',
-    );
+    expect(connectionIconLevel()).toBe('ok');
+    expect(connectionIconLabel()).toBe('Connection: online');
+    expect(panelConnectionState()).toBe('Right now: Online');
   });
 });
 
