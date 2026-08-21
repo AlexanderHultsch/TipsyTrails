@@ -24,14 +24,24 @@ function mapLinkFor(feature: BoundaryFeature): string {
   return `/map?${params.toString()}`;
 }
 
-// Section 8.3: all 27 districts with individual progress percentages. The
-// list is the primary interface (27 polygons on a phone screen fail
-// Section 8.2's 44 px tap target minimum); the schematic map alongside it
-// is secondary and purely illustrative, so it stays non-interactive rather
-// than duplicating the list's tap targets at a size that would violate 8.2.
+// Section 8.3: every district with its individual progress percentage. The
+// schematic map is the primary picker - tapping a shape selects it and the
+// panel beneath the map names it - but the shapes themselves cannot meet
+// Section 8.2's 44 px tap target minimum (the smallest districts are a few
+// pixels across in this viewBox). That constraint is not dropped, it is
+// carried by the list: WCAG 2.1 SC 2.5.5's "Equivalent" exception allows a
+// small target where "the function can be achieved through a different
+// control on the same page that meets this criterion", and the full list -
+// collapsed under a <details> but present and operable, with its 44 px rows
+// and every function the map offers - is that control. It must stay that
+// way rather than become decoration. The same bargain keeps the paths out
+// of the tab order (aria-hidden inside a role="img" svg): one extra tab
+// stop per district ahead of the list would make the keyboard path
+// materially worse, and the list already covers every function.
 export function DistrictOverview() {
   const [districts, setDistricts] = useState<BoundaryFeatureCollection | null>(null);
   const [percentByName, setPercentByName] = useState<Map<string, number>>(new Map());
+  const [selectedOsmId, setSelectedOsmId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +67,9 @@ export function DistrictOverview() {
     };
   }, []);
 
+  const selected =
+    districts?.features.find((feature) => feature.properties.osm_id === selectedOsmId) ?? null;
+
   let map = null;
   if (districts) {
     const allPoints = districts.features.flatMap((feature) => pointsOfGeometry(feature.geometry));
@@ -77,11 +90,15 @@ export function DistrictOverview() {
         {districts.features.map((feature) => (
           <path
             key={feature.properties.osm_id}
-            className="district-overview__district"
+            className={
+              feature.properties.osm_id === selectedOsmId
+                ? 'district-overview__district district-overview__district--selected'
+                : 'district-overview__district'
+            }
             d={svgPathOfGeometry(feature.geometry, project)}
             fillRule="evenodd"
             aria-hidden="true"
-            style={{ pointerEvents: 'none', cursor: 'default' }}
+            onClick={() => setSelectedOsmId(feature.properties.osm_id)}
           />
         ))}
       </svg>
@@ -101,18 +118,40 @@ export function DistrictOverview() {
         )}
         {map}
         {districts && (
-          <ul className="district-list">
-            {districts.features.map((feature) => (
-              <li key={feature.properties.osm_id}>
-                <Link className="district-list__item" to={mapLinkFor(feature)}>
-                  <span className="district-list__name">{feature.properties.name}</span>
-                  <span className="district-list__percent">
-                    {(percentByName.get(feature.properties.name) ?? 0).toFixed(1)}%
-                  </span>
+          <div className="district-overview__detail" role="status">
+            {selected ? (
+              <>
+                <span className="district-overview__detail-name">{selected.properties.name}</span>
+                <span className="district-overview__detail-percent">
+                  {(percentByName.get(selected.properties.name) ?? 0).toFixed(1)}%
+                </span>
+                <Link className="district-overview__detail-link" to={mapLinkFor(selected)}>
+                  Open on the map
                 </Link>
-              </li>
-            ))}
-          </ul>
+              </>
+            ) : (
+              <span className="district-overview__detail-hint">
+                Tap a district on the map to see its progress.
+              </span>
+            )}
+          </div>
+        )}
+        {districts && (
+          <details className="district-overview__all">
+            <summary>All districts</summary>
+            <ul className="district-list">
+              {districts.features.map((feature) => (
+                <li key={feature.properties.osm_id}>
+                  <Link className="district-list__item" to={mapLinkFor(feature)}>
+                    <span className="district-list__name">{feature.properties.name}</span>
+                    <span className="district-list__percent">
+                      {(percentByName.get(feature.properties.name) ?? 0).toFixed(1)}%
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </details>
         )}
       </div>
     </main>

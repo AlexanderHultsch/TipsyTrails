@@ -689,6 +689,62 @@ button:focus-visible,
   font-size: 1.5rem;
 }
 
+/* Section 8.3: the district map is the screen's primary picker, so its
+   shapes are pointer-interactive. The selection is carried by weight in the
+   same ink rather than by a colour of its own - Section 8.1 permits exactly
+   one accent, reserved for the player's position and active states - and
+   never by the fill alone: the panel beneath the map names the selected
+   district in words. */
+.district-overview__district {
+  cursor: pointer;
+}
+
+.district-overview__district--selected {
+  fill-opacity: 0.35;
+  stroke-width: 2;
+}
+
+/* The selected district's detail panel, sitting directly beneath the map.
+   Shaped like a .district-list__item so the two read as the same kind of
+   row. */
+.district-overview__detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  min-height: 44px;
+  margin-bottom: 1rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  text-align: left;
+}
+
+.district-overview__detail-name {
+  font-weight: 600;
+}
+
+/* WCAG 2.1 SC 2.5.5's "Equivalent" control for the map's small shapes
+   (screens/DistrictOverview.tsx): collapsed by default, but a full-size
+   target itself and holding the 44 px .district-list rows. */
+.district-overview__all {
+  text-align: left;
+}
+
+.district-overview__all > summary {
+  min-height: 44px;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.district-overview__all[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
 .district-list {
   list-style: none;
   margin: 0;

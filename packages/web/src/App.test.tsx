@@ -1207,6 +1207,142 @@ describe('App', () => {
     expect(container.querySelector('.map-container')).not.toBeNull();
   });
 
+  // Section 8.3: the schematic map is the district screen's primary picker.
+  // The shapes are too small to be 44 px targets, so the list stays on the
+  // page as WCAG 2.1 SC 2.5.5's equivalent control - collapsed, but present
+  // and complete. Both halves of that bargain are pinned here.
+  describe('picking a district on the schematic map', () => {
+    async function renderDistricts() {
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
+          return jsonResponse(200, districtsFixture);
+        }
+        if (url === '/api/progress') {
+          return jsonResponse(200, {
+            city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+            districts: districtsFixture.features.map((feature, index) => ({
+              id: index + 1,
+              name: feature.properties.name,
+              revealedCells: index,
+              playableCells: 100,
+              percent: index,
+            })),
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/districts');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    // The paths are deliberately not focusable, so there is no click() and
+    // no keyboard route to them - a bubbling MouseEvent is what a real tap
+    // on the shape delivers to React's root listener.
+    async function tapDistrict(index: number) {
+      const paths = container.querySelectorAll('.district-overview__district');
+      await act(async () => {
+        paths[index].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+
+    function panel(): HTMLElement {
+      return container.querySelector('.district-overview__detail') as HTMLElement;
+    }
+
+    it('selects the tapped district and shows its name and percentage in the detail panel', async () => {
+      await renderDistricts();
+      await tapDistrict(1);
+
+      expect(panel().getAttribute('role')).toBe('status');
+      expect(panel().querySelector('.district-overview__detail-name')?.textContent).toBe(
+        districtsFixture.features[1].properties.name,
+      );
+      expect(panel().querySelector('.district-overview__detail-percent')?.textContent).toBe('1.0%');
+
+      const paths = container.querySelectorAll('.district-overview__district');
+      expect(paths[1].classList.contains('district-overview__district--selected')).toBe(true);
+      expect(paths[2].classList.contains('district-overview__district--selected')).toBe(false);
+    });
+
+    // The shapes stay out of the tab order: one extra tab stop per district
+    // ahead of the list would make the keyboard path materially worse, and
+    // the list already offers every function the map does.
+    it('keeps the district shapes out of the tab order and out of the accessibility tree', async () => {
+      await renderDistricts();
+
+      const svg = container.querySelector('.district-overview__map');
+      expect(svg?.getAttribute('role')).toBe('img');
+      expect(svg?.getAttribute('aria-label')).toBeTruthy();
+      container.querySelectorAll('.district-overview__district').forEach((path) => {
+        expect(path.getAttribute('aria-hidden')).toBe('true');
+        expect(path.getAttribute('tabindex')).toBeNull();
+      });
+    });
+
+    it('replaces the panel content when a different district is tapped', async () => {
+      await renderDistricts();
+      await tapDistrict(1);
+      await tapDistrict(2);
+
+      expect(panel().querySelector('.district-overview__detail-name')?.textContent).toBe(
+        districtsFixture.features[2].properties.name,
+      );
+      expect(panel().querySelector('.district-overview__detail-percent')?.textContent).toBe('2.0%');
+      expect(panel().textContent).not.toContain(districtsFixture.features[1].properties.name);
+    });
+
+    it('shows an instruction rather than a district or a bare percentage before anything is tapped', async () => {
+      await renderDistricts();
+
+      expect(panel().textContent).toContain('Tap a district on the map');
+      expect(panel().querySelector('.district-overview__detail-name')).toBeNull();
+      expect(panel().querySelector('.district-overview__detail-link')).toBeNull();
+      expect(panel().textContent).not.toContain('%');
+    });
+
+    it("points the panel's link at the same URL as that district's list item", async () => {
+      await renderDistricts();
+      await tapDistrict(3);
+
+      const href = panel()
+        .querySelector('.district-overview__detail-link')
+        ?.getAttribute('href') as string;
+      const listHref = container
+        .querySelectorAll('.district-list__item')[3]
+        .getAttribute('href') as string;
+
+      expect(href).toMatch(/^\/map\?/);
+      expect(href).toBe(listHref);
+      expect(new URLSearchParams(href.slice(href.indexOf('?'))).get('district')).toBe(
+        districtsFixture.features[3].properties.name,
+      );
+    });
+
+    it('keeps the full list, with every district and its percentage, inside a collapsed <details>', async () => {
+      await renderDistricts();
+
+      const details = container.querySelector('.district-overview__all') as HTMLDetailsElement;
+      expect(details).not.toBeNull();
+      expect(details.tagName).toBe('DETAILS');
+      expect(details.open).toBe(false);
+      expect(details.querySelector('summary')?.textContent).toBe('All districts');
+
+      const items = details.querySelectorAll('.district-list__item');
+      expect(items).toHaveLength(districtsFixture.features.length);
+      items.forEach((item, index) => {
+        expect(item.textContent).toContain(districtsFixture.features[index].properties.name);
+        expect(item.querySelector('.district-list__percent')?.textContent).toBe(`${index}.0%`);
+        expect(item.getAttribute('href')).toMatch(/^\/map\?/);
+      });
+    });
+  });
+
   describe('position sampling and the status indicator', () => {
     function stubMapFetch(handler?: FetchHandler) {
       return stubFetch((url, init) => {
