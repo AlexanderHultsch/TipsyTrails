@@ -80,6 +80,49 @@ describe('index.css: MapLibre container positioning', () => {
   }
 });
 
+// The suggest screen's picker (map/MapPicker.tsx) puts the player's own
+// position marker and the pin being placed on one surface, and what keeps
+// the two usable together is a single declaration each. Both are asserted
+// here rather than in a render test for the same reason as the rules above:
+// nothing in jsdom loads this stylesheet, so no rendered picker can see
+// either declaration go missing.
+describe('index.css: the picker pin and the own-position marker', () => {
+  function bodiesFor(selector: string): string[] {
+    return rules()
+      .filter((rule) => rule.selector.split(',').some((part) => part.trim() === selector))
+      .map((rule) => rule.body);
+  }
+
+  function zIndexOf(selector: string): number {
+    for (const body of bodiesFor(selector)) {
+      const declared = body.match(/z-index\s*:\s*(-?\d+)/);
+      if (declared) {
+        return Number(declared[1]);
+      }
+    }
+    throw new Error(`no z-index declared for ${selector}`);
+  }
+
+  it('lets a tap pass through the own-position marker', () => {
+    const marker = bodiesFor('.own-position-marker');
+
+    expect(marker.length, 'no rule targets .own-position-marker').toBeGreaterThan(0);
+    expect(
+      marker.some((body) => /pointer-events\s*:\s*none/.test(body)),
+      '.own-position-marker must set pointer-events: none, or it swallows the tap ' +
+        'that places the pin - and the spot it covers is exactly the one someone ' +
+        'adding the bar they are standing in front of aims at',
+    ).toBe(true);
+  });
+
+  it('stacks the picker pin above the own-position marker', () => {
+    // Having just centred on yourself and then tapping that same spot lands
+    // the two on top of each other, and the object being placed is the one
+    // that has to stay visible.
+    expect(zIndexOf('.map-picker__pin')).toBeGreaterThan(zIndexOf('.own-position-marker'));
+  });
+});
+
 // The districts screen visibly jumped when a district was selected: the
 // detail panel's height changes with the selection, the page height changes
 // with it, a desktop scrollbar appears or disappears, and every `width: 100%`

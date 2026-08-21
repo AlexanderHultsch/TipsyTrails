@@ -14,7 +14,6 @@
 // indicator, so this marker carries no accuracy display of its own - it is
 // decorative (aria-hidden), not interactive, and takes no focus.
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type { LastAcceptedPosition } from '../../tracking/useSampleTracking.js';
 
 const OWN_POSITION_MARKER_SVG =
   '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
@@ -26,11 +25,22 @@ export interface OwnPositionMarkerOptions {
   map: MaplibreMap;
 }
 
+// Everything this marker needs of a position, and no more. Deliberately not
+// tracking/useSampleTracking.ts's LastAcceptedPosition: that type carries an
+// accuracy this marker never reads (see the header comment), and demanding it
+// would shut out the other holder of a player position - map/MapPicker.tsx's
+// one-shot fix, which has no accuracy to give. A LastAcceptedPosition still
+// satisfies this structurally, so the map screen passes one unchanged.
+export interface OwnPositionMarkerPosition {
+  lat: number;
+  lon: number;
+}
+
 export class OwnPositionMarker {
   private readonly map: MaplibreMap;
   private readonly container: HTMLElement;
   private readonly element: HTMLDivElement;
-  private position: LastAcceptedPosition | null = null;
+  private position: OwnPositionMarkerPosition | null = null;
   private readonly handleMove = () => this.reposition();
 
   constructor(options: OwnPositionMarkerOptions) {
@@ -49,7 +59,7 @@ export class OwnPositionMarker {
    * are somewhere they are not, so nothing is shown before the first fix
    * arrives (SPEC.md Section 8.3/8.1).
    */
-  setPosition(position: LastAcceptedPosition | null): void {
+  setPosition(position: OwnPositionMarkerPosition | null): void {
     const hadPosition = this.position !== null;
     this.position = position;
     if (position === null) {

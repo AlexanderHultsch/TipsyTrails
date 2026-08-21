@@ -29,6 +29,8 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
   const instances: {
     jumpTo: ReturnType<typeof vi.fn>;
     flyTo: ReturnType<typeof vi.fn>;
+    project: ReturnType<typeof vi.fn>;
+    container: HTMLDivElement;
     options: MockMapOptions;
   }[] = [];
   class MockMap {
@@ -678,6 +680,82 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
     expect(geo.getCurrentPosition).not.toHaveBeenCalled();
     // The map was built on that position - there is nothing to move.
     expect(map.jumpTo).not.toHaveBeenCalled();
+  });
+
+  // Centring on yourself is only half an answer while you cannot see where
+  // "yourself" is, so the picker shows the same marker the map screen does
+  // (map/position/own-position-marker.ts), mounted through the same hook.
+  // The marker is appended to the map's own container, which is what these
+  // tests query. That it does not swallow a tap is a stylesheet rule
+  // (pointer-events: none) that jsdom never applies, so it is asserted in
+  // stylesheet.test.ts instead; what is checked here is that the element on
+  // screen is the one that rule targets.
+  describe('the own-position marker', () => {
+    it('shows nothing while this session has no position', async () => {
+      stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      expect(lastMap().container.querySelector('.own-position-marker')).toBeNull();
+    });
+
+    it('appears once a position is known', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+      const map = lastMap();
+
+      act(() => {
+        geo.answerCurrentPosition({ lat: INSIDE_LAT, lon: INSIDE_LON });
+      });
+      await flush();
+
+      expect(map.container.querySelector('.own-position-marker')).not.toBeNull();
+      expect(map.project).toHaveBeenCalledWith([INSIDE_LON, INSIDE_LAT]);
+    });
+
+    it('appears straight away on the position the map screen last accepted', async () => {
+      stubGeolocation();
+      setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10 });
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      expect(lastMap().container.querySelector('.own-position-marker')).not.toBeNull();
+    });
+
+    it('moves when the position changes', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+      const map = lastMap();
+
+      map.project.mockReturnValue({ x: 10, y: 20 });
+      act(() => {
+        geo.answerCurrentPosition({ lat: INSIDE_LAT, lon: INSIDE_LON });
+      });
+      await flush();
+
+      const marker = map.container.querySelector('.own-position-marker') as HTMLElement;
+      expect(marker.style.left).toBe('10px');
+      expect(marker.style.top).toBe('20px');
+
+      // A real browser answers a one-shot request once; firing it again is
+      // simply how this test hands the picker a second position, since its
+      // own fix is the only thing the marker follows.
+      map.project.mockReturnValue({ x: 30, y: 40 });
+      act(() => {
+        geo.answerCurrentPosition({ lat: INSIDE_LAT + 0.002, lon: INSIDE_LON + 0.002 });
+      });
+      await flush();
+
+      expect(map.project).toHaveBeenCalledWith([INSIDE_LON + 0.002, INSIDE_LAT + 0.002]);
+      expect(marker.style.left).toBe('30px');
+      expect(marker.style.top).toBe('40px');
+    });
   });
 
   // The same control the map screen has, from the same component

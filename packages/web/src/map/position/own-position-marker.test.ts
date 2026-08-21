@@ -37,7 +37,7 @@ describe('OwnPositionMarker', () => {
     const { map, container } = createFakeMap();
     const marker = new OwnPositionMarker({ map: map as unknown as MaplibreMap });
 
-    marker.setPosition({ lat: 49.01, lon: 8.4, accuracy: 15 });
+    marker.setPosition({ lat: 49.01, lon: 8.4 });
 
     const element = container.querySelector('.own-position-marker') as HTMLElement;
     expect(element).not.toBeNull();
@@ -48,7 +48,7 @@ describe('OwnPositionMarker', () => {
   it('repositions on move, like a bar marker', () => {
     const { map, container } = createFakeMap();
     const marker = new OwnPositionMarker({ map: map as unknown as MaplibreMap });
-    marker.setPosition({ lat: 49.01, lon: 8.4, accuracy: 15 });
+    marker.setPosition({ lat: 49.01, lon: 8.4 });
 
     map.project.mockReturnValueOnce({ x: 12, y: 34 });
     map.fire('move');
@@ -61,7 +61,7 @@ describe('OwnPositionMarker', () => {
   it('is removed again if the position is cleared', () => {
     const { map, container } = createFakeMap();
     const marker = new OwnPositionMarker({ map: map as unknown as MaplibreMap });
-    marker.setPosition({ lat: 49.01, lon: 8.4, accuracy: 15 });
+    marker.setPosition({ lat: 49.01, lon: 8.4 });
     expect(container.querySelector('.own-position-marker')).not.toBeNull();
 
     marker.setPosition(null);
@@ -72,7 +72,7 @@ describe('OwnPositionMarker', () => {
   it('is a distinct shape from the bar marker, not just a distinct colour', () => {
     const { map, container } = createFakeMap();
     const marker = new OwnPositionMarker({ map: map as unknown as MaplibreMap });
-    marker.setPosition({ lat: 49.01, lon: 8.4, accuracy: 15 });
+    marker.setPosition({ lat: 49.01, lon: 8.4 });
 
     const element = container.querySelector('.own-position-marker') as HTMLElement;
     // The bar marker (map/bars/bar-markers.ts) is a <path> pictogram; this
@@ -85,7 +85,7 @@ describe('OwnPositionMarker', () => {
   it('removes the move listener and the element on destroy', () => {
     const { map, container } = createFakeMap();
     const marker = new OwnPositionMarker({ map: map as unknown as MaplibreMap });
-    marker.setPosition({ lat: 49.01, lon: 8.4, accuracy: 15 });
+    marker.setPosition({ lat: 49.01, lon: 8.4 });
     expect(map.on).toHaveBeenCalledWith('move', expect.any(Function));
 
     marker.destroy();

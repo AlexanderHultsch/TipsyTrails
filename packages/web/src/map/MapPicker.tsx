@@ -6,6 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { LocateButton } from '../components/LocateButton.js';
 import { getLastKnownPosition } from '../tracking/lastKnownPosition.js';
 import { inkStyle } from './ink-style.js';
+import { useOwnPositionMarker } from './position/useOwnPositionMarker.js';
 import { useCityMaxBounds } from './useCityMaxBounds.js';
 
 // Same fallback view screens/Map.tsx uses (roughly the middle of
@@ -59,6 +60,13 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
   const centredOnPositionRef = useRef(storedPositionRef.current !== null);
 
   const city = useCityMaxBounds(mapInstance);
+  // The same marker the map screen shows (map/position/own-position-marker.ts),
+  // not a second treatment: centring on yourself is only half an answer if you
+  // cannot see where "yourself" is. It stays clearly apart from the pin below -
+  // accent red against ink, a haloed dot against a teardrop, centred on its
+  // point rather than hanging above it - and it takes no taps, so the spot
+  // under it is still selectable.
+  useOwnPositionMarker(mapInstance, ownPosition);
 
   useEffect(() => {
     const protocol = new Protocol();

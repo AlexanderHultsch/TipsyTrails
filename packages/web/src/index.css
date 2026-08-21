@@ -1078,6 +1078,9 @@ button:focus-visible,
   left: auto;
 }
 
+/* Above .own-position-marker's z-index: 4. Centring on yourself and then
+   tapping that same spot lands the two on top of each other, and the thing
+   being placed is the one that has to stay visible. */
 .map-picker__pin {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -1085,6 +1088,7 @@ button:focus-visible,
   height: 28px;
   fill: var(--color-ink);
   pointer-events: none;
+  z-index: 5;
 }
 
 .map-picker__status {
