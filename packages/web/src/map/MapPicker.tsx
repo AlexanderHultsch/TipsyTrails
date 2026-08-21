@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
+import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { inkStyle } from './ink-style.js';
+import { useCityMaxBounds } from './useCityMaxBounds.js';
 
 // Same fallback view screens/Map.tsx uses (roughly the middle of
 // Karlsruhe's bounding box, Section 6.2) - there is no user location to
@@ -37,6 +39,8 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
 
+  useCityMaxBounds(mapInstance);
+
   useEffect(() => {
     const protocol = new Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
@@ -46,6 +50,8 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
       style: inkStyle,
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
+      minZoom: CONFIG.MAP_MIN_ZOOM,
+      maxZoom: CONFIG.MAP_MAX_ZOOM,
       attributionControl: false,
     });
     setMapInstance(map);

@@ -26,17 +26,25 @@ function formatValue(metric: Metric, value: number): string {
 
 // SPEC.md Section 8.3/7.8: ranked list, metric toggle, period filter, paged
 // at CONFIG.LEADERBOARD_PAGE_SIZE (the server's own page size - not
-// duplicated here, `data.pageSize`/`data.totalPages` below come straight
-// from GET /api/leaderboard). Section 7.8's anonymous rendering is not
-// special-cased client-side at all: `displayName`/`avatarSeed` are rendered
-// exactly as the server sends them (routes/leaderboard.ts already applies
-// the mask), so this screen cannot disagree with it.
+// duplicated here, `data.response.pageSize`/`data.response.totalPages`
+// below come straight from GET /api/leaderboard). Section 7.8's anonymous
+// rendering is not special-cased client-side at all:
+// `displayName`/`avatarSeed` are rendered exactly as the server sends them
+// (routes/leaderboard.ts already applies the mask), so this screen cannot
+// disagree with it.
+//
+// `data` holds the response together with the metric it was fetched with,
+// and `formatValue` is given that stored metric rather than the live one.
+// Switching metric deliberately leaves the previous rows on screen while
+// the new request is in flight (a blank flash is worse), so formatting
+// against the live `metric` relabelled those still-visible rows: an area
+// percentage lost its "%", a bar count gained one.
 export function Leaderboard() {
   const { user } = useCurrentUser();
   const [metric, setMetric] = useState<Metric>('area');
   const [period, setPeriod] = useState<Period>('all');
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<LeaderboardResponse | null>(null);
+  const [data, setData] = useState<{ response: LeaderboardResponse; metric: Metric } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +54,7 @@ export function Leaderboard() {
     setError(null);
     getLeaderboard({ metric, period, page })
       .then((result) => {
-        if (!cancelled) setData(result);
+        if (!cancelled) setData({ response: result, metric });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -120,12 +128,12 @@ export function Leaderboard() {
           </p>
         )}
 
-        {data && data.entries.length === 0 && <p>No players yet.</p>}
+        {data && data.response.entries.length === 0 && <p>No players yet.</p>}
 
-        {data && data.entries.length > 0 && (
+        {data && data.response.entries.length > 0 && (
           <>
             <ol className="leaderboard__list">
-              {data.entries.map((entry) => {
+              {data.response.entries.map((entry) => {
                 const isSelf = user?.id === entry.userId;
                 return (
                   <li
@@ -141,7 +149,9 @@ export function Leaderboard() {
                       {isSelf && <span className="leaderboard__self-tag"> (you)</span>}
                     </span>
                     <BadgeShelf badges={entry.badges} compact />
-                    <span className="leaderboard__value">{formatValue(metric, entry.value)}</span>
+                    <span className="leaderboard__value">
+                      {formatValue(data.metric, entry.value)}
+                    </span>
                   </li>
                 );
               })}
@@ -151,18 +161,18 @@ export function Leaderboard() {
               <button
                 type="button"
                 className="button button--secondary"
-                disabled={data.page <= 1}
+                disabled={data.response.page <= 1}
                 onClick={() => setPage((current) => current - 1)}
               >
                 Previous
               </button>
               <span>
-                Page {data.page} of {data.totalPages}
+                Page {data.response.page} of {data.response.totalPages}
               </span>
               <button
                 type="button"
                 className="button button--secondary"
-                disabled={data.page >= data.totalPages}
+                disabled={data.response.page >= data.response.totalPages}
                 onClick={() => setPage((current) => current + 1)}
               >
                 Next

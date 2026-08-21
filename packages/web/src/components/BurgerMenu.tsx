@@ -102,11 +102,13 @@ export function BurgerMenu() {
               </Link>
             </li>
           )}
-          <li>
-            <button type="button" onClick={handleLogoutClick}>
-              Log out
-            </button>
-          </li>
+          {user && (
+            <li>
+              <button type="button" onClick={handleLogoutClick}>
+                Log out
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </nav>

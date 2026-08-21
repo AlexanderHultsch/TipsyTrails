@@ -22,6 +22,7 @@ const { MockMap, addProtocolMock, removeProtocolMock } = vi.hoisted(() => {
     removeLayer = vi.fn();
     getLayer = vi.fn();
     loaded = vi.fn(() => true);
+    setMaxBounds = vi.fn();
     project = vi.fn(() => ({ x: 0, y: 0 }));
     container = document.createElement('div');
     getContainer = () => this.container;
@@ -156,6 +157,77 @@ describe('/privacy', () => {
     expect(container.textContent).toContain('never stored as a trail');
     expect(container.textContent).toContain('per-day reveal counters');
     expect(container.textContent).toContain('how much new area you uncovered');
+  });
+
+  // In the installed PWA there is no browser chrome, so a screen without the
+  // burger menu is a dead end with no way back.
+  it("renders the burger menu, the app's one way off this screen", async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+
+    expect(container.querySelector('.burger-menu__button')).not.toBeNull();
+
+    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    act(() => {
+      menuButton.click();
+    });
+    const mapLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+      (a) => a.getAttribute('href') === '/map',
+    );
+    expect(mapLink).not.toBeUndefined();
+  });
+
+  // This is the one screen the burger menu reaches a signed-out reader on, so
+  // it is the one screen where "Log out" would be offered to someone with no
+  // session to end.
+  it('offers no "Log out" control in that menu while signed out', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+
+    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    expect(menuButton).not.toBeNull();
+    act(() => {
+      menuButton.click();
+    });
+    expect(container.querySelector('.burger-menu__panel')).not.toBeNull();
+    expect(
+      Array.from(container.querySelectorAll('.burger-menu__panel button')).map(
+        (button) => button.textContent,
+      ),
+    ).not.toContain('Log out');
+  });
+
+  it('offers the "Log out" control in that menu while signed in', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+
+    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    act(() => {
+      menuButton.click();
+    });
+    expect(
+      Array.from(container.querySelectorAll('.burger-menu__panel button')).map(
+        (button) => button.textContent,
+      ),
+    ).toContain('Log out');
   });
 
   it('names Cloudflare and the browser push service rather than OpenStreetMap as the outside services that see traffic', async () => {

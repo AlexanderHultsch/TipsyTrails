@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { CONFIG } from './config.js';
 import {
   AREA_ESTIMATE_TOLERANCE_PERCENT,
   M_PER_DEG_LAT,
   assignGrid,
   cellCenter,
+  cellCenterXY,
   checkAreaEstimate,
   computeGridDimensions,
   districtsWithNoCells,
+  gridMapBounds,
   haversineDistanceM,
   mPerDegLon,
   polygonAreaM2,
@@ -80,6 +83,70 @@ describe('computeGridDimensions', () => {
       50,
     );
     expect(dims).toEqual({ grid_width: 417, grid_height: 343 });
+  });
+});
+
+describe('gridMapBounds', () => {
+  const [[west, south], [east, north]] = gridMapBounds(KARLSRUHE_GRID);
+
+  it('contains the centre of the city it was derived from', () => {
+    const centre = cellCenter(
+      Math.floor((KARLSRUHE_GRID.grid_width * KARLSRUHE_GRID.grid_height) / 2),
+      KARLSRUHE_GRID,
+    );
+    expect(centre.lon).toBeGreaterThan(west);
+    expect(centre.lon).toBeLessThan(east);
+    expect(centre.lat).toBeGreaterThan(south);
+    expect(centre.lat).toBeLessThan(north);
+  });
+
+  it('is strictly larger than the unpadded grid extent on both axes', () => {
+    const southWest = cellCenterXY(0, 0, KARLSRUHE_GRID);
+    const northEast = cellCenterXY(
+      KARLSRUHE_GRID.grid_width - 1,
+      KARLSRUHE_GRID.grid_height - 1,
+      KARLSRUHE_GRID,
+    );
+    expect(west).toBeLessThan(southWest.lon);
+    expect(south).toBeLessThan(southWest.lat);
+    expect(east).toBeGreaterThan(northEast.lon);
+    expect(north).toBeGreaterThan(northEast.lat);
+  });
+
+  // A single shared padding value would distort a non-square grid, so the
+  // two axes are padded from their own extents.
+  it('pads each axis from its own extent', () => {
+    const tall: GridParams = { ...KARLSRUHE_GRID, grid_width: 11, grid_height: 401 };
+    const [[tallWest, tallSouth], [tallEast, tallNorth]] = gridMapBounds(tall);
+    const unpaddedSouthWest = cellCenterXY(0, 0, tall);
+    const unpaddedNorthEast = cellCenterXY(tall.grid_width - 1, tall.grid_height - 1, tall);
+
+    const lonPadding = unpaddedSouthWest.lon - tallWest;
+    const latPadding = unpaddedSouthWest.lat - tallSouth;
+    expect(lonPadding).toBeGreaterThan(0);
+    expect(latPadding).toBeGreaterThan(0);
+    expect(lonPadding).not.toBeCloseTo(latPadding, 10);
+    expect(latPadding).toBeGreaterThan(lonPadding);
+
+    expect(tallEast - unpaddedNorthEast.lon).toBeCloseTo(lonPadding, 12);
+    expect(tallNorth - unpaddedNorthEast.lat).toBeCloseTo(latPadding, 12);
+  });
+
+  it('pads by exactly CONFIG.MAP_BOUNDS_PADDING_RATIO of each axis', () => {
+    const southWest = cellCenterXY(0, 0, KARLSRUHE_GRID);
+    const northEast = cellCenterXY(
+      KARLSRUHE_GRID.grid_width - 1,
+      KARLSRUHE_GRID.grid_height - 1,
+      KARLSRUHE_GRID,
+    );
+    expect(southWest.lon - west).toBeCloseTo(
+      (northEast.lon - southWest.lon) * CONFIG.MAP_BOUNDS_PADDING_RATIO,
+      12,
+    );
+    expect(southWest.lat - south).toBeCloseTo(
+      (northEast.lat - southWest.lat) * CONFIG.MAP_BOUNDS_PADDING_RATIO,
+      12,
+    );
   });
 });
 

@@ -261,6 +261,87 @@ describe('leaderboard', () => {
     expect(rows[0].querySelector('.leaderboard__name')?.textContent).toBe('bob');
   });
 
+  // The previous rows deliberately stay on screen while the new request is
+  // in flight - a blank flash is worse - but they were being formatted with
+  // the newly selected metric, so an area percentage lost its "%" and a bar
+  // count gained one for as long as the fetch took. Formatting follows the
+  // metric the visible response was fetched with, not the live toggle.
+  it("keeps the previous metric's formatting on the still-visible rows while the new request is pending", async () => {
+    let releaseBars = () => {};
+    const barsPending = new Promise<void>((resolve) => {
+      releaseBars = resolve;
+    });
+
+    stubFetch(async (url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/api/leaderboard')) {
+        if (searchParamsOf(url).get('metric') === 'bars') {
+          await barsPending;
+          return jsonResponse(200, {
+            metric: 'bars',
+            period: 'all',
+            page: 1,
+            pageSize: 50,
+            totalUsers: 1,
+            totalPages: 1,
+            entries: [
+              {
+                rank: 1,
+                userId: 2,
+                displayName: 'bob',
+                isAnonymous: false,
+                avatarSeed: 'seed2',
+                value: 7,
+                badges: [],
+              },
+            ],
+          });
+        }
+        return jsonResponse(200, {
+          metric: 'area',
+          period: 'all',
+          page: 1,
+          pageSize: 50,
+          totalUsers: 1,
+          totalPages: 1,
+          entries: [
+            {
+              rank: 1,
+              userId: 2,
+              displayName: 'bob',
+              isAnonymous: false,
+              avatarSeed: 'seed2',
+              value: 40.5,
+              badges: [],
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/leaderboard');
+    expect(container.querySelector('.leaderboard__value')?.textContent).toBe('40.5%');
+
+    const barsButton = Array.from(container.querySelectorAll('.leaderboard__toggle-button')).find(
+      (button) => button.textContent === 'Bars',
+    ) as HTMLButtonElement;
+    await click(barsButton);
+
+    // The bars request has not answered yet: the row is still the area one,
+    // and must still read as an area percentage.
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('Loading');
+    expect(container.querySelector('.leaderboard__name')?.textContent).toBe('bob');
+    expect(container.querySelector('.leaderboard__value')?.textContent).toBe('40.5%');
+
+    releaseBars();
+    await flush();
+
+    expect(container.querySelector('.leaderboard__value')?.textContent).toBe('7');
+  });
+
   it('shows an anonymous row masked, still ranked, with its badges', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {

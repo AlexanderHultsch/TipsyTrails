@@ -14,6 +14,7 @@
 // with it.
 
 import type { CityBoundingBox } from './city.js';
+import { CONFIG } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Projection (SPEC.md Section 6.1 — normative).
@@ -85,6 +86,28 @@ export function cellCenter(index: number, grid: GridParams): LatLon {
   const x = index % grid.grid_width;
   const y = Math.floor(index / grid.grid_width);
   return cellCenterXY(x, y, grid);
+}
+
+/**
+ * The pan limit for a map showing this grid, as
+ * `[[west, south], [east, north]]` — MapLibre's `maxBounds` shape.
+ *
+ * The extent comes from `cellCenterXY` at the corner cells rather than from
+ * projection maths written a second time here, so it can never disagree
+ * with `toCell`. It is then padded by `CONFIG.MAP_BOUNDS_PADDING_RATIO`,
+ * computed per axis: a degree of longitude is shorter than a degree of
+ * latitude at this latitude, so one shared padding value in degrees would
+ * pad the two axes by different distances on the ground.
+ */
+export function gridMapBounds(grid: GridParams): [[number, number], [number, number]] {
+  const southWest = cellCenterXY(0, 0, grid);
+  const northEast = cellCenterXY(grid.grid_width - 1, grid.grid_height - 1, grid);
+  const lonPadding = (northEast.lon - southWest.lon) * CONFIG.MAP_BOUNDS_PADDING_RATIO;
+  const latPadding = (northEast.lat - southWest.lat) * CONFIG.MAP_BOUNDS_PADDING_RATIO;
+  return [
+    [southWest.lon - lonPadding, southWest.lat - latPadding],
+    [northEast.lon + lonPadding, northEast.lat + latPadding],
+  ];
 }
 
 /**

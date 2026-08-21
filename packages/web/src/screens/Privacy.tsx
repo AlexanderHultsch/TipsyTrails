@@ -1,4 +1,5 @@
 import { CONFIG } from '@tipsytrails/shared';
+import { BurgerMenu } from '../components/BurgerMenu.js';
 
 const MAIN_SITE_PRIVACY_URL = 'https://ahultsch.com/privacy';
 const MAIN_SITE_LEGAL_URL = 'https://ahultsch.com/legal';
@@ -14,6 +15,7 @@ const MAIN_SITE_LEGAL_URL = 'https://ahultsch.com/legal';
 export function Privacy() {
   return (
     <main className="screen">
+      <BurgerMenu />
       <div className="screen__content privacy">
         <h1>Privacy</h1>
         <p>

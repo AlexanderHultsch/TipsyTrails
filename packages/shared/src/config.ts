@@ -71,6 +71,18 @@ export const CONFIG = {
     barfly: { week: 1, month: 2, year: 3 },
   },
 
+  // Map zoom and pan limits. Zoom 10 keeps the whole city plus its
+  // surroundings in view and is as far out as the map may go, so it never
+  // leaves the area the tile extract covers (the extract is built for zoom
+  // 0-14). Zoom 18 is past that 14, deliberately: MapLibre overzooms the
+  // last level it has, which is what makes 50 m cells and bar markers
+  // usable up close. The ratio is the margin left around the playable grid,
+  // so the edge of the city is still reachable without the map drifting off
+  // into empty space.
+  MAP_MIN_ZOOM: 10,
+  MAP_MAX_ZOOM: 18,
+  MAP_BOUNDS_PADDING_RATIO: 0.2,
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json', // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;

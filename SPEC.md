@@ -1167,6 +1167,7 @@ These are consequences to design around, not reasons to reconsider:
 | O6 | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. | Documented, not built |
 | O7 | Friends, shared sessions, and social features. | Out of scope for v1 |
 | O10 | Section 9.4's `trustProxy` hop count for the Pi deployment is unverified — Cloudflare's edge and `cloudflared` may together add entries to `X-Forwarded-For` before Caddy ever sees the request, and neither this repository nor the platform's settles the real count; nor does either settle whether the platform's Caddy configures `trusted_proxies` or a `header_up` override that would change what the header holds by the time the API reads it. Verify by logging the raw header from one real external request against the running deployment and counting the entries, and by reading the platform `Caddyfile`'s global options, then set `trustProxy` to match. | Open — needs verification on the Pi |
+| O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
 
 ---
 

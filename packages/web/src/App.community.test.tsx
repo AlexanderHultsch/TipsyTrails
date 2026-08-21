@@ -26,6 +26,7 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     removeLayer = vi.fn();
     getLayer = vi.fn();
     loaded = vi.fn(() => true);
+    setMaxBounds = vi.fn();
     project = vi.fn(() => ({ x: 0, y: 0 }));
     container = document.createElement('div');
     getContainer = () => this.container;

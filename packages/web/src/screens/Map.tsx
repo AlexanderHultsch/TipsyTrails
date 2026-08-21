@@ -13,6 +13,7 @@ import { useBarMarkers } from '../map/bars/useBarMarkers.js';
 import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
+import { useCityMaxBounds } from '../map/useCityMaxBounds.js';
 import { useOwnPositionMarker } from '../map/position/useOwnPositionMarker.js';
 import {
   hasSeenMasteringExplainer,
@@ -102,6 +103,7 @@ export function MapScreen() {
   // so `user` is already resolved by the time it mounts, but the `null`
   // fallback keeps useFogLayer's own contract honest for the type.
   useFogLayer(mapInstance, trackingState.revealVersion, user?.id ?? null);
+  useCityMaxBounds(mapInstance);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
   useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));
@@ -148,6 +150,8 @@ export function MapScreen() {
       style: inkStyle,
       center: centerFromSearchParams(searchParams) ?? INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
+      minZoom: CONFIG.MAP_MIN_ZOOM,
+      maxZoom: CONFIG.MAP_MAX_ZOOM,
       attributionControl: false,
     });
     map.on('error', (event) => {

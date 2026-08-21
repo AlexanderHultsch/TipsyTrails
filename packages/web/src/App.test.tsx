@@ -4,7 +4,8 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONFIG } from '@tipsytrails/shared';
+import { CONFIG, gridMapBounds } from '@tipsytrails/shared';
+import type { GridParams } from '@tipsytrails/shared';
 import { App } from './App.js';
 import { ACTIVE_CITY_SLUG } from './api/city.js';
 import type { BoundaryFeatureCollection } from './api/geo-types.js';
@@ -40,6 +41,30 @@ function ringCount(feature: BoundaryFeatureCollection['features'][number]): numb
     : feature.geometry.coordinates.reduce((sum, polygon) => sum + polygon.length, 0);
 }
 
+// A GET /api/city body, and the same grid as GridParams - what the map's
+// pan limit is derived from (shared's gridMapBounds). The real Karlsruhe
+// dimensions (SPEC.md Section 6.2), so the bounds this produces are the
+// ones the deployed app computes.
+const cityMeta = {
+  slug: 'karlsruhe',
+  name: 'Karlsruhe',
+  originLat: 48.94,
+  originLon: 8.275,
+  gridWidth: 417,
+  gridHeight: 343,
+  cellSizeM: 50,
+  playableCells: 143_031,
+  districts: [],
+};
+
+const cityMetaGrid: GridParams = {
+  origin_lat: cityMeta.originLat,
+  origin_lon: cityMeta.originLon,
+  grid_width: cityMeta.gridWidth,
+  grid_height: cityMeta.gridHeight,
+  cell_size_m: cityMeta.cellSizeM,
+};
+
 // MapLibre needs a real WebGL context, which jsdom does not provide, so the
 // map route is exercised against a stand-in Map class rather than the real
 // library. mapInstances lets tests reach the last constructed instance to
@@ -49,11 +74,23 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
   // MapLibre error handling can only be exercised by reaching into the
   // registered handlers: the stand-in never fires events by itself, so a
   // test pulls the 'error' listener back out of this mock and calls it.
+  //
+  // minZoom/maxZoom join center/zoom here because they are constructor
+  // options too: the pan limit arrives later (map.setMaxBounds, once GET
+  // /api/city answers) but the zoom limits need no metadata and are set
+  // straight away.
+  interface MockMapOptions {
+    center?: [number, number];
+    zoom?: number;
+    minZoom?: number;
+    maxZoom?: number;
+  }
   const instances: {
     remove: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
+    setMaxBounds: ReturnType<typeof vi.fn>;
     container: HTMLDivElement;
-    options: { center?: [number, number]; zoom?: number };
+    options: MockMapOptions;
   }[] = [];
   // Section 7.3's fog layer (map/fog/) additionally needs loaded()/
   // getContainer() - loaded() true so FogController mounts synchronously
@@ -70,6 +107,7 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     removeLayer = vi.fn();
     getLayer = vi.fn();
     loaded = vi.fn(() => true);
+    setMaxBounds = vi.fn();
     // map/bars/bar-markers.ts's only other dependency on the real map
     // beyond on/off/getContainer above - an arbitrary fixed point is fine
     // since these tests assert marker presence and behaviour, not screen
@@ -81,8 +119,8 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     // Recorded so a test can assert which centre the screen actually asked
     // for - the difference between Karlsruhe and Null Island is invisible
     // to every other assertion here, and was a real shipped bug.
-    options: { center?: [number, number]; zoom?: number };
-    constructor(options: { center?: [number, number]; zoom?: number } = {}) {
+    options: MockMapOptions;
+    constructor(options: MockMapOptions = {}) {
       this.options = options;
       instances.push(this);
     }
@@ -269,6 +307,7 @@ function setOnline(online: boolean) {
 // up front keeps every /map test's timing uniform.
 beforeAll(async () => {
   await import('./screens/Map.js');
+  await import('./screens/SuggestBar.js');
 });
 
 beforeEach(() => {
@@ -891,6 +930,78 @@ describe('App', () => {
     expect(container.querySelector('#settings-anonymous')).not.toBeNull();
     expect(mapInstance.remove).toHaveBeenCalledTimes(1);
     expect(removeProtocolMock).toHaveBeenCalledWith('pmtiles');
+  });
+
+  // Without these the map zoomed out to a world view and panned away from
+  // the city entirely - past everything the tile extract covers, into an
+  // empty grey plane with no way back but a reload.
+  it('constrains the map screen to the configured zoom range and to the city grid once GET /api/city answers', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, cityMeta);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.minZoom).toBe(CONFIG.MAP_MIN_ZOOM);
+    expect(map.options.maxZoom).toBe(CONFIG.MAP_MAX_ZOOM);
+    expect(map.setMaxBounds).toHaveBeenCalledWith(gridMapBounds(cityMetaGrid));
+  });
+
+  it("constrains the suggest screen's map picker the same way", async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, cityMeta);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/suggest');
+    await flushLazyMapScreen();
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.minZoom).toBe(CONFIG.MAP_MIN_ZOOM);
+    expect(map.options.maxZoom).toBe(CONFIG.MAP_MAX_ZOOM);
+    expect(map.setMaxBounds).toHaveBeenCalledWith(gridMapBounds(cityMetaGrid));
+  });
+
+  // The map is built in a mount effect, before GET /api/city can possibly
+  // have answered; the zoom limits need no metadata, so they must not wait
+  // for it, and a failed fetch must still leave a usable map.
+  it('still applies the zoom limits when GET /api/city never answers', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+    await flushLazyMapScreen();
+
+    const map = mapInstances[mapInstances.length - 1];
+    expect(map.options.minZoom).toBe(CONFIG.MAP_MIN_ZOOM);
+    expect(map.options.maxZoom).toBe(CONFIG.MAP_MAX_ZOOM);
+    expect(map.setMaxBounds).not.toHaveBeenCalled();
   });
 
   it('fetches the fog mask and grid on mount and renders the 2D canvas fallback (jsdom has no WebGL2)', async () => {
