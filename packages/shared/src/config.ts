@@ -91,6 +91,14 @@ export const CONFIG = {
   MAP_MAX_ZOOM: 18,
   MAP_BOUNDS_PADDING_RATIO: 0.2,
 
+  // SPEC.md Section 8.3: the zoom the map opens at, and the zoom the "to my
+  // location" control takes the player back to. One constant for both,
+  // because they answer the same question - "show me where I am, close
+  // enough to walk from" - and two numbers that mean the same thing drift.
+  // A few blocks across: close enough that a bar marker, the player's own
+  // position and the 50 m grain of the fog are all legible.
+  MAP_DEFAULT_ZOOM: 16,
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json', // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;
