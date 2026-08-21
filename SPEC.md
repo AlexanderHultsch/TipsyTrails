@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.13
+**Version:** 1.14
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -410,7 +410,7 @@ CREATE TABLE visits (
   last_sample_at  INTEGER NOT NULL,   -- latest accepted on-site sample, seconds
   onsite_samples  INTEGER NOT NULL DEFAULT 1,   -- includes the check-in itself
   confirmed_s     INTEGER NOT NULL DEFAULT 0,   -- last_sample_at - started_at
-  status          TEXT NOT NULL,      -- 'pending' | 'completed' | 'expired'
+  status          TEXT NOT NULL,      -- 'pending' | 'completed' | 'expired' | 'cancelled'
   completed_at    INTEGER,
   push_sent_at    INTEGER             -- set when the 21-minute reminder went out
 );
@@ -423,6 +423,8 @@ CREATE UNIQUE INDEX idx_visits_one_pending ON visits(user_id, bar_id) WHERE stat
 `confirmed_s` is the elapsed time between check-in and the most recent accepted on-site sample — not a gap between arbitrary samples. It is stored in seconds like every other duration in the database and compared against `VISIT_REQUIRED_S` (Section 7.1).
 
 The partial unique index makes a second pending visit at the same bar impossible; `POST /api/visits` for a bar with an open pending visit returns the existing visit rather than an error.
+
+`cancelled` is the state a player puts a visit into deliberately (Section 7.5). It is terminal like `expired`, it masters nothing, and it is never reached by a sample or by the maintenance tick — only by the caller's own explicit request. Because it takes the row out of `pending` it also releases the partial unique index, so the player can check in at the same bar again straight away. The row is kept rather than deleted, for the same reason an expired one is: it is a record of what happened, not a mistake to erase.
 
 A bar is **mastered** by a user if at least one `visits` row exists with `status='completed'`. Mastering is permanent and cannot be lost.
 
@@ -615,10 +617,16 @@ Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_dis
 **Rendering.** A MapLibre custom layer draws the fog as a single full-screen quad. The fog mask is uploaded to the GPU as a texture (one texel per grid cell, `R8` format, ~140 KiB for Karlsruhe) and sampled in the fragment shader. Reveals update the texture via `texSubImage2D` on the affected region only.
 
 Visual behaviour:
-- Unrevealed: opaque grey fog, at `FOG_MAX_OPACITY` alpha, dense enough that it hides detail rather than tinting it. The fog is inserted into the style directly **beneath** the motorway/trunk road layer, so those roads draw over it and stay fully crisp, while everything below the fog — water, primary and secondary roads, green areas, buildings — is dimmed to near nothing. This replaces the earlier rule that all major roads and water stay faintly visible beneath the fog at roughly 25% opacity. The point of that rule was orientation in unexplored ground, and drawing the largest roads above the fog serves it better than dimming every one of them did: the player keeps a legible skeleton of the city, and the fog gets to do its job on everything else.
+- Unrevealed: opaque grey fog, at `FOG_MAX_OPACITY` alpha, dense enough that it hides detail rather than tinting it. The fog is inserted into the style at one fixed point in the layer order: **beneath** it, in order, sit the paper background, green landcover, parks, building fills and building outlines; **above** it sit water fill, water outline, waterways, and both road layers. So a player on unrevealed ground sees roads and water and nothing else — buildings, green areas and parks are hidden by the fog, deliberately. This widens the earlier rule, under which only the motorway/trunk layer stayed above the fog and water was dimmed away with everything else: orientation in unexplored ground is carried better by the water and the ordinary street grid than by the trunk network alone, and the fog still gets to do its job on everything that describes what a place is actually like.
 - Revealed: fog alpha 0. The edge is softened with a two-cell blur plus a low-frequency noise offset so the boundary never reads as a hard circle or as visible squares.
 - Newly revealed cells animate from opaque to clear over 600 ms.
-- Buildings and minor streets are only rendered where revealed.
+- Buildings, green areas and parks are only rendered where revealed. Roads and water are drawn everywhere, above the fog.
+
+**Major roads carry no extra weight.** `road-highway` used to be drawn heavier and more opaque than `road-primary`, which was defensible while it was the only road above the fog and had to carry orientation on its own. It no longer is, and the contrast the ordinary roads already have is enough for the major ones too: both road layers take the same colour, the same opacity, and the same width ramp. The hierarchy does not disappear — it moves from stroke weight to visibility threshold. `road-highway` appears from zoom 4 and `road-primary` only from zoom 8, so a zoomed-out map still shows the trunk network alone, and the distinction between the two appears at the zoom where it is useful instead of as a permanent difference in ink.
+
+**A layer above the fog cannot tell revealed ground from unrevealed ground.** It renders identically on both, and that is the subtle cost of this ordering, worth stating plainly because it is easy to discover only on the street. The road intensity that reads well today was only ever seen on revealed ground — beneath the fog those roads were dimmed to nothing — so moving them above puts that same intensity onto unexplored ground, where it may read as too loud, and where it flattens the very distinction the fog exists to draw. The specification's answer is that roads above the fog carry a deliberately reduced opacity: enough to read through the fog without dominating it, with the revealed-versus-unrevealed contrast carried by the buildings, the green areas and the fog tone rather than by the roads. The exact value is a judgement to be made looking at the real map on a real device; this document fixes the requirement, not the number.
+
+If one value turns out not to serve both states — quiet enough over fog, present enough on revealed ground — the named remedy is two copies of the road layers: a quiet one above the fog and a fuller one below it, so revealed ground gets both drawn over each other and fogged ground only the quiet one. That is the fallback, not the plan. It doubles the road geometry drawn per frame and gives the style two sets of paint properties to keep in step, so it is worth its cost only once a single opacity has demonstrably failed.
 
 **Fallback.** If WebGL2 is unavailable, fall back to a 2D canvas overlay redrawn on `moveend` only. Detect and log this; do not attempt feature parity on animation.
 
@@ -636,7 +644,7 @@ Bars sit close together in Karlsruhe's centre and GPS alone cannot distinguish n
 
 **Flow:**
 
-1. The client shows a "Check in" affordance for every discovered bar within `BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)`. If several qualify, they are listed sorted by distance and the user picks one.
+1. **A check-in starts at the bar's marker on the map, and nowhere else.** Tapping a discovered bar's marker leads to that bar, where a check-in action is offered and is enabled only while the player is within `BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)` of it. This is what makes two bars next door to each other separable: the player names the one they mean by pointing at it, instead of accepting a suggestion the app derived from a position that cannot tell the two apart. The nearby panel on the map screen stays and stops being a control — it names the bars currently in range, sorted by distance, and tells the player to tap one on the map. It carries no button and performs no check-in.
 2. `POST /api/visits` creates a `pending` visit with `started_at = now`, `last_sample_at = now`, `onsite_samples = 1`. The server re-validates proximity using the caller's last accepted sample; a check-in without a recent on-site sample is rejected with 422.
 3. Every subsequent accepted sample within the on-site radius of that bar updates `last_sample_at`, increments `onsite_samples`, and recomputes `confirmed_s = last_sample_at - started_at`.
 4. When `confirmed_s >= VISIT_REQUIRED_S` **and** `onsite_samples >= VISIT_MIN_ONSITE_SAMPLES`, the visit becomes `completed`, `completed_at = now`, and the bar is mastered.
@@ -644,13 +652,17 @@ Bars sit close together in Karlsruhe's centre and GPS alone cannot distinguish n
 
 Because completion needs only *two* valid samples 20 minutes apart, the app does not have to stay open. Opening it on arrival and again before leaving is sufficient.
 
+**A pending visit can be cancelled.** Step 5 is not the only way out of a pending visit. A player who checked in at the wrong bar, or by accident, must be able to end it there and then rather than carry it around for hours until the inactivity expiry catches it. A cancel endpoint under `/api/visits` (Section 9.2) acts only on the caller's own pending visit and moves it to `cancelled` (Section 5.7); it is the caller's decision alone, so nothing else — no sample, no maintenance tick — ever produces that state. The pending-visit banner carries the control that calls it, behind a confirmation, because cancelling throws away whatever confirmed time the visit has accumulated and there is no route back to it. Cancelling has nothing to do with expiry: `VISIT_EXPIRY_MS` keeps its value, its behaviour and its description exactly as step 5 states them.
+
 **Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — it would require either background tracking (impossible, Section 7.2) or punishing users whose phone slept. See O9.
 
 **Transparency requirements — these are product requirements, not suggestions.** The mechanic must be legible at every moment:
-- An active pending visit is shown persistently at the top of the screen: bar name, elapsed confirmed time, remaining time.
-- Explicit wording of what is needed: *"Open Tipsy Trails again while you're still here to complete this visit."*
+- An active pending visit is shown persistently at the top of the screen: bar name, confirmed time, remaining time. **The confirmed figure is the server's `confirmed_s` for that visit** — the elapsed time between check-in and the most recent accepted on-site sample, as Section 5.7 defines it — and the remaining time is derived from it as `VISIT_REQUIRED_S - confirmed_s`, floored at zero. It is not the wall-clock time since check-in. The two agree only while the player is standing at the bar with the app open, and diverge the moment they walk away, at which point the wall clock asserts a presence that never happened: a visit checked into two hours ago and abandoned reads as two hours confirmed with nothing remaining — a banner claiming a complete visit that cannot complete.
+
+  This does not mean a banner frozen at check-in. `confirmed_s` is recomputed on every accepted on-site sample (step 3 above), so while the player is at the bar with the app open the figure keeps advancing on its own — it *steps* forward once per accepted sample rather than ticking once per second, and the remaining time steps down with it. What it must not do is advance between samples, or advance at all once the player is out of range: the last confirmed value is where it stops, and it stays there until either a new on-site sample moves it or the visit ends. A frozen banner while the player is standing in the bar is the same defect in the other direction, and a client-side timer is not the way to avoid it — the fix is to reflect the server's figure as it changes, not to interpolate between the values the server has actually confirmed.
+- Explicit wording of what is needed, matching the state the visit is actually in. On site: *"Open Tipsy Trails again while you're still here to complete this visit."* Away from the bar, the instruction is the opposite one — return to the bar and open the app there to finish — and the on-site wording is replaced by it rather than shown alongside it. A banner that says a player has moved away and, directly beneath, tells them to stay where they are is not guidance; it is two sentences that cannot both be true.
 - A Web Push notification at `VISIT_PUSH_AFTER_MS`, dispatched by the maintenance job (Section 7.9) and recorded in `push_sent_at` so it fires at most once per visit, and only while the visit is still `pending`.
-- If a sample arrives out of range, show *"You've moved away from {bar} — your visit is still pending"* rather than silently failing.
+- If a sample arrives out of range, show *"You've moved away from {bar} — your visit is still pending"* rather than silently failing, and switch that visit's guidance to the return-to-finish wording of the bullet above.
 - A short "How mastering works" explainer is reachable from the burger menu and shown once after the first check-in. "Shown once" is client-side state in `localStorage`; no server column for it.
 
 Multiple simultaneous pending visits are allowed (adjacent bars); each is evaluated independently. At most one pending visit per bar (Section 5.7).
@@ -710,11 +722,11 @@ Because the tick is cheap and idempotent, a missed tick after a restart is self-
 
 ### 8.1 Visual direction
 
-A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Only major roads are rendered as fine black lines; water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a soft, irregular edge, dense enough to hide detail; only the motorway/trunk roads stay legible there, and they do so by being drawn above the fog rather than showing through it (Section 7.3). Exactly one accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states. The overall impression is quiet, near-monochrome, and generous with empty space.
+A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Only major roads are rendered as fine black lines; water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a soft, irregular edge, dense enough to hide detail; roads and water stay legible there, and they do so by being drawn above the fog rather than showing through it, while buildings, green areas and parks are hidden beneath it (Section 7.3). One accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states, exactly as before. Beside it, and only there, a small named set of status colours is permitted — used by the three status icons of Section 8.6 and by nothing else in the application, and never as an accent. This is a deliberate narrowing of a rule this specification set, and the reason is worth recording: the status indicator's icons keep a fixed shape by decision, so colour is the only channel left to them, and one accent cannot express three states of three different things. The narrowing is bounded on purpose — one accent, one indicator, a fixed and named set of colours — so the restraint the rest of this direction rests on survives it. The overall impression is quiet, near-monochrome, and generous with empty space.
 
 This direction applies to the whole application, not only the map. Chrome, typography, and controls follow the same restraint.
 
-**Restraint does not override legibility.** A near-monochrome palette makes it easy to land below WCAG AA contrast without noticing. Body text and interactive labels meet 4.5:1 against their background, large text and icons 3:1. The accent red is never the only carrier of meaning — active states also change shape, weight, or label. This is checked in Phase 8.
+**Restraint does not override legibility.** A near-monochrome palette makes it easy to land below WCAG AA contrast without noticing. Body text and interactive labels meet 4.5:1 against their background, large text and icons 3:1. The accent red is never the only carrier of meaning — active states also change shape, weight, or label. The status icons of Section 8.6 are the single exception to that sentence, admitted by the same decision that narrowed the palette above, and they pay for it under their own rule: their colours must separate in luminance, not only in hue (Section 8.6). This is checked in Phase 8.
 
 ### 8.2 Typography and layout
 
@@ -733,8 +745,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in |
-| Map (main) | Fog map, own position and direction of travel, discovered bars, pending-visit banner, GPS/network indicator |
-| Bar detail | Name, address, district, mastered status, community tag if applicable, Check in button |
+| Map (main) | Fog map, own position and direction of travel, discovered bar markers (tapping one opens its detail), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
+| Bar detail | Name, address, district, mastered status, community tag if applicable, check-in action — the only place a check-in can be made, enabled only while on site (7.5) |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
 | Suggest a bar | Map picker + name + address |
@@ -743,6 +755,10 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Admin (admins only) | Bar management, community bar moderation, user list |
 
 **Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
+
+**No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — burger menu, tracking icons, locate button, pending-visit banner, nearby-bars panel, notices, toasts, attribution — each positioned independently against the map container, and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears the panel along the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. The requirement is the rule, not the two fixes. Correcting today's two collisions individually leaves eight hand-tuned offsets that agree by coincidence, and the ninth overlay breaks them again — what the screen needs is a layout for its edges that positions the overlays relative to each other, so that adding one cannot put it on top of another.
+
+**The map opens at street level.** The opening view is zoom **16** — a few blocks across, the scale at which a bar marker, the player's own position, and the 50 m grain of the fog are all legible and a player can act on what they see. It opened at zoom 12 before, a city overview: a whole city of fog with nothing in it to walk towards. The city as a whole already has a screen of its own (City overview, above), so the map does not have to be one too. Zooming out to `MAP_MIN_ZOOM` stays available and is unchanged. Like the zoom limits it sits beside, the opening zoom is a constant in `packages/shared/src/config.ts` and never a number at the call site (Section 0, rule 3).
 
 ### 8.4 Navigation
 
@@ -754,13 +770,17 @@ Deterministic, generated locally from `avatar_seed` (assigned at registration). 
 
 ### 8.6 GPS and connection quality indicator
 
-A compact indicator on the map screen, always visible:
+Three icons on the map screen, always visible: GPS, connection, and tracking. **Their shape never changes** — the GPS icon is the same mark whatever the GPS is doing — and the state is carried by colour alone, from the small named set Section 8.1 permits for this indicator and nothing else. They replace the text indicator with three labelled states this section used to specify; the states themselves are unchanged:
 
 - **GPS:** three states derived from the last accepted sample's accuracy — good (≤ `GPS_ACCURACY_GOOD_M`), fair (≤ `GPS_ACCURACY_FAIR_M`), poor (worse, or no fix for `GPS_STALE_MS`).
 - **Connection:** online / offline / syncing, based on `navigator.onLine` plus the queue depth of unsent samples.
-- **Foreground tracking:** an explicit indicator showing whether position tracking is currently running, with a plain-language note that tracking pauses when the app is not in the foreground.
+- **Foreground tracking:** whether position tracking is currently running, with a plain-language note that tracking pauses when the app is not in the foreground.
 
-Tapping the indicator opens a short explanation of each state.
+Tapping the indicator opens the same short explanation of each state as before. That explanation is where the words live, so an icon-only indicator is still readable by someone who does not know what a colour means.
+
+**Colour-only state has an accessibility cost, and the mitigation is a requirement.** WCAG 2.1 SC 1.4.1 is about colour not being the only *visual* means of conveying information, so an `aria-label` does not discharge it: it serves a screen-reader user and does nothing whatsoever for a sighted colour-blind one. The shapes are fixed by decision, which removes the usual mitigation, so the one that remains is luminance. **The status colours must differ in luminance as well as in hue**, far enough apart that the states stay distinguishable under colour blindness and in a greyscale rendering of the screen — verified by converting the rendered icons to greyscale, not by judging the hues by eye. The specific values are a later decision and are deliberately not fixed here; the constraint on them is.
+
+Each icon additionally carries an accessible name that states its state in words rather than naming the icon — "GPS signal: poor", not "GPS" — so assistive technology announces what the colour means. That is for assistive technology and is **not** a substitute for the luminance rule. Both are required, and neither covers for the absence of the other.
 
 ---
 
@@ -794,6 +814,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | POST | `/api/bars/suggest` | `{ name, address, lat, lon }` |
 | GET | `/api/visits/pending` | Active pending visits |
 | POST | `/api/visits` | `{ barId }` → creates or returns the pending visit |
+| POST | `/api/visits/:id/cancel` | Ends the caller's own pending visit, moving it to `cancelled` (Sections 5.7, 7.5). Reaches nothing but a pending visit belonging to the caller. Not a `DELETE`: the row survives as a cancelled record. The visit is named by id because a player may hold several pending visits at once |
 | GET | `/api/progress` | City + per-district progress, bars mastered |
 | GET | `/api/leaderboard` | `?metric=area\|bars&period=all\|week\|month&page=` |
 | GET | `/api/profile/:handle` | Public profile + badges — see 9.5 |
@@ -1038,10 +1059,10 @@ Visit creation, presence evaluation, 20-minute rule, expiry, pending banner, mai
 
 `[x]` means proven by an automated test in this repository. `[~]` means built and covered as far as this environment allows, with the part that needs a real device named — no browser, no GPU, no push service and no phone here, so those cannot be ticked and must not be.
 
-- [x] Check-in is only offered within the on-site radius, is server-re-validated, and lists multiple candidates by distance
+- [ ] Check-in is only offered within the on-site radius, is server-re-validated, and lists multiple candidates by distance — **unticked in v1.14**: the radius rule and the server re-validation are still proven, but Section 7.5 now puts the check-in action at the bar's own marker and leaves the nearby panel without a control, and the tests behind this line still exercise the panel's button. It is re-earned when they exercise the marker route instead.
 - [~] Two samples ≥ 20 minutes apart complete the visit — covered end to end against the API with nothing sent in between; "with the app closed" itself needs a phone
 - [x] A second check-in at a bar with an open pending visit returns the existing visit, not a duplicate
-- [x] The pending banner shows confirmed and remaining time accurately at all times
+- [ ] The pending banner shows confirmed and remaining time accurately at all times — **unticked in v1.14**: the test behind this line asserts that the figure advances with the wall clock, which is precisely the behaviour Section 7.5 now forbids. The tick was never earned; it recorded that a number moved, not that it was true. It is re-earned by a test that shows the figure following the server's `confirmed_s` — stepping forward on an accepted on-site sample and holding still once the player is out of range.
 - [~] The push notification fires once at 21 minutes, and not at all if the visit already completed — the once-only guarantee, the not-while-completed rule and the 404/410 deletion are tested with the sender faked at a seam; **delivery on Android and on an installed iOS PWA is unverified**
 - [x] Moving out of range shows the explicit "still pending" message
 - [x] A visit expires after 6 hours and the user can immediately check in again
@@ -1102,7 +1123,7 @@ PWA manifest and install prompt, offline shell, privacy page, performance pass, 
 - [ ] API p95 latency < 150 ms measured on the Pi under 10 concurrent users — needs the Pi
 - [x] `/privacy` is live, mentions the per-day reveal counters, and links to the main site's policy and legal notice — `packages/web/src/App.privacy.test.tsx`, describe `/privacy`
 - [~] `prefers-reduced-motion` disables the dissolve animation and all transitions — the CSS rule itself is asserted structurally: `packages/web/src/App.a11y.test.tsx`, describe `prefers-reduced-motion` (the universal `*, *::before, *::after` selector, durations collapsed to zero with `!important`). The JS-driven fog dissolve's own listener is exercised against a real `matchMedia`: `packages/web/src/map/fog/fog-controller.test.ts`, `packages/web/src/map/fog/webgl-fog-layer.test.ts`. Neither proves a real browser applying the rule — this project's jsdom test config applies no real stylesheet
-- [~] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1) — contrast, the focus ring's own contrast, labelled form fields, and the accent-plus-label rule are all automated in `packages/web/src/App.a11y.test.tsx`. Nothing here can run a screen reader, so whether any of this is announced sensibly is unverified
+- [~] Accessibility: WCAG 2.1 AA contrast on text and controls, visible focus states, labelled form fields, and no state signalled by the accent colour alone (Section 8.1) — contrast, the focus ring's own contrast, labelled form fields, and the accent-plus-label rule are all automated in `packages/web/src/App.a11y.test.tsx`. Nothing here can run a screen reader, so whether any of this is announced sensibly is unverified. **Added in v1.14:** the status icons of Section 8.6 are the one place where colour does carry state alone, so this item is not complete until their luminance separation is checked as well — the accent-plus-label rule says nothing about them
 - [x] Every network failure produces a user-facing message, never a silent failure — the same centralized network-error path (`packages/web/src/api/client.ts`) is exercised failing at three independent call sites: login (`packages/web/src/App.test.tsx`, `shows a message rather than failing silently on a network failure during login`), the city boundary fetch (`packages/web/src/App.test.tsx`, `shows a message rather than an empty screen when the city boundary fetch fails`), and the district overview fetch (`packages/web/src/App.privacy.test.tsx`, describe `network failures surface a message`)
 - [ ] Total container memory under load < 400 MB — needs the Pi under load, and a Docker image, which has never been built here
 
@@ -1176,11 +1197,125 @@ These are consequences to design around, not reasons to reconsider:
 | O10 | Section 9.4's `trustProxy` hop count for the Pi deployment is unverified — Cloudflare's edge and `cloudflared` may together add entries to `X-Forwarded-For` before Caddy ever sees the request, and neither this repository nor the platform's settles the real count; nor does either settle whether the platform's Caddy configures `trusted_proxies` or a `header_up` override that would change what the header holds by the time the API reads it. Verify by logging the raw header from one real external request against the running deployment and counting the entries, and by reading the platform `Caddyfile`'s global options, then set `trustProxy` to match. | Open — needs verification on the Pi |
 | O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
 | O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
-| O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted beneath the motorway layer, so motorways stay crisp above the fog and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, motorways included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
+| O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
 
 ---
 
 ## 15. Changelog
+
+### v1.14 — the third round of feedback from the street
+
+Seven decisions, all the owner's, from the third round of feedback on the running app. They
+touch what the fog hides, what the status indicator looks like, where a check-in happens, how a
+player gets out of one, and what the map shows when it opens.
+
+**The fog moves down the layer order, and water and the ordinary streets come up above it.**
+v1.13 put the fog directly beneath the motorway/trunk layer, so trunk roads alone stayed crisp
+on unrevealed ground and everything else — water included — was dimmed away with the buildings.
+Section 7.3 now fixes the order explicitly: background, green landcover, parks and buildings
+below the fog; water, waterways and both road layers above it. Green areas and parks go under
+the fog by the owner's explicit request. A player on unrevealed ground sees roads and water and
+nothing else, which is more of a skeleton to orient by than the trunk network on its own ever
+gave, while everything that says what a place is actually like still waits to be walked to.
+
+**Major roads lose their extra weight, and the hierarchy moves to the zoom threshold.**
+`road-highway` carried the widest ramp in the style at `line-opacity: 0.85`, which was the right
+call while it was the only road above the fog; above the fog alongside everything else it simply
+shouts. Both road layers now take the same colour, opacity and width ramp. Nothing is lost:
+`road-highway` still appears from zoom 4 and `road-primary` only from zoom 8, so the zoomed-out
+map still shows the trunk network alone — the difference shows up at the zoom where it helps
+rather than as a permanent difference in ink.
+
+**The consequence of that ordering is recorded rather than discovered later.** A layer above the
+fog renders identically on fogged and revealed ground; it cannot know the difference. The road
+intensity the owner likes was only ever seen on revealed ground, because below the fog those
+roads were dimmed to nothing — so moving them above puts that same intensity onto unexplored
+ground, where it may read as too loud and where it flattens the distinction the fog exists to
+draw. Section 7.3's answer is a deliberately reduced opacity for the roads above the fog, with
+the revealed-versus-unrevealed contrast carried by the buildings, the green areas and the fog
+tone instead. The exact value is a judgement to be made on a real device. If a single value
+cannot serve both states, the named remedy — the fallback, not the plan — is two copies of the
+road layers, quiet above the fog and full below it, so revealed ground gets both and fogged
+ground only the quiet one.
+
+**The status indicator becomes three icons whose shape never changes, and that costs the
+palette its "exactly one accent colour" rule.** Section 8.6's text indicator with three labelled
+states is replaced by GPS, connection and tracking icons that carry their state in colour alone;
+tapping still opens the same short explanation. Section 8.1 said exactly one accent colour was
+permitted across the whole application, and that the accent was never the only carrier of
+meaning. Both sentences now carry a bounded exception: a small named set of status colours, used
+by this indicator and by nothing else, never as an accent, with the muted red still reserved for
+the player's position and active states. The narrowing is stated as a narrowing, with its reason
+— shapes held fixed leave colour as the only channel, and one accent cannot express three states.
+
+**The accessibility cost of that is mitigated in the spec, not assumed away.** WCAG 2.1 SC 1.4.1
+is about colour not being the only *visual* means of conveying information, so an `aria-label`
+answers for a screen-reader user and does nothing at all for a sighted colour-blind one. With the
+shapes fixed, the mitigation that works is luminance: Section 8.6 requires the three status
+colours to differ in luminance as well as hue, far enough apart to survive colour blindness and a
+greyscale rendering, checked by actually converting the icons to greyscale. Each icon also
+carries an accessible name stating its state in words — for assistive technology, and explicitly
+not a substitute for the luminance rule. No hex values are invented here; the constraint is
+specified and the values are a later decision.
+
+**Checking in moves onto the map, and the nearby panel stops being a control.** The panel used to
+propose a check-in and carry the button. Now the bar's own marker is the only route: tapping a
+discovered bar's marker leads to that bar, where the check-in action is offered and enabled only
+inside the on-site radius. That is what makes two bars next door to each other separable — the
+player names the one they mean instead of accepting a suggestion made from a position that cannot
+tell them apart. The panel stays, because knowing what is in range is worth having; it names the
+bars in range and tells the player to tap one on the map, and it performs no check-in. Sections
+7.5 and 8.3 both described the old arrangement and both are corrected.
+
+**A visit can be cancelled.** There was no way to end a pending visit at all — `POST /api/visits`
+created one and the only exit was the inactivity expiry hours later, so a player who checked in
+by mistake was stuck with it. Section 9.2 gains a cancel endpoint under `/api/visits`, acting
+only on the caller's own pending visit; Section 5.7 gains `cancelled` as a terminal status
+alongside `expired`, reached only by that explicit request, mastering nothing, and releasing the
+partial unique index so the same bar can be checked into again immediately. The pending-visit
+banner carries the control, behind a confirmation, because cancelling discards confirmed time
+that cannot be recovered. `VISIT_EXPIRY_MS` is untouched in value, behaviour and description.
+
+**The pending-visit banner tells the truth about confirmed time.** It labelled as "Confirmed" a
+number that was wall-clock time since check-in, so a visit checked into two hours earlier and
+walked away from read "Confirmed 120:21 - 0:00 remaining" — claiming two hours of presence that
+never happened, and looking complete on a visit that could not complete. Section 7.5 now requires
+the confirmed figure to be the server's own `confirmed_s`, the elapsed time between check-in and
+the last accepted on-site sample as Section 5.7 already defines it, with remaining time derived
+from that. Read alone, that rule invites the opposite defect — a banner frozen at 0:00 while the
+player is standing in the bar — so Section 7.5 also says what the figure does over time: it steps
+forward once per accepted on-site sample, holds between samples, and stops at the last confirmed
+value once the player is out of range. Following the server's number as it changes is the
+requirement; interpolating between the values the server has confirmed is the thing that was
+wrong in the first place. The banner's guidance must also match the state it is shown in: the "Open Tipsy Trails
+again while you're still here" line was rendered unconditionally, directly beneath "You've moved
+away from *bar* — your visit is still pending", telling a player who had left to stay where they
+were. On site, stay and reopen; away, return to finish; never both at once.
+
+**Map overlays may not overlap.** Eight overlays are positioned independently against the map
+container and two collide today — the locate button over the nearby panel at the bottom, the
+tracking indicator over the pending-visit banner at the top, both because a corner control sits
+at a higher z-index than the full-width bar sharing its edge. Section 8.3 specifies the
+requirement rather than the two fixes: no overlay may obscure another, and a control anchored to
+an edge yields to any bar occupying that edge. Fixing the present collisions one at a time leaves
+eight hand-tuned offsets that agree by coincidence and a ninth overlay that breaks them again.
+
+**The map opens at zoom 16 instead of 12.** Zoom 12 is a city overview — a screenful of fog with
+nothing in it to walk towards, and the City overview screen already exists for that. Zoom 16 is a
+few blocks across, the scale at which a bar marker, the player's position and the 50 m grain of
+the fog are all legible. Zooming out to `MAP_MIN_ZOOM` is unchanged. The value belongs in
+`packages/shared/src/config.ts` beside the existing zoom limits, not at the call site that
+creates the map (Section 0, rule 3).
+
+**Two Phase 5 Definition-of-Done ticks are withdrawn.** Section 12's legend says `[x]` means
+proven by an automated test in this repository, so a tick outlives the requirement it was earned
+against only by accident. Check-in "is only offered within the on-site radius … and lists multiple
+candidates by distance" was proven through the panel's button, which no longer exists; and "the
+pending banner shows confirmed and remaining time accurately at all times" was proven by asserting
+that the number moves with the wall clock, which is the defect. Both are unticked with the reason
+recorded inline, and both are re-earned when the code and its tests catch up. The code still
+implements the superseded behaviour as of this version — that is the next step's work, not a
+regression introduced here.
 
 ### v1.13 — the fog hides detail instead of tinting it
 
@@ -1391,4 +1526,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.13*
+*End of specification v1.14*
