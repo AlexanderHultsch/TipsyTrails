@@ -76,6 +76,17 @@ float valueNoise(vec2 p) {
 const float FOG_MAX_OPACITY = 0.75;
 
 void main() {
+  // The quad reaches past the grid into the map's padding ring
+  // (grid-geometry.ts), which has no cells and so can never be revealed.
+  // WebGL2 has no CLAMP_TO_BORDER, and CLAMP_TO_EDGE would smear the
+  // grid's edge texels across that whole ring - a cell revealed at the
+  // city's edge would trail a cleared stripe out to the boundary - so the
+  // ring is decided here instead of by the sampler.
+  if (v_uv.x < 0.0 || v_uv.x > 1.0 || v_uv.y < 0.0 || v_uv.y > 1.0) {
+    fragColor = vec4(u_fogColor * FOG_MAX_OPACITY, FOG_MAX_OPACITY);
+    return;
+  }
+
   vec2 noiseCoord = v_uv / (u_texelSize * 6.0);
   vec2 offsetCells = (vec2(valueNoise(noiseCoord), valueNoise(noiseCoord + 91.7)) - 0.5) * 3.0;
   vec2 uv = v_uv + offsetCells * u_texelSize;

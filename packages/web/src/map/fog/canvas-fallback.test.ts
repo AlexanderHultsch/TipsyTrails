@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
 import type { GridParams } from '@tipsytrails/shared';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { CanvasFogFallback } from './canvas-fallback.js';
@@ -36,7 +37,7 @@ function createFakeCtx() {
   return { ctx: ctx as unknown as CanvasRenderingContext2D, fillRectCalls };
 }
 
-function createFakeMap() {
+function createFakeMap(scale = 1_000_000) {
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 10000, configurable: true });
   Object.defineProperty(container, 'clientHeight', { value: 10000, configurable: true });
@@ -48,10 +49,12 @@ function createFakeMap() {
     // whichever direction it sits from the origin - lands comfortably
     // inside it. This test is about hole-punching and lifecycle, not about
     // verifying real map projection math (grid-geometry.test.ts already
-    // covers the real mercator conversion).
+    // covers the real mercator conversion). `scale` shrinks it further for
+    // the one test that needs a larger grid plus its padding ring on the
+    // same container.
     project: vi.fn(([lng, lat]: [number, number]) => ({
-      x: 5000 + (lng - GRID_PARAMS.origin_lon) * 1_000_000,
-      y: 5000 + (GRID_PARAMS.origin_lat - lat) * 1_000_000,
+      x: 5000 + (lng - GRID_PARAMS.origin_lon) * scale,
+      y: 5000 + (GRID_PARAMS.origin_lat - lat) * scale,
     })),
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (!listeners.has(event)) listeners.set(event, new Set());
@@ -130,6 +133,50 @@ describe('CanvasFogFallback', () => {
 
     const holes = ctxRig.fillRectCalls.filter((call) => call.op === 'destination-out');
     expect(holes).toHaveLength(0);
+  });
+
+  it('keeps the padding ring outside the grid fogged even when every cell is revealed', () => {
+    // The map can be zoomed out to gridMapBounds - the grid plus
+    // MAP_BOUNDS_PADDING_RATIO - and the fog covers all of it
+    // (grid-geometry.ts). That ring holds no cells, so nothing can ever
+    // punch a hole in it: it stays under the whole-canvas fog fill, at the
+    // same opacity as unrevealed grid, which is what the WebGL shader does
+    // for UVs outside 0..1.
+    const params: GridParams = { ...GRID_PARAMS, grid_width: 20, grid_height: 15 };
+    const grid = { width: params.grid_width, height: params.grid_height };
+    const revealed = new Uint8Array(Math.ceil((grid.width * grid.height) / 8)).fill(0xff);
+    const { map } = createFakeMap(200_000);
+    const fallback = new CanvasFogFallback({
+      map: map as unknown as MaplibreMap,
+      grid,
+      gridParams: params,
+      getMask: () => revealed,
+    });
+    ctxRig.fillRectCalls.length = 0;
+
+    fallback.redraw();
+
+    const covers = (op: string, x: number, y: number) =>
+      ctxRig.fillRectCalls.some(
+        (call) =>
+          call.op === op &&
+          x >= call.x &&
+          x <= call.x + call.w &&
+          y >= call.y &&
+          y <= call.y + call.h,
+      );
+
+    const [, [east, north]] = gridMapBounds(params);
+    const ringCorner = map.project([east, north]);
+    expect(covers('source-over', ringCorner.x, ringCorner.y)).toBe(true);
+    expect(covers('destination-out', ringCorner.x, ringCorner.y)).toBe(false);
+
+    // The control: inside the grid, a revealed cell is cleared - so the
+    // assertion above is about where the ring is, not about the holes
+    // having gone missing.
+    const centre = cellCenterXY(grid.width - 1, grid.height - 1, params);
+    const lastCell = map.project([centre.lon, centre.lat]);
+    expect(covers('destination-out', lastCell.x, lastCell.y)).toBe(true);
   });
 
   it('redraws on moveend and not otherwise', () => {
