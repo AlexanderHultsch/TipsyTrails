@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GridParams } from '@tipsytrails/shared';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { ROAD_HIGHWAY_LAYER_ID } from '../ink-style.js';
+import { FIRST_ABOVE_FOG_LAYER_ID } from '../ink-style.js';
 import { FOG_LAYER_ID, FogController } from './fog-controller.js';
 import { WebGLFogLayer } from './webgl-fog-layer.js';
 
@@ -22,7 +22,7 @@ function emptyMask(): Uint8Array {
 // It defaults to what ink-style.ts gives a real map - the layer the fog is
 // inserted before - so every test here exercises the ordering the app runs
 // on; the one test about a style missing it passes an empty list.
-function createFakeMap(loaded: boolean, styleLayerIds: string[] = [ROAD_HIGHWAY_LAYER_ID]) {
+function createFakeMap(loaded: boolean, styleLayerIds: string[] = [FIRST_ABOVE_FOG_LAYER_ID]) {
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
   Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true });
@@ -115,10 +115,10 @@ describe('FogController', () => {
     controller.destroy();
   });
 
-  // Section 7.3: the fog must land *below* the major-road layer, which
-  // ink-style.ts keeps last. Passing the id, rather than appending, is the
-  // entire mechanism by which motorways stay crisp on unrevealed ground.
-  it('inserts the fog beneath the major-road layer instead of on top of the style', () => {
+  // Section 7.3: the fog must land *below* the first layer ink-style.ts keeps
+  // above it. Passing that id, rather than appending, is the entire mechanism
+  // by which water and roads stay legible on unrevealed ground.
+  it('inserts the fog beneath the first above-fog layer instead of on top of the style', () => {
     const { map, rawMap } = createFakeMap(true);
     const controller = new FogController({
       map,
@@ -130,14 +130,14 @@ describe('FogController', () => {
 
     expect(rawMap.addLayer).toHaveBeenCalledTimes(1);
     const [, beforeId] = rawMap.addLayer.mock.calls[0];
-    expect(beforeId).toBe(ROAD_HIGHWAY_LAYER_ID);
+    expect(beforeId).toBe(FIRST_ABOVE_FOG_LAYER_ID);
     controller.destroy();
   });
 
   // MapLibre's addLayer throws on a beforeId the style does not have, and
   // nothing above the controller catches it - that exception would take the
   // map down rather than degrade it.
-  it('adds the fog on top and warns, rather than throwing, when the style lacks the major-road layer', () => {
+  it('adds the fog on top and warns, rather than throwing, when the style lacks the above-fog anchor layer', () => {
     const { map, rawMap } = createFakeMap(true, []);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
