@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONFIG } from '@tipsytrails/shared';
 import { App } from './App.js';
 import {
   clearLastKnownPosition,
@@ -281,6 +282,21 @@ afterEach(() => {
 });
 
 describe('centring the map on the player (SPEC.md Section 8.3)', () => {
+  // "The map opens at street level" - a few blocks across, the scale at
+  // which a bar marker, the player's own position and the 50 m grain of the
+  // fog are all legible and a player can act on what they see. It opened at
+  // 12 before, a city overview: a whole city of fog with nothing in it to
+  // walk towards. Asserted against the constant rather than against 16, so
+  // the number lives in config.ts alone (Section 0, rule 3).
+  it('opens at the street-level default zoom', async () => {
+    stubGeolocation();
+    stubMapFetch(() => jsonResponse(200, cityMeta));
+
+    await renderAt('/map');
+
+    expect(lastMap().options.zoom).toBe(CONFIG.MAP_DEFAULT_ZOOM);
+  });
+
   it('jumps to the first fix when it is inside the playable grid', async () => {
     const geo = stubGeolocation();
     stubMapFetch(() => jsonResponse(200, cityMeta));
@@ -423,7 +439,7 @@ describe('the "to my location" control (SPEC.md Section 8.3)', () => {
     expect(button.disabled).toBe(true);
   });
 
-  it('flies to the last known position once one is available', async () => {
+  it('flies to the last known position once one is available, at the default zoom', async () => {
     const geo = stubGeolocation();
     stubMapFetch(() => jsonResponse(200, cityMeta));
 
@@ -445,8 +461,18 @@ describe('the "to my location" control (SPEC.md Section 8.3)', () => {
 
     // flyTo, not jumpTo: unlike the automatic centring, this move is what
     // the player just asked for, so the animation is the point.
+    //
+    // The zoom is asserted alongside the centre because Section 8.3 makes it
+    // half of what the control does: centring while keeping whatever zoom
+    // the map was on leaves a player who had zoomed out looking at their own
+    // position in the middle of a city-wide view they still cannot walk
+    // from. Compared as the whole argument object, so dropping the zoom
+    // fails here rather than passing on the centre alone.
     expect(map.flyTo).toHaveBeenCalledTimes(1);
-    expect(map.flyTo).toHaveBeenCalledWith({ center: [INSIDE_LON, INSIDE_LAT] });
+    expect(map.flyTo).toHaveBeenCalledWith({
+      center: [INSIDE_LON, INSIDE_LAT],
+      zoom: CONFIG.MAP_DEFAULT_ZOOM,
+    });
   });
 
   // Unlike the automatic centring, an explicit request is honoured even
@@ -468,7 +494,10 @@ describe('the "to my location" control (SPEC.md Section 8.3)', () => {
       locateButton().click();
     });
 
-    expect(map.flyTo).toHaveBeenCalledWith({ center: [OUTSIDE_LON, OUTSIDE_LAT] });
+    expect(map.flyTo).toHaveBeenCalledWith({
+      center: [OUTSIDE_LON, OUTSIDE_LAT],
+      zoom: CONFIG.MAP_DEFAULT_ZOOM,
+    });
     expect(map.jumpTo).not.toHaveBeenCalled();
   });
 });
@@ -761,6 +790,14 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
   // The same control the map screen has, from the same component
   // (components/LocateButton.tsx) - hence the same accessible name, which is
   // what locateButton() finds it by here.
+  //
+  // It behaves differently on purpose, and this is where that is pinned
+  // down: Section 8.3 records the picker as the deliberate exception to "to
+  // my location sets a zoom", because a player who zoomed in to place a pin
+  // precisely would lose exactly the precision they zoomed in for. The
+  // argument is compared as a whole object, so adding CONFIG.MAP_DEFAULT_ZOOM
+  // here for consistency with the map screen fails this test - which is the
+  // intent, since the specification would have to move first.
   it('offers a "go to my location" control, disabled until a position is known', async () => {
     const geo = stubGeolocation();
     stubPickerFetch();

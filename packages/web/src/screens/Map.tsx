@@ -30,8 +30,12 @@ const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 // Section 9.2), so this is a fixed fallback view rather than one derived
 // from server data. Used whenever the URL doesn't carry a district centre
 // (see centerFromSearchParams below).
+//
+// There is no INITIAL_ZOOM beside it: the opening zoom is
+// CONFIG.MAP_DEFAULT_ZOOM (Section 8.3, and Section 0 rule 3 - a zoom limit
+// is a constant in config.ts and never a number at the call site), used
+// where the map is built below.
 const INITIAL_CENTER: [number, number] = [8.4037, 49.0069];
-const INITIAL_ZOOM = 12;
 
 // Section 13.2: the tile extract may simply not be installed on this
 // server, in which case /tiles/<filename> answers 503 with
@@ -160,7 +164,15 @@ export function MapScreen() {
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
       center: urlCenterRef.current ?? INITIAL_CENTER,
-      zoom: INITIAL_ZOOM,
+      // Section 8.3: "the map opens at street level" - a few blocks across,
+      // the scale at which a bar marker, the player's own position and the
+      // 50 m grain of the fog are all legible and a player can act on what
+      // they see. It opened at 12 before, a city overview: a whole city of
+      // fog with nothing in it to walk towards, and the city already has a
+      // screen of its own (City overview, Section 8.3). The same constant
+      // serves the "to my location" control below, because both answer the
+      // question "show me where I am, close enough to walk from".
+      zoom: CONFIG.MAP_DEFAULT_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
       attributionControl: false,
@@ -186,7 +198,10 @@ export function MapScreen() {
   // their device has produced a fix - once per mount, so it never fights
   // whoever is panning the map afterwards. jumpTo rather than flyTo: the
   // screen has just opened and an animation away from the city centre reads
-  // as a glitch rather than as help. The zoom is left alone.
+  // as a glitch rather than as help. The zoom is left alone - it is already
+  // CONFIG.MAP_DEFAULT_ZOOM from the mount above, so there is nothing this
+  // move needs to correct, unlike the explicit control further down which
+  // can be tapped from any zoom the player has since chosen.
   //
   // Only for a player who is actually inside the playable grid. Centring on
   // one who is not shows them an empty map - the extract covers nothing
@@ -229,12 +244,24 @@ export function MapScreen() {
   // is what tells the player where they were taken from. It honours a
   // position outside the grid for the same reason - the pan limit
   // (useCityMaxBounds) then simply stops the map at the city's edge.
+  //
+  // It sets the zoom as well as the centre, and Section 8.3 says why:
+  // recentring while keeping whatever zoom the map happened to be on answers
+  // the wrong question - a player zoomed far out taps it and gets their
+  // position in the middle of a city-wide view they still cannot walk from.
+  // The same constant as the opening view, because both mean "show me where
+  // I am, close enough to walk from". The map picker on Suggest a bar
+  // (map/MapPicker.tsx) deliberately does *not* do this: someone who zoomed
+  // in to place a pin precisely would lose the precision they zoomed in for.
   function handleGoToMyLocation() {
     const position = trackingState.lastPosition;
     if (!mapInstance || !position) {
       return;
     }
-    mapInstance.flyTo({ center: [position.lon, position.lat] });
+    mapInstance.flyTo({
+      center: [position.lon, position.lat],
+      zoom: CONFIG.MAP_DEFAULT_ZOOM,
+    });
   }
 
   return (

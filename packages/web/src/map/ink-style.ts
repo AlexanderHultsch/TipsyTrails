@@ -2,7 +2,9 @@ import { CONFIG } from '@tipsytrails/shared';
 import type { LayerSpecification, StyleSpecification } from 'maplibre-gl';
 
 // Section 8.1: a hand-drawn ink map. Desaturated, slightly warm paper
-// ground; fine black lines for major roads only; water and green areas read
+// ground; fine black lines for the roads - the major ones everywhere, the
+// minor streets only on revealed ground (Section 7.3, which widened 8.1's
+// "major roads only" and is the later decision); water and green areas read
 // as texture rather than filled colour; no gradients or shadows. Everything
 // that is not this ink is spoken for elsewhere: the single accent colour is
 // reserved for the player's own position and for active states, and the small
@@ -28,6 +30,21 @@ const INK = '#1c1a17';
 // after walking the city with the real map on a real screen.
 const PROVISIONAL_ROAD_OPACITY = 0.6;
 
+// Section 7.3: the minor streets are the one road layer that sits *below*
+// the fog, so unlike the major roads they are only ever seen on revealed
+// paper - never through fog. The legibility argument that pins the major
+// roads at 0.6 (reading over the fog's own ground) therefore does not apply
+// to them, and they get their own number rather than sharing that constant:
+// Section 7.3 asks for them to be "quieter than the major roads", which a
+// shared constant could not express. 0.5 is the quietest round value that
+// still clears the 3:1 Section 8.1 holds non-text marks to - INK at 0.5
+// over PAPER is 3.23:1, against 4.35:1 for the major roads' 0.6 - so the
+// residential grid reads as a subordinate texture under the major roads
+// rather than as a second set of equals. Provisional for the same reason
+// PROVISIONAL_ROAD_OPACITY is: Section 7.3 fixes the requirement and
+// expressly not the number.
+const PROVISIONAL_MINOR_ROAD_OPACITY = 0.5;
+
 // Section 7.3: major roads carry no extra weight any more. Both road layers
 // take this one ramp, held once rather than written twice so they cannot
 // drift apart. What remains of the hierarchy is the minzoom of each layer -
@@ -49,6 +66,24 @@ const ROAD_WIDTH_RAMP: NonNullable<LineLayer['paint']>['line-width'] = [
   1.5,
 ];
 
+// Section 7.3: the minor streets appear "only at closer zooms", so this ramp
+// starts at 14 - the zoom at which a walker is looking at blocks rather than
+// at the city - and the layer's own minzoom matches it, meaning there is no
+// clamped first value here the way there is for the major roads below zoom
+// 8. It stays thinner than ROAD_WIDTH_RAMP at every zoom the two share:
+// residential streets outnumber the major roads by an order of magnitude,
+// and at equal weight they would read as the map's main structure instead of
+// as the texture under it.
+const MINOR_ROAD_WIDTH_RAMP: NonNullable<LineLayer['paint']>['line-width'] = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  14,
+  0.4,
+  18,
+  0.9,
+];
+
 // The extract's vector layers follow the standard OpenMapTiles/Planetiler
 // schema (Section 3), which is what data/tiles/<CONFIG.TILES_FILENAME> will
 // contain once the extract exists.
@@ -66,13 +101,30 @@ const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 // texture stand-in here rather than as filled colour.
 const GREEN_LANDCOVER_CLASSES = ['wood', 'grass'];
 
+// Section 7.3's "residential and tertiary streets", named the way the
+// OpenMapTiles/Planetiler transportation layer names them: that schema folds
+// residential, unclassified, living_street and road into the single class
+// "minor", and keeps "tertiary" separate. Together those two are the street
+// pattern a walker recognises in a German city centre.
+//
+// Everything else the layer carries is deliberately left undrawn. "service"
+// is the judgement call and the answer is no: it is parking aisles, driveways
+// and alleys behind buildings, which on a 50 m grid would double the ink for
+// ways nobody navigates by, and on a map whose whole direction is restraint
+// (Section 8.1) that is the difference between a street pattern and a mess.
+// "track", "path", "raceway", "bus_guideway", "busway", "ferry" and
+// "aerialway" are out for the same reason plus their own: none of them is a
+// street, so none of them helps a walker read the grid they are standing in.
+const MINOR_ROAD_CLASSES = ['minor', 'tertiary'];
+
 // The seam Section 7.3 cuts through `layers`: the fog custom layer is
 // inserted directly before this one (fog-controller.ts), so everything
-// listed ahead of it - paper, green landcover, parks, buildings - is hidden
-// on unrevealed ground, and everything from it onwards - water, waterways
-// and both road layers - stays legible there. The name says "first above the
-// fog" rather than naming a position, because five layers now sit above the
-// fog and no single one of them is last; only the layer this id points at
+// listed ahead of it - paper, green landcover, parks, buildings and the
+// minor streets - is hidden on unrevealed ground, and everything from it
+// onwards - water, waterways and both major-road layers - stays legible
+// there. The name says "first above the fog" rather than naming a position,
+// because five layers now sit above the fog and no single one of them is
+// last; only the layer this id points at
 // defines the seam, so reordering the water and roads among themselves
 // cannot quietly move it. Exported rather than repeated as a string literal
 // in fog-controller.ts, so renaming the layer cannot silently break it.
@@ -155,6 +207,31 @@ export const inkStyle: StyleSpecification = {
         'line-width': 0.5,
       },
     },
+    // Section 7.3: the minor streets are below the fog, and that is the
+    // point rather than an implementation detail - above it they would hand
+    // unexplored ground the full street grid, which is precisely the detail
+    // the fog exists to withhold. Below it they are a reward for having been
+    // somewhere. It is a separate layer rather than a wider filter on
+    // road-primary because one filter cannot sit on both sides of the fog.
+    // Last of the below-fog set, so that on revealed ground it draws over
+    // the building fills the way the major roads draw over everything.
+    {
+      id: 'road-minor',
+      type: 'line',
+      source: SOURCE_ID,
+      'source-layer': 'transportation',
+      minzoom: 14,
+      filter: ['in', ['get', 'class'], ['literal', MINOR_ROAD_CLASSES]],
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round',
+      },
+      paint: {
+        'line-color': INK,
+        'line-opacity': PROVISIONAL_MINOR_ROAD_OPACITY,
+        'line-width': MINOR_ROAD_WIDTH_RAMP,
+      },
+    },
     // ---- The fog is inserted here, before FIRST_ABOVE_FOG_LAYER_ID. ----
     // Everything from this point on is drawn over the fog and reads the same
     // on unrevealed ground as on revealed ground: Section 7.3's judgement is
@@ -196,14 +273,17 @@ export const inkStyle: StyleSpecification = {
       },
     },
     // road-highway and road-primary together cover exactly the class set
-    // Section 7.3 calls "major roads" (motorway|trunk|primary|secondary), and
-    // no other transportation class is drawn (Section 8.1: "only major
-    // roads"). They are two layers rather than one only so each can appear at
-    // its own zoom; they are identical in colour, opacity and weight, and the
-    // pair of them is last so that the roads cross everything else the map
-    // draws. That includes the building fills they used to sit under - at
-    // fill-opacity 0.04 the difference is barely perceptible, and a road not
-    // occluded by a building is the better reading anyway.
+    // Section 7.3 calls "major roads" (motorway|trunk|primary|secondary).
+    // With road-minor above they are no longer the only transportation
+    // classes drawn, but they are the only ones drawn *here*, above the fog:
+    // these two read the same on unexplored ground as on explored ground,
+    // and that is what they are for. They are two layers rather than one
+    // only so each can appear at its own zoom; they are identical in colour,
+    // opacity and weight, and the pair of them is last so that the roads
+    // cross everything else the map draws. That includes the building fills
+    // they used to sit under - at fill-opacity 0.04 the difference is barely
+    // perceptible, and a road not occluded by a building is the better
+    // reading anyway.
     {
       id: 'road-primary',
       type: 'line',
