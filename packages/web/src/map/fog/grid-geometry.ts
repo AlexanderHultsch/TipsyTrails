@@ -1,17 +1,27 @@
 // The mercator-space quad the fog texture is painted onto (SPEC.md Section
-// 7.3: "a single full-screen quad"). "Full-screen" here means the quad
-// spans everything the camera can be panned or zoomed to, not literally
-// the viewport - one quad for the entire city rather than one per cell
-// (there are ~143k cells for Karlsruhe, Section 6.2), with the fog
-// texture's UV 0..1 landing exactly on the grid's texel 0..1,
-// cell-for-cell.
+// 7.3: "a single full-screen quad"). "Full-screen" is meant literally: the
+// quad spans the camera's current viewport, rebuilt every frame, with the
+// fog texture's UV 0..1 landing exactly on the grid's texel 0..1,
+// cell-for-cell. Still one quad for the whole city rather than one per cell
+// (there are ~143k cells for Karlsruhe, Section 6.2) - only its extent
+// follows the camera now.
+//
+// WHY IT FOLLOWS THE CAMERA. The quad used to be fixed at `gridMapBounds` -
+// the grid plus `MAP_BOUNDS_PADDING_RATIO`, the same rectangle the map uses
+// as `maxBounds` (`useCityMaxBounds.ts`). That reasoning holds only while
+// the map is north-up: `maxBounds` constrains an *axis-aligned* viewport, so
+// rotating the camera makes the viewport's corners sweep outside that
+// rectangle. Where there is no quad there is no geometry, and where there is
+// no geometry there is no fog - the corners of a rotated map showed bare,
+// un-fogged ground. Neither map disables `dragRotate` or `touchZoomRotate`,
+// so two fingers reach this on any phone.
 //
 // `maplibregl.MercatorCoordinate` is only reachable through the library's
 // default export at runtime (its .d.ts advertises a named export, but the
 // built ESM only attaches it to `default`) - matching the `import
 // maplibregl from 'maplibre-gl'` already used in screens/Map.tsx.
 import maplibregl from 'maplibre-gl';
-import { cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
+import { CONFIG, cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
 import type { GridParams, LatLon } from '@tipsytrails/shared';
 
 export interface MercatorPoint {
@@ -25,28 +35,113 @@ export interface GridQuadCorner {
   v: number;
 }
 
+/** A lng/lat rectangle - the shape `MapLibre`'s `LngLatBounds` describes. */
+export interface LngLatBox {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
+
+/**
+ * The read side of `maplibregl.LngLatBounds`, named structurally so this
+ * module needs no value import of the class and a test can hand it a plain
+ * object.
+ */
+export interface LngLatBoundsLike {
+  getWest(): number;
+  getSouth(): number;
+  getEast(): number;
+  getNorth(): number;
+}
+
+/** `map.getBounds()` as a plain box. */
+export function lngLatBox(bounds: LngLatBoundsLike): LngLatBox {
+  return {
+    west: bounds.getWest(),
+    south: bounds.getSouth(),
+    east: bounds.getEast(),
+    north: bounds.getNorth(),
+  };
+}
+
+// The latitude at which Web Mercator's y reaches 0 and 1 - the inverse
+// Gudermannian of pi - beyond which the projection runs off to infinity.
+// Derived rather than written out so it is exact to the last bit; a rounded
+// 85.051129 already lands a few nanometres of mercator past the edge. Not a
+// tunable and not spec-defined, so it stays here beside the clamp that uses
+// it, the same way `EARTH_RADIUS_M` lives beside the haversine formula in
+// shared/grid.ts rather than in config.ts.
+const MERCATOR_MAX_LATITUDE = (Math.atan(Math.sinh(Math.PI)) * 180) / Math.PI;
+
 function toMercator(point: LatLon): MercatorPoint {
   const coord = maplibregl.MercatorCoordinate.fromLngLat({ lng: point.lon, lat: point.lat });
   return { x: coord.x, y: coord.y };
+}
+
+function clampLatitude(lat: number): number {
+  return Math.min(MERCATOR_MAX_LATITUDE, Math.max(-MERCATOR_MAX_LATITUDE, lat));
+}
+
+function isUsable(box: LngLatBox | null | undefined): box is LngLatBox {
+  return (
+    box != null &&
+    Number.isFinite(box.west) &&
+    Number.isFinite(box.south) &&
+    Number.isFinite(box.east) &&
+    Number.isFinite(box.north) &&
+    box.east > box.west &&
+    box.north > box.south
+  );
+}
+
+/**
+ * The lng/lat rectangle the fog quad spans for a given camera.
+ *
+ * `viewport` is `map.getBounds()`: in maplibre-gl 4.7.1 that is the smallest
+ * lng/lat box enclosing the four unprojected screen corners, so it already
+ * accounts for bearing and for pitch. Covering it therefore covers the
+ * visible ground: the visible region is the convex quadrilateral those four
+ * corners span in mercator space, longitude is linear in mercator x and
+ * latitude is monotone in mercator y, so the box's mercator rectangle
+ * contains that quadrilateral whole.
+ *
+ * It is then padded by `CONFIG.FOG_VIEWPORT_PADDING_RATIO` per axis and the
+ * latitudes clamped into the range Web Mercator is defined on, so the quad's
+ * vertices are finite whatever the camera does.
+ *
+ * With no usable viewport - before the layer has a map, or if `getBounds()`
+ * ever returns something non-finite or inside-out - this falls back to
+ * `gridMapBounds`, the grid plus `MAP_BOUNDS_PADDING_RATIO`. That covers the
+ * whole city, so a north-up map is still fully fogged; it is a floor to fall
+ * back to, not the rule.
+ */
+export function fogQuadBox(grid: GridParams, viewport?: LngLatBox | null): LngLatBox {
+  if (!isUsable(viewport)) {
+    const [[west, south], [east, north]] = gridMapBounds(grid);
+    return { west, south, east, north };
+  }
+  const lonPadding = (viewport.east - viewport.west) * CONFIG.FOG_VIEWPORT_PADDING_RATIO;
+  const latPadding = (viewport.north - viewport.south) * CONFIG.FOG_VIEWPORT_PADDING_RATIO;
+  return {
+    west: viewport.west - lonPadding,
+    south: clampLatitude(viewport.south - latPadding),
+    east: viewport.east + lonPadding,
+    north: clampLatitude(viewport.north + latPadding),
+  };
 }
 
 /**
  * The four corners of the fog quad, in mercator space, paired with the
  * fog-texture UV each corner corresponds to.
  *
- * The quad spans `gridMapBounds` - the grid extent plus
- * `CONFIG.MAP_BOUNDS_PADDING_RATIO`, which is also the map's `maxBounds`
- * (`useCityMaxBounds.ts`). It is taken from that same shared function
- * rather than recomputed here so the two can never drift: MapLibre clamps
- * zooming out at `maxBounds`, so a quad that stopped at the grid's own
- * outer boundary would leave the padding ring un-fogged at the furthest
- * zoom the user can reach.
- *
- * The *grid* still occupies UV 0..1 exactly, cell-for-cell, so the padding
- * ring falls outside that range - symmetrically, since the padding is a
- * ratio of each axis. There are no cells out there to reveal, and the
- * fragment shader (`webgl-fog-layer.ts`) renders anything outside 0..1 as
- * unrevealed fog.
+ * The extent comes from `fogQuadBox` above. The *grid* occupies UV 0..1
+ * exactly, cell-for-cell, whatever that extent is, so everything outside the
+ * grid - the padding ring, and all the ground a camera pointed at the city's
+ * edge can see beyond it - falls outside that range. There are no cells out
+ * there to reveal, and the fragment shader (`webgl-fog-layer.ts`) renders
+ * anything outside 0..1 as unrevealed fog, so a quad that overshoots the
+ * grid is already handled correctly.
  *
  * `cellCenterXY(x, y, grid)` returns the *centre* of cell `(x, y)`
  * (SPEC.md Section 6.1); passing half-integer coordinates one cell short of
@@ -62,8 +157,8 @@ function toMercator(point: LatLon): MercatorPoint {
  * pairs mercator "south" with texel `v = 0` explicitly rather than by
  * coincidence.
  */
-export function gridQuadCorners(grid: GridParams): GridQuadCorner[] {
-  const [[west, south], [east, north]] = gridMapBounds(grid);
+export function gridQuadCorners(grid: GridParams, viewport?: LngLatBox | null): GridQuadCorner[] {
+  const { west, south, east, north } = fogQuadBox(grid, viewport);
   const gridSouthWest = cellCenterXY(-0.5, -0.5, grid);
   const gridNorthEast = cellCenterXY(grid.grid_width - 0.5, grid.grid_height - 0.5, grid);
 

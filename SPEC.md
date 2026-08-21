@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.15
+**Version:** 1.16
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -616,11 +616,15 @@ Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_dis
 
 **Rendering.** A MapLibre custom layer draws the fog as a single full-screen quad. The fog mask is uploaded to the GPU as a texture (one texel per grid cell, `R8` format, ~140 KiB for Karlsruhe) and sampled in the fragment shader. Reveals update the texture via `texSubImage2D` on the affected region only.
 
+**"Full-screen" means the camera's screen, and it is rebuilt every frame.** The quad spans the current viewport plus `FOG_VIEWPORT_PADDING_RATIO` on each axis, taken from the map's own bounds, which already account for bearing and pitch. It must not be a fixed rectangle derived from the city's extent: the map's pan limit constrains an *axis-aligned* viewport, so the moment the camera is rotated the viewport's corners sweep outside it, and where there is no quad there is no geometry and therefore no fog — bare, un-fogged ground in the corners of a turned map. That padding ratio is deliberately a separate constant from `MAP_BOUNDS_PADDING_RATIO`: sharing one number between the pan limit and the fog quad is exactly what produced the defect. Four vertices a frame is not a cost worth optimising away.
+
 Visual behaviour:
-- Unrevealed: opaque grey fog, at `FOG_MAX_OPACITY` alpha, dense enough that it hides detail rather than tinting it. The fog is inserted into the style at one fixed point in the layer order: **beneath** it, in order, sit the paper background, green landcover, parks, building fills and building outlines; **above** it sit water fill, water outline, waterways, and both road layers. So a player on unrevealed ground sees roads and water and nothing else — buildings, green areas and parks are hidden by the fog, deliberately. This widens the earlier rule, under which only the motorway/trunk layer stayed above the fog and water was dimmed away with everything else: orientation in unexplored ground is carried better by the water and the ordinary street grid than by the trunk network alone, and the fog still gets to do its job on everything that describes what a place is actually like.
-- Revealed: fog alpha 0. The edge is softened with a two-cell blur plus a low-frequency noise offset so the boundary never reads as a hard circle or as visible squares.
+- Unrevealed: opaque grey fog, at `FOG_MAX_OPACITY` alpha, dense enough that it hides detail rather than tinting it. The fog is inserted into the style at one fixed point in the layer order: **beneath** it, in order, sit the paper background, green landcover, parks, building fills, building outlines and the minor-road layer; **above** it sit water fill, water outline, waterways, and both major-road layers. So a player on unrevealed ground sees roads and water and nothing else — buildings, green areas and parks are hidden by the fog, deliberately. This widens the earlier rule, under which only the motorway/trunk layer stayed above the fog and water was dimmed away with everything else: orientation in unexplored ground is carried better by the water and the ordinary street grid than by the trunk network alone, and the fog still gets to do its job on everything that describes what a place is actually like.
+- Revealed: fog alpha 0. **The edge is a boundary, not a fade.** It is irregular but crisp: a low-frequency noise offset displaces the sampling position so the edge never reads as a circle around the player or as a staircase of 50 m squares, and a narrow blur plus a tight alpha band around its midpoint keep the transition itself down to a fraction of a cell. The two numbers are `FOG_EDGE_BLUR_RADIUS_CELLS` and `FOG_EDGE_ALPHA_HALF_WIDTH`, and they are not independent: blurring a binary mask leaves the blurred value linear in distance from the boundary with slope `1 / (2r + 1)` per cell, so the visible transition is exactly `2 · (2r + 1) · h` cells wide. That relationship is recorded here so the next person tuning it does not have to re-derive it, and so that a change to either constant is understood as a change to one width rather than to two knobs. This edge is not decoration. It is the only feedback that the reveal mechanic works at all — an earlier version faded over roughly 190 m, which read as no boundary, and a player who cannot see ground being unlocked cannot see the game working.
 - Newly revealed cells animate from opaque to clear over 600 ms.
-- Buildings, green areas and parks are only rendered where revealed. Roads and water are drawn everywhere, above the fog.
+- Buildings, green areas, parks and minor roads are only rendered where revealed. Water and the major roads are drawn everywhere, above the fog.
+
+**Minor roads exist, and they stay under the fog.** Residential and tertiary streets are drawn as their own layer, quieter than the major roads and appearing only at closer zooms, so explored ground shows the street pattern a walker actually recognises rather than the trunk network alone. They belong *below* the fog, and the reason is the whole point of the ordering above: put them above it and unrevealed ground gains the full street grid, which is precisely the detail the fog exists to withhold. Under the fog they are a reward for having been somewhere. This is also why they are a separate layer rather than a widened filter on `road-primary` — one filter cannot be on two sides of the fog at once.
 
 **Major roads carry no extra weight.** `road-highway` used to be drawn heavier and more opaque than `road-primary`, which was defensible while it was the only road above the fog and had to carry orientation on its own. It no longer is, and the contrast the ordinary roads already have is enough for the major ones too: both road layers take the same colour, the same opacity, and the same width ramp. The hierarchy does not disappear — it moves from stroke weight to visibility threshold. `road-highway` appears from zoom 4 and `road-primary` only from zoom 8, so a zoomed-out map still shows the trunk network alone, and the distinction between the two appears at the zoom where it is useful instead of as a permanent difference in ink.
 
@@ -759,6 +763,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 **No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — burger menu, tracking icons, locate button, pending-visit banner, nearby-bars panel, notices, toasts, attribution — each positioned independently against the map container, and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears the panel along the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. The requirement is the rule, not the two fixes. Correcting today's two collisions individually leaves eight hand-tuned offsets that agree by coincidence, and the ninth overlay breaks them again — what the screen needs is a layout for its edges that positions the overlays relative to each other, so that adding one cannot put it on top of another.
 
 **The map opens at street level.** The opening view is zoom **16** — a few blocks across, the scale at which a bar marker, the player's own position, and the 50 m grain of the fog are all legible and a player can act on what they see. It opened at zoom 12 before, a city overview: a whole city of fog with nothing in it to walk towards. The city as a whole already has a screen of its own (City overview, above), so the map does not have to be one too. Zooming out to `MAP_MIN_ZOOM` stays available and is unchanged. Like the zoom limits it sits beside, the opening zoom is a constant in `packages/shared/src/config.ts` and never a number at the call site (Section 0, rule 3).
+
+**"To my location" sets that same zoom, it does not merely centre.** Recentring while keeping whatever zoom the map happened to be on answers the wrong question: a player zoomed far out taps it and gets their position in the middle of a city-wide view they still cannot walk from. The control takes them to `MAP_DEFAULT_ZOOM` as well as to their position — one constant for the opening view and for this, because both answer "show me where I am, close enough to walk from", and two numbers meaning the same thing drift apart. The map picker on Suggest a bar is the deliberate exception: its identical-looking control centres without changing zoom, because a player who has zoomed in to place a pin precisely would lose exactly the precision they zoomed in for. Two controls that look the same behaving differently is a cost, taken knowingly and recorded here rather than discovered later as an inconsistency.
 
 ### 8.4 Navigation
 
@@ -1207,6 +1213,48 @@ These are consequences to design around, not reasons to reconsider:
 
 ## 15. Changelog
 
+### v1.16 — the fourth round: the fog edge, a rotated map, minor streets, and the locate zoom
+
+The owner walked the city again with the layer ordering of v1.14 in place and reported it
+working: zoomed out he sees roads and water through the fog and nothing else, zoomed in the
+buildings stay hidden, and explored ground reads as detailed and looks right. Four things came
+back with that.
+
+**The fog edge is a boundary now, not a fade.** His words: the transition fades out so
+gradually that no clear boundary is visible, which makes it not obvious at first glance that
+the player is actually unlocking parts of the map. That is not a cosmetic complaint — the edge
+is the only feedback that the core mechanic works, so an invisible edge is an invisible game.
+The old edge faded over about 190 m. Two things caused it, a two-cell blur and an alpha ramp
+spanning almost the entire blurred range, and Section 7.3 now names both as constants and
+records the relationship between them: the visible transition is exactly `2 · (2r + 1) · h`
+cells wide, so they are one width expressed as two numbers rather than two independent knobs.
+The noise offset that makes the boundary irregular stays untouched — "harder" here means a
+crisp *irregular* edge, never a crisp circle.
+
+**The fog did not cover a rotated map, and the cause was structural.** The quad was a fixed
+rectangle: the city's extent plus the same padding ratio the map uses as its pan limit. That
+reasoning holds only while the map is north-up, because a pan limit constrains an axis-aligned
+viewport — rotate the camera and the viewport's corners sweep outside the rectangle, leaving
+bare un-fogged ground where there is simply no geometry to shade. Section 7.3 now requires the
+quad to be rebuilt every frame from the camera's own bounds, which account for bearing and
+pitch, with its own padding constant. That the padding was shared with the pan limit is
+recorded as the cause, because the same shortcut would produce the same defect again.
+
+**Minor roads are added, below the fog.** He asked for the smaller streets he was missing on
+explored ground, and where they go is the whole question: above the fog they would hand
+unexplored ground the full street grid, which is the detail the fog exists to withhold. Below
+it they are a reward for having been somewhere. That also settles why they are their own layer
+rather than a wider filter on the existing one — a single filter cannot sit on both sides of
+the fog.
+
+**"To my location" now sets a zoom instead of only centring.** Tapping it while zoomed far out
+used to leave the player centred on a city-wide view they still could not walk from. It takes
+them to `MAP_DEFAULT_ZOOM`, the same constant as the opening view, since both answer the same
+question. The map picker on Suggest a bar keeps the old behaviour on purpose, and Section 8.3
+says so: someone who zoomed in to place a pin precisely would otherwise lose the precision
+they zoomed in for. Two identical-looking controls behaving differently is a real cost, taken
+knowingly rather than found later.
+
 ### v1.15 — the status palette's deferred values are decided
 
 v1.14 specified the three status icons and expressly left their colours open: "the specific
@@ -1550,4 +1598,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.15*
+*End of specification v1.16*

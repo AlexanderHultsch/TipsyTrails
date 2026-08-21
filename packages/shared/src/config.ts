@@ -10,6 +10,39 @@ export const CONFIG = {
   // layer stays legible by being drawn above the fog, not through it.
   FOG_MAX_OPACITY: 0.88,
 
+  // SPEC.md Section 7.3, "Rendering". The WebGL fog quad is rebuilt every
+  // frame from the map's *current viewport* (`grid-geometry.ts`), and this
+  // is the margin added around that viewport, as a fraction of its own span
+  // per axis. A quad fixed to the city's extent cannot work: MapLibre's
+  // `maxBounds` constrains an axis-aligned viewport, so as soon as the
+  // camera is rotated the viewport's corners sweep outside that rectangle,
+  // and where there is no quad there is no fog.
+  //
+  // Deliberately NOT MAP_BOUNDS_PADDING_RATIO. That one is the map's pan
+  // limit and answers a different question; deriving the fog quad from it
+  // is exactly what left the corners of a rotated map un-fogged.
+  FOG_VIEWPORT_PADDING_RATIO: 0.15,
+
+  // SPEC.md Section 7.3's fog edge, in the two numbers the fragment shader
+  // bakes into its source (`webgl-fog-layer.ts`). The edge is not
+  // decoration: it is the feedback that the reveal mechanic works at all,
+  // so it has to read as a boundary rather than as a slow fade.
+  //
+  // Radius, in grid cells, of the box blur applied to the binary mask -
+  // the blur window is (2r + 1) cells across.
+  FOG_EDGE_BLUR_RADIUS_CELLS: 1,
+  // Half-width of the alpha ramp around the blurred mask's midpoint: alpha
+  // is smoothstep(0.5 - h, 0.5 + h, blurred).
+  //
+  // The blurred mask is linear in distance from the boundary with slope
+  // 1 / (2r + 1) per cell, so these two together fix the width of the
+  // visible transition at exactly 2 * (2r + 1) * h cells - 0.6 cells, or
+  // 30 m at Karlsruhe's 50 m cell, as set here. Halve h to halve the edge.
+  // The low-frequency noise offset in the shader stays: it makes that
+  // boundary irregular, which Section 7.3 asks for, and it warps the local
+  // width around this figure without changing its average.
+  FOG_EDGE_ALPHA_HALF_WIDTH: 0.1,
+
   BAR_DISCOVERY_RADIUS_M: 100,
   BAR_ONSITE_RADIUS_M: 50,
   BAR_ACCURACY_TOLERANCE_M: 50, // added to on-site radius, capped by accuracy

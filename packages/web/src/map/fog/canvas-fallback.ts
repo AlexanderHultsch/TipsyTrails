@@ -85,12 +85,22 @@ export class CanvasFogFallback {
     this.canvas.style.height = `${height}px`;
   }
 
-  /** Screen pixels spanned by one grid cell at the current view - used to size the punched holes. */
+  /**
+   * Screen pixels spanned by one grid cell at the current view - used to size
+   * the punched holes.
+   *
+   * The distance between the two projected points, not their difference in
+   * x: the map can be rotated (neither map disables `dragRotate` or
+   * `touchZoomRotate`), and on a rotated map a step due east is not a step
+   * along the screen's x axis. Taking |dx| alone shrank every hole as the
+   * bearing turned - to nothing at all at 90 degrees, where the holes would
+   * clamp to one pixel and revealed ground would read as fogged.
+   */
   private estimateCellPixelSize(): number {
     const origin = this.map.project([this.gridParams.origin_lon, this.gridParams.origin_lat]);
     const neighbour = cellCenterXY(1, 0, this.gridParams);
     const east = this.map.project([neighbour.lon, this.gridParams.origin_lat]);
-    return Math.max(1, Math.abs(east.x - origin.x));
+    return Math.max(1, Math.hypot(east.x - origin.x, east.y - origin.y));
   }
 
   redraw(): void {

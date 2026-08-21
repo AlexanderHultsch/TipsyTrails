@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GridParams } from '@tipsytrails/shared';
 import { CONFIG } from '@tipsytrails/shared';
-import { WebGLFogLayer, glslFloat } from './webgl-fog-layer.js';
+import { WebGLFogLayer, glslFloat, glslInt } from './webgl-fog-layer.js';
+import { gridQuadCorners } from './grid-geometry.js';
+import type { LngLatBox } from './grid-geometry.js';
 
 // jsdom has no WebGL2 context (the task brief: "do not try to instantiate a
 // real GL context"), so WebGLFogLayer is exercised here against a hand-built
@@ -32,7 +34,7 @@ function createFakeGl() {
     COMPILE_STATUS: 3,
     LINK_STATUS: 4,
     ARRAY_BUFFER: 5,
-    STATIC_DRAW: 6,
+    DYNAMIC_DRAW: 6,
     TEXTURE_2D: 7,
     R8: 8,
     RED: 9,
@@ -110,8 +112,43 @@ function setCell(mask: Uint8Array, index: number): Uint8Array {
   return copy;
 }
 
-function fakeMap() {
-  return { triggerRepaint: vi.fn() } as unknown as import('maplibre-gl').Map;
+// The camera the layer reads its quad extent from. `getBounds()` is the one
+// map call the render path makes (webgl-fog-layer.ts): in maplibre-gl 4.7.1
+// it is the smallest lng/lat box around the four unprojected screen corners,
+// so it already widens as the map is rotated. Here it is a plain settable
+// box, so a test can move the camera without a real transform.
+function fakeMap(box: LngLatBox = { west: 8.276, south: 48.941, east: 8.278, north: 48.9425 }) {
+  const state = { box };
+  const map = {
+    triggerRepaint: vi.fn(),
+    getBounds: () => ({
+      getWest: () => state.box.west,
+      getSouth: () => state.box.south,
+      getEast: () => state.box.east,
+      getNorth: () => state.box.north,
+    }),
+    setBox: (next: LngLatBox) => {
+      state.box = next;
+    },
+  };
+  return map as unknown as import('maplibre-gl').Map & { setBox: (next: LngLatBox) => void };
+}
+
+function lastQuad(gl: WebGL2RenderingContext): Float32Array {
+  const calls = (gl.bufferData as ReturnType<typeof vi.fn>).mock.calls;
+  return calls[calls.length - 1][1] as Float32Array;
+}
+
+function expectedQuad(viewport: LngLatBox | null): Float32Array {
+  const corners = gridQuadCorners(GRID_PARAMS, viewport);
+  const data = new Float32Array(corners.length * 4);
+  corners.forEach((corner, i) => {
+    data[i * 4] = corner.merc.x;
+    data[i * 4 + 1] = corner.merc.y;
+    data[i * 4 + 2] = corner.u;
+    data[i * 4 + 3] = corner.v;
+  });
+  return data;
 }
 
 describe('WebGLFogLayer', () => {
@@ -352,6 +389,89 @@ describe('WebGLFogLayer', () => {
       `const float FOG_MAX_OPACITY = ${glslFloat(CONFIG.FOG_MAX_OPACITY)};`,
     );
   });
+
+  it('bakes the edge blur radius and alpha band into the shader from CONFIG', () => {
+    const { gl } = createFakeGl();
+    const layer = new WebGLFogLayer({
+      id: 'fog',
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      reducedMotion: () => false,
+    });
+
+    layer.onAdd(fakeMap(), gl);
+
+    const sources = (gl.shaderSource as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, source]) => source as string,
+    );
+    const fragment = sources.find((source) => source.includes('EDGE_BLUR_RADIUS'));
+    expect(fragment).toBeDefined();
+
+    // The blur radius has to reach the loop bounds as a compile-time int -
+    // a uniform could not, and glslFloat's "1.0" would not compile as one.
+    expect(fragment).toContain(
+      `const int EDGE_BLUR_RADIUS = ${glslInt(CONFIG.FOG_EDGE_BLUR_RADIUS_CELLS)};`,
+    );
+    expect(fragment).toContain('for (int dy = -EDGE_BLUR_RADIUS; dy <= EDGE_BLUR_RADIUS; dy++)');
+
+    // The alpha ramp is a band centred on the blurred mask's midpoint, not a
+    // sweep across nearly its whole range.
+    const half = CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH;
+    expect(fragment).toContain(`const float EDGE_ALPHA_LOW = ${glslFloat(0.5 - half)};`);
+    expect(fragment).toContain(`const float EDGE_ALPHA_HIGH = ${glslFloat(0.5 + half)};`);
+    expect(fragment).toContain('smoothstep(EDGE_ALPHA_LOW, EDGE_ALPHA_HIGH, fog)');
+  });
+
+  // The two constants above are tunable, so asserting the shader reads them
+  // cannot say anything about their values - this does. Section 7.3's edge
+  // has to read as a boundary, because it is the feedback that the reveal
+  // mechanic works at all, and the pair fixes exactly how wide the visible
+  // transition is: blurring a LINEAR-sampled binary mask leaves the blurred
+  // value linear in distance from the boundary with slope 1 / (2r + 1) per
+  // cell, so the alpha band of half-width h spans 2 * (2r + 1) * h cells.
+  //
+  // One cell is the line worth holding. Wider than that and the edge is
+  // blurrier than the grain of the grid it is an edge of, which is the
+  // "fades out so gradually that you cannot make out a clear boundary" this
+  // replaced: r = 2 with h = 0.38 came to 3.8 cells, 190 m of ramp.
+  it('keeps the visible fog transition inside a single grid cell', () => {
+    const cells =
+      2 * (2 * CONFIG.FOG_EDGE_BLUR_RADIUS_CELLS + 1) * CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH;
+    expect(cells).toBeLessThan(1);
+    expect(cells).toBeGreaterThan(0); // an edge, not a hard cut at exactly 0.5
+  });
+
+  it('builds the quad from the map viewport and rebuilds it when the camera moves', () => {
+    const { gl } = createFakeGl();
+    const northUp: LngLatBox = { west: 8.2755, south: 48.9405, east: 8.2775, north: 48.9425 };
+    // What the same viewport reports once it is turned: getBounds widens,
+    // because the rotated corners stick out past the axis-aligned box.
+    const turned: LngLatBox = { west: 8.2748, south: 48.9401, east: 8.2782, north: 48.9429 };
+    const map = fakeMap(northUp);
+    const layer = new WebGLFogLayer({
+      id: 'fog',
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      initialMask: emptyMask(),
+      reducedMotion: () => false,
+    });
+    layer.onAdd(map, gl);
+
+    layer.render(gl, new Float32Array(16), {} as never);
+    const first = lastQuad(gl);
+    expect(Array.from(first)).toEqual(Array.from(expectedQuad(northUp)));
+
+    map.setBox(turned);
+    layer.render(gl, new Float32Array(16), {} as never);
+    const second = lastQuad(gl);
+    expect(Array.from(second)).toEqual(Array.from(expectedQuad(turned)));
+    expect(Array.from(second)).not.toEqual(Array.from(first));
+
+    // And it is not the fixed city-wide quad that left the rotated corners
+    // bare - that one ignores the camera entirely.
+    expect(Array.from(second)).not.toEqual(Array.from(expectedQuad(null)));
+  });
 });
 
 // GLSL has no implicit int->float conversion, so a whole-number opacity that
@@ -371,5 +491,23 @@ describe('glslFloat', () => {
 
   it('formats the configured fog opacity as valid GLSL float syntax', () => {
     expect(glslFloat(CONFIG.FOG_MAX_OPACITY)).toMatch(/^\d+\.\d+$/);
+  });
+});
+
+// The mirror of the above: GLSL has no implicit float->int conversion either,
+// so the blur radius must reach the shader as "1", never as "1.0".
+describe('glslInt', () => {
+  it('leaves a whole number without a decimal point', () => {
+    expect(glslInt(1)).toBe('1');
+    expect(glslInt(0)).toBe('0');
+    expect(glslInt(-2)).toBe('-2');
+  });
+
+  it('refuses a fractional value instead of emitting a shader that cannot compile', () => {
+    expect(() => glslInt(1.5)).toThrow(/whole number/);
+  });
+
+  it('formats the configured blur radius as valid GLSL int syntax', () => {
+    expect(glslInt(CONFIG.FOG_EDGE_BLUR_RADIUS_CELLS)).toMatch(/^-?\d+$/);
   });
 });

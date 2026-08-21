@@ -196,6 +196,45 @@ describe('CanvasFogFallback', () => {
     expect(covers('destination-out', lastCell.x, lastCell.y)).toBe(true);
   });
 
+  // The fallback fills the whole canvas before punching holes, so unlike the
+  // WebGL path it never leaves a rotated map's corners bare. Its hole *sizes*
+  // did depend on the bearing, though: a step due east is not a step along
+  // the screen's x axis once the map is turned.
+  it('keeps the punched holes a full cell wide on a rotated map', () => {
+    const scale = 1_000_000;
+    const bearing = Math.PI / 2; // due east now points down the screen
+    const { map } = createFakeMap();
+    map.project = vi.fn(([lng, lat]: [number, number]) => {
+      const dx = (lng - GRID_PARAMS.origin_lon) * scale;
+      const dy = (GRID_PARAMS.origin_lat - lat) * scale;
+      return {
+        x: 5000 + dx * Math.cos(bearing) - dy * Math.sin(bearing),
+        y: 5000 + dx * Math.sin(bearing) + dy * Math.cos(bearing),
+      };
+    });
+
+    const mask = setCell(emptyMask(), 4);
+    const fallback = new CanvasFogFallback({
+      map: map as unknown as MaplibreMap,
+      grid: GRID,
+      gridParams: GRID_PARAMS,
+      getMask: () => mask,
+    });
+    ctxRig.fillRectCalls.length = 0;
+
+    fallback.redraw();
+
+    const [hole] = ctxRig.fillRectCalls.filter((call) => call.op === 'destination-out');
+    const origin = map.project([GRID_PARAMS.origin_lon, GRID_PARAMS.origin_lat]);
+    const neighbour = cellCenterXY(1, 0, GRID_PARAMS);
+    const east = map.project([neighbour.lon, GRID_PARAMS.origin_lat]);
+    const cellPx = Math.hypot(east.x - origin.x, east.y - origin.y);
+
+    expect(cellPx).toBeGreaterThan(10); // the rig really does span a cell
+    expect(hole.w).toBeCloseTo(cellPx + 2, 6);
+    expect(hole.h).toBeCloseTo(cellPx + 2, 6);
+  });
+
   it('redraws on moveend and not otherwise', () => {
     const { map } = createFakeMap();
     let mask = emptyMask();

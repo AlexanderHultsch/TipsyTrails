@@ -8,7 +8,8 @@
 import type { CustomLayerInterface, CustomRenderMethod, Map as MaplibreMap } from 'maplibre-gl';
 import type { GridParams } from '@tipsytrails/shared';
 import { CONFIG } from '@tipsytrails/shared';
-import { gridQuadCorners } from './grid-geometry.js';
+import { gridQuadCorners, lngLatBox } from './grid-geometry.js';
+import type { LngLatBox } from './grid-geometry.js';
 import {
   boundingTexelRect,
   diffRevealedCells,
@@ -36,6 +37,22 @@ export function glslFloat(value: number): string {
   return Number.isInteger(value) ? `${value}.0` : String(value);
 }
 
+/**
+ * Formats a number as a GLSL int literal. The mirror image of `glslFloat`,
+ * and needed for the same reason from the other side: GLSL has no implicit
+ * float→int conversion either, so `const int r = 1.0;` is as much a compile
+ * error as `const float x = 1;` is - and a failed compile throws out of
+ * `compileShader` below, uncaught, taking the map down. A value that is not
+ * a whole number has no int literal at all, so this refuses it here, where
+ * the message can say so, rather than at shader compile time.
+ */
+export function glslInt(value: number): string {
+  if (!Number.isInteger(value)) {
+    throw new Error(`A GLSL int literal needs a whole number, got ${value}.`);
+  }
+  return String(value);
+}
+
 const VERTEX_SHADER = `#version 300 es
 uniform mat4 u_matrix;
 in vec2 a_position;
@@ -47,14 +64,25 @@ void main() {
 }
 `;
 
-// Section 7.3: "The edge is softened with a two-cell blur plus a
-// low-frequency noise offset, so the boundary never reads as a hard circle
-// or as visible squares." The noise displaces the *sampling position*
-// before the blur (domain warping) so the revealed boundary is perturbed
-// organically rather than staying a smooth circle/rounded-square outline;
-// the 5x5 box blur (a 2-texel radius around each fragment) is what removes
-// the per-cell staircase edge a nearest/bilinear sample of a binary mask
-// would otherwise show.
+// Section 7.3's fog edge. Two things soften it and they do different jobs.
+//
+// The noise displaces the *sampling position* before the blur (domain
+// warping) so the revealed boundary is perturbed organically rather than
+// reading as a circle around the player or as a staircase of 50 m squares.
+// That is what Section 7.3 asks for and it stays exactly as it was.
+//
+// The box blur is what sets how *wide* the transition is, and it used to be
+// far too wide: a 2-cell radius, whose ramp the old `smoothstep(0.12, 0.88)`
+// then stretched across nearly the whole opacity range, put ~190 m of fade
+// between fogged and revealed ground - a boundary the player could not make
+// out, and so a mechanic the player could not see working. Both numbers are
+// now `CONFIG.FOG_EDGE_*` and baked in below. Blurring a binary mask
+// sampled with LINEAR filtering leaves the blurred value linear in distance
+// from the boundary with slope 1 / (2r + 1) per cell, so the visible
+// transition is exactly `2 * (2r + 1) * h` cells wide - see config.ts.
+//
+// The blur bounds must be compile-time constants, which is why the radius is
+// interpolated into the source rather than passed as a uniform.
 const FRAGMENT_SHADER = `#version 300 es
 precision mediump float;
 uniform sampler2D u_fog;
@@ -85,6 +113,13 @@ float valueNoise(vec2 p) {
 // from what shows through here.
 const float FOG_MAX_OPACITY = ${glslFloat(CONFIG.FOG_MAX_OPACITY)};
 
+// Section 7.3's edge, from CONFIG.FOG_EDGE_* - a whole number of cells for
+// the blur's loop bounds, and the alpha ramp as a tight band centred on the
+// blurred mask's midpoint rather than spread across its whole range.
+const int EDGE_BLUR_RADIUS = ${glslInt(CONFIG.FOG_EDGE_BLUR_RADIUS_CELLS)};
+const float EDGE_ALPHA_LOW = ${glslFloat(0.5 - CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH)};
+const float EDGE_ALPHA_HIGH = ${glslFloat(0.5 + CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH)};
+
 void main() {
   // The quad reaches past the grid into the map's padding ring
   // (grid-geometry.ts), which has no cells and so can never be revealed.
@@ -103,15 +138,15 @@ void main() {
 
   float sum = 0.0;
   float weight = 0.0;
-  for (int dy = -2; dy <= 2; dy++) {
-    for (int dx = -2; dx <= 2; dx++) {
+  for (int dy = -EDGE_BLUR_RADIUS; dy <= EDGE_BLUR_RADIUS; dy++) {
+    for (int dx = -EDGE_BLUR_RADIUS; dx <= EDGE_BLUR_RADIUS; dx++) {
       vec2 sampleUv = uv + vec2(float(dx), float(dy)) * u_texelSize;
       sum += texture(u_fog, sampleUv).r;
       weight += 1.0;
     }
   }
   float fog = sum / weight;
-  float alpha = smoothstep(0.12, 0.88, fog) * FOG_MAX_OPACITY;
+  float alpha = smoothstep(EDGE_ALPHA_LOW, EDGE_ALPHA_HIGH, fog) * FOG_MAX_OPACITY;
   // Premultiplied alpha - MapLibre's custom-layer blend func is
   // gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) (see CustomLayerInterface).
   fragColor = vec4(u_fogColor * alpha, alpha);
@@ -250,17 +285,8 @@ export class WebGLFogLayer implements CustomLayerInterface {
     this.program = linkProgram(gl2);
     this.texture = createFogTexture(gl2, this.grid, maskToFogTexels(this.initialMask, this.grid));
 
-    const corners = gridQuadCorners(this.gridParams);
-    const vertexData = new Float32Array(corners.length * 4);
-    corners.forEach((corner, i) => {
-      vertexData[i * 4] = corner.merc.x;
-      vertexData[i * 4 + 1] = corner.merc.y;
-      vertexData[i * 4 + 2] = corner.u;
-      vertexData[i * 4 + 3] = corner.v;
-    });
     this.quadBuffer = gl2.createBuffer();
-    gl2.bindBuffer(gl2.ARRAY_BUFFER, this.quadBuffer);
-    gl2.bufferData(gl2.ARRAY_BUFFER, vertexData, gl2.STATIC_DRAW);
+    this.writeQuad(gl2);
 
     this.positionLoc = gl2.getAttribLocation(this.program, 'a_position');
     this.uvLoc = gl2.getAttribLocation(this.program, 'a_uv');
@@ -276,7 +302,10 @@ export class WebGLFogLayer implements CustomLayerInterface {
     }
     gl2.useProgram(this.program);
 
-    gl2.bindBuffer(gl2.ARRAY_BUFFER, this.quadBuffer);
+    // The quad follows the camera, so it is rebuilt here rather than once in
+    // onAdd: four vertices per frame, against a fixed quad that stopped
+    // covering the screen the moment the map was rotated (grid-geometry.ts).
+    this.writeQuad(gl2);
     const stride = 4 * Float32Array.BYTES_PER_ELEMENT;
     gl2.enableVertexAttribArray(this.positionLoc);
     gl2.vertexAttribPointer(this.positionLoc, 2, gl2.FLOAT, false, stride, 0);
@@ -300,6 +329,38 @@ export class WebGLFogLayer implements CustomLayerInterface {
 
     gl2.drawArrays(gl2.TRIANGLE_STRIP, 0, 4);
   };
+
+  /**
+   * The camera's current lng/lat extent, or null before the layer has a map.
+   *
+   * `getBounds()` in maplibre-gl 4.7.1 unprojects the four screen corners and
+   * returns the smallest box containing them, so it already accounts for
+   * bearing and for pitch; under pitch its own horizon clamp keeps the
+   * sampled points below the horizon, so the result stays finite (verified
+   * against the 4.7.1 transform - see the task report). `fogQuadBox` still
+   * checks, because a non-finite corner would make the whole quad vanish and
+   * take all the fog with it.
+   */
+  private viewportBox(): LngLatBox | null {
+    const bounds = this.map?.getBounds();
+    return bounds ? lngLatBox(bounds) : null;
+  }
+
+  private writeQuad(gl: WebGL2RenderingContext): void {
+    if (!this.quadBuffer) {
+      return;
+    }
+    const corners = gridQuadCorners(this.gridParams, this.viewportBox());
+    const vertexData = new Float32Array(corners.length * 4);
+    corners.forEach((corner, i) => {
+      vertexData[i * 4] = corner.merc.x;
+      vertexData[i * 4 + 1] = corner.merc.y;
+      vertexData[i * 4 + 2] = corner.u;
+      vertexData[i * 4 + 3] = corner.v;
+    });
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.DYNAMIC_DRAW);
+  }
 
   onRemove(_map: MaplibreMap, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     const gl2 = gl as WebGL2RenderingContext;
