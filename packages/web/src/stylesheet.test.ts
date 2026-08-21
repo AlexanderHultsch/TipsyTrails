@@ -79,3 +79,27 @@ describe('index.css: MapLibre container positioning', () => {
     });
   }
 });
+
+// The districts screen visibly jumped when a district was selected: the
+// detail panel's height changes with the selection, the page height changes
+// with it, a desktop scrollbar appears or disappears, and every `width: 100%`
+// element on the page - the district map among them - is re-laid out at a
+// different width. Reserving the gutter unconditionally decouples the two.
+//
+// It gets a test because it is a single declaration with no visible effect
+// until the exact moment it matters, on a screen no automated check here
+// lays out. Nothing else in the repository would notice its removal.
+describe('index.css: scrollbar gutter', () => {
+  it('reserves the scrollbar width on the root element', () => {
+    const root = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim() === 'html'),
+    );
+
+    expect(root.length, 'no rule targets the html element').toBeGreaterThan(0);
+    expect(
+      root.some((rule) => /scrollbar-gutter\s*:\s*stable/.test(rule.body)),
+      'html must set scrollbar-gutter: stable, or a page whose height changes ' +
+        'resizes every width: 100% element on it when the scrollbar appears',
+    ).toBe(true);
+  });
+});

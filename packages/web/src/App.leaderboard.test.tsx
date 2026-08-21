@@ -332,7 +332,6 @@ describe('leaderboard', () => {
 
     // The bars request has not answered yet: the row is still the area one,
     // and must still read as an area percentage.
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('Loading');
     expect(container.querySelector('.leaderboard__name')?.textContent).toBe('bob');
     expect(container.querySelector('.leaderboard__value')?.textContent).toBe('40.5%');
 
@@ -340,6 +339,116 @@ describe('leaderboard', () => {
     await flush();
 
     expect(container.querySelector('.leaderboard__value')?.textContent).toBe('7');
+  });
+
+  // The loading message answers "there is nothing here yet", and nothing
+  // else. A refetch deliberately keeps the table on screen (see above), and
+  // against a server on the local network it answers in tens of
+  // milliseconds - so the message appeared over a full table and was gone
+  // again before it could be read, which reads as a flicker and a bug
+  // rather than as progress.
+  describe('the loading message', () => {
+    function loadingMessage(): Element | null {
+      return (
+        Array.from(container.querySelectorAll('[role="status"]')).find((element) =>
+          element.textContent?.includes('Loading the leaderboard'),
+        ) ?? null
+      );
+    }
+
+    function entry(displayName: string, value: number) {
+      return {
+        rank: 1,
+        userId: 2,
+        displayName,
+        isAnonymous: false,
+        avatarSeed: 'seed2',
+        value,
+        badges: [],
+      };
+    }
+
+    function pageOf(period: string, displayName: string, value: number) {
+      return {
+        metric: 'area',
+        period,
+        page: 1,
+        pageSize: 50,
+        totalUsers: 1,
+        totalPages: 1,
+        entries: [entry(displayName, value)],
+      };
+    }
+
+    it('is shown on a first load, while there is nothing on screen yet', async () => {
+      let release = () => {};
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      stubFetch(async (url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/api/leaderboard')) {
+          await pending;
+          return jsonResponse(200, pageOf('all', 'bob', 40.5));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/leaderboard');
+
+      expect(container.querySelector('.leaderboard__row')).toBeNull();
+      expect(loadingMessage()).not.toBeNull();
+
+      release();
+      await flush();
+
+      expect(container.querySelector('.leaderboard__row')).not.toBeNull();
+      expect(loadingMessage()).toBeNull();
+    });
+
+    it('is not shown on a refetch that still has its table on screen', async () => {
+      let releaseWeek = () => {};
+      const weekPending = new Promise<void>((resolve) => {
+        releaseWeek = resolve;
+      });
+
+      stubFetch(async (url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/api/leaderboard')) {
+          if (searchParamsOf(url).get('period') === 'week') {
+            await weekPending;
+            return jsonResponse(200, pageOf('week', 'carol', 12.5));
+          }
+          return jsonResponse(200, pageOf('all', 'bob', 40.5));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/leaderboard');
+      expect(container.querySelector('.leaderboard__name')?.textContent).toBe('bob');
+
+      const weekButton = Array.from(container.querySelectorAll('.leaderboard__toggle-button')).find(
+        (button) => button.textContent === 'Week',
+      ) as HTMLButtonElement;
+      await click(weekButton);
+
+      // The week request is still in flight: no message, and the previous
+      // rows are still the ones on screen.
+      expect(loadingMessage()).toBeNull();
+      expect(container.querySelector('.leaderboard__row')).not.toBeNull();
+      expect(container.querySelector('.leaderboard__name')?.textContent).toBe('bob');
+
+      releaseWeek();
+      await flush();
+
+      expect(loadingMessage()).toBeNull();
+      expect(container.querySelector('.leaderboard__name')?.textContent).toBe('carol');
+    });
   });
 
   it('shows an anonymous row masked, still ranked, with its badges', async () => {

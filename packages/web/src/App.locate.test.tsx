@@ -3,7 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.js';
-import { clearLastKnownPosition, getLastKnownPosition } from './tracking/lastKnownPosition.js';
+import {
+  clearLastKnownPosition,
+  getLastKnownPosition,
+  setLastKnownPosition,
+} from './tracking/lastKnownPosition.js';
 
 // Section 8.3, Block B: centring the map on the player - automatically on
 // the first fix inside the city, on request via the "to my location"
@@ -158,7 +162,18 @@ function stubMapFetch(city: () => Promise<Response> | Response) {
 }
 
 interface GeolocationStub {
+  watchPosition: ReturnType<typeof vi.fn>;
+  getCurrentPosition: ReturnType<typeof vi.fn>;
   triggerPosition: (position: { lat: number; lon: number }) => void;
+  answerCurrentPosition: (position: { lat: number; lon: number }) => void;
+  denyCurrentPosition: () => void;
+}
+
+function geolocationPosition(lat: number, lon: number): GeolocationPosition {
+  return {
+    coords: { latitude: lat, longitude: lon, accuracy: 10, speed: null },
+    timestamp: Date.now(),
+  } as GeolocationPosition;
 }
 
 function stubGeolocation(): GeolocationStub {
@@ -168,16 +183,34 @@ function stubGeolocation(): GeolocationStub {
     successCallback = success;
     return nextWatchId++;
   });
+  // The two calls are kept apart deliberately: the map screen watches, the
+  // suggest screen's picker asks once. A test that answered both through
+  // one callback could not tell the two behaviours apart, and "the picker
+  // does not open a watch" is precisely what has to hold - a watch runs
+  // continuously, and the hook that owns one also POSTs samples.
+  let oneShotSuccess: PositionCallback | null = null;
+  let oneShotError: PositionErrorCallback | null = null;
+  const getCurrentPosition = vi.fn(
+    (success: PositionCallback, error?: PositionErrorCallback | null) => {
+      oneShotSuccess = success;
+      oneShotError = error ?? null;
+    },
+  );
   Object.defineProperty(navigator, 'geolocation', {
     configurable: true,
-    value: { watchPosition, clearWatch: vi.fn() },
+    value: { watchPosition, getCurrentPosition, clearWatch: vi.fn() },
   });
   return {
+    watchPosition,
+    getCurrentPosition,
     triggerPosition({ lat, lon }) {
-      successCallback?.({
-        coords: { latitude: lat, longitude: lon, accuracy: 10, speed: null },
-        timestamp: Date.now(),
-      } as GeolocationPosition);
+      successCallback?.(geolocationPosition(lat, lon));
+    },
+    answerCurrentPosition({ lat, lon }) {
+      oneShotSuccess?.(geolocationPosition(lat, lon));
+    },
+    denyCurrentPosition() {
+      oneShotError?.({ code: 1, message: 'User denied Geolocation' } as GeolocationPositionError);
     },
   };
 }
@@ -439,6 +472,21 @@ describe('the "to my location" control (SPEC.md Section 8.3)', () => {
 });
 
 describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
+  // Everything the picker fetches: the auth guard, and the city metadata it
+  // needs both for the pan limit and for judging whether a position is
+  // inside the playable grid.
+  function stubPickerFetch() {
+    return stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, cityMeta);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+  }
+
   it('opens at the city centre when this session has no known position', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
@@ -534,5 +582,129 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
     });
 
     expect(getLastKnownPosition()).toBeNull();
+  });
+
+  // tracking/lastKnownPosition.ts is only ever written by the map screen, so
+  // opening /suggest directly - from the menu on a fresh load, or after a
+  // reload - finds it empty and the picker opened on the city centre rather
+  // than where the player is standing, which is next to the bar they are
+  // adding. The picker therefore asks for a fix itself in that case.
+  describe('when this session has no stored position', () => {
+    it('asks the browser once, and never opens a watch', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      expect(geo.getCurrentPosition).toHaveBeenCalledTimes(1);
+      // A watch would run continuously, and the hook that owns the app's
+      // only other one (tracking/useSampleTracking.ts) POSTs samples as it
+      // goes - neither may happen from this screen.
+      expect(geo.watchPosition).not.toHaveBeenCalled();
+    });
+
+    it('centres on the answer when it is inside the playable grid', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+      const map = lastMap();
+      expect(map.options.center).toEqual(CITY_CENTER);
+
+      act(() => {
+        geo.answerCurrentPosition({ lat: INSIDE_LAT, lon: INSIDE_LON });
+      });
+      await flush();
+
+      expect(map.jumpTo).toHaveBeenCalledTimes(1);
+      expect(map.jumpTo).toHaveBeenCalledWith({ center: [INSIDE_LON, INSIDE_LAT] });
+    });
+
+    // The same guard the map screen makes: the extract covers nothing
+    // outside the city, so centring there shows an empty map.
+    it('stays on the city centre when the answer is outside the playable grid', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      act(() => {
+        geo.answerCurrentPosition({ lat: OUTSIDE_LAT, lon: OUTSIDE_LON });
+      });
+      await flush();
+
+      expect(lastMap().jumpTo).not.toHaveBeenCalled();
+    });
+
+    it('stays on the city centre when the request is denied', async () => {
+      const geo = stubGeolocation();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      act(() => {
+        geo.denyCurrentPosition();
+      });
+      await flush();
+
+      const map = lastMap();
+      expect(map.options.center).toEqual(CITY_CENTER);
+      expect(map.jumpTo).not.toHaveBeenCalled();
+      expect(locateButton().disabled).toBe(true);
+    });
+
+    it('stays on the city centre when the browser has no geolocation at all', async () => {
+      removeGeolocationStub();
+      stubPickerFetch();
+
+      await renderAt('/suggest');
+
+      expect(container.querySelector('.map-picker')).not.toBeNull();
+      expect(lastMap().options.center).toEqual(CITY_CENTER);
+      expect(lastMap().jumpTo).not.toHaveBeenCalled();
+    });
+  });
+
+  // Instant, and no permission round-trip, so it wins over asking again.
+  it('prefers the stored position and does not ask the browser at all', async () => {
+    const geo = stubGeolocation();
+    setLastKnownPosition({ lat: INSIDE_LAT, lon: INSIDE_LON, accuracy: 10 });
+    stubPickerFetch();
+
+    await renderAt('/suggest');
+
+    const map = lastMap();
+    expect(map.options.center).toEqual([INSIDE_LON, INSIDE_LAT]);
+    expect(geo.getCurrentPosition).not.toHaveBeenCalled();
+    // The map was built on that position - there is nothing to move.
+    expect(map.jumpTo).not.toHaveBeenCalled();
+  });
+
+  // The same control the map screen has, from the same component
+  // (components/LocateButton.tsx) - hence the same accessible name, which is
+  // what locateButton() finds it by here.
+  it('offers a "go to my location" control, disabled until a position is known', async () => {
+    const geo = stubGeolocation();
+    stubPickerFetch();
+
+    await renderAt('/suggest');
+    expect(locateButton()).not.toBeNull();
+    expect(locateButton().disabled).toBe(true);
+
+    act(() => {
+      geo.answerCurrentPosition({ lat: INSIDE_LAT, lon: INSIDE_LON });
+    });
+    await flush();
+
+    const map = lastMap();
+    expect(locateButton().disabled).toBe(false);
+
+    map.flyTo.mockClear();
+    act(() => {
+      locateButton().click();
+    });
+
+    expect(map.flyTo).toHaveBeenCalledTimes(1);
+    expect(map.flyTo).toHaveBeenCalledWith({ center: [INSIDE_LON, INSIDE_LAT] });
   });
 });

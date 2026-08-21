@@ -17,8 +17,9 @@
 // arrives, so a caller that needs the grid itself (screens/Map.tsx tests
 // whether the player is inside it before centring on them) gets it without
 // a second GET /api/city. The name still says what the hook *does* to the
-// map: the bounds are the effect, the return value only the by-product -
-// map/MapPicker.tsx calls it for the effect alone.
+// map: the bounds are the effect, the return value only the by-product.
+// map/MapPicker.tsx needs both - it makes the same inside-the-grid test
+// before centring on the player.
 import { useEffect, useState } from 'react';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { gridMapBounds } from '@tipsytrails/shared';

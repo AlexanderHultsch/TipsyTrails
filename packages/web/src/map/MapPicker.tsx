@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
-import { CONFIG } from '@tipsytrails/shared';
+import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { LocateButton } from '../components/LocateButton.js';
 import { getLastKnownPosition } from '../tracking/lastKnownPosition.js';
 import { inkStyle } from './ink-style.js';
 import { useCityMaxBounds } from './useCityMaxBounds.js';
@@ -40,22 +41,34 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
   const onPickRef = useRef(onPick);
   onPickRef.current = onPick;
 
-  useCityMaxBounds(mapInstance);
+  // Whoever is suggesting a bar is usually standing in front of it. The
+  // position the map screen last accepted this session is the instant
+  // answer when there is one - already granted, no permission round-trip -
+  // so it is read once at mount, the same one-time read screens/Map.tsx
+  // makes of its URL centre, and serves both as the map's initial centre
+  // and as the position the control below starts out with.
+  const storedPositionRef = useRef(getLastKnownPosition());
+  const [ownPosition, setOwnPosition] = useState<PickedPosition | null>(() => {
+    const stored = storedPositionRef.current;
+    return stored === null ? null : { lat: stored.lat, lon: stored.lon };
+  });
+  // Whether the map has already been centred on the player - the same latch
+  // screens/Map.tsx keeps, and for the same reason. Already spent when the
+  // map was built at the stored position: it is on that position, and
+  // nothing should move it again.
+  const centredOnPositionRef = useRef(storedPositionRef.current !== null);
+
+  const city = useCityMaxBounds(mapInstance);
 
   useEffect(() => {
     const protocol = new Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
 
-    // Whoever is suggesting a bar is usually standing in front of it, so
-    // this opens at the last position the map screen accepted this session
-    // if there is one - read once at mount, the same one-time initial
-    // centre screens/Map.tsx takes from the URL.
-    const lastKnown = getLastKnownPosition();
-
+    const stored = storedPositionRef.current;
     const map = new maplibregl.Map({
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
-      center: lastKnown ? [lastKnown.lon, lastKnown.lat] : INITIAL_CENTER,
+      center: stored ? [stored.lon, stored.lat] : INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
@@ -69,6 +82,63 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
       maplibregl.removeProtocol('pmtiles');
     };
   }, []);
+
+  // tracking/lastKnownPosition.ts is only ever written by the map screen, so
+  // opening /suggest directly - or after a reload - finds it empty and the
+  // picker opened on the city centre instead of where the player is
+  // standing. It therefore asks for a fix itself when there is nothing
+  // stored: one shot, deliberately not watchPosition, and deliberately not
+  // tracking/useSampleTracking.ts - that hook watches continuously *and*
+  // POSTs samples, neither of which may happen from this screen. The fix
+  // lives in this component's state and nowhere else (constraint C4 /
+  // Section 10.2: raw positions are never persisted).
+  useEffect(() => {
+    if (storedPositionRef.current !== null || !('geolocation' in navigator)) {
+      return;
+    }
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        if (cancelled) {
+          return;
+        }
+        setOwnPosition({ lat: position.coords.latitude, lon: position.coords.longitude });
+      },
+      () => {
+        // Denied, unavailable, or no fix in time: the picker stays on the
+        // city centre it opened at and the control below stays disabled.
+        // There is nothing more useful to say here.
+      },
+      { enableHighAccuracy: true },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // A fix that arrives after the map is already built centres it, once,
+  // exactly the way screens/Map.tsx does: jumpTo rather than flyTo (the
+  // screen has just opened, an animation reads as a glitch), and only for a
+  // position inside the playable grid. Outside it the map stays on the city
+  // - the tile extract covers nothing there, so centring would show an empty
+  // map, which is indistinguishable from a failure.
+  useEffect(() => {
+    if (!mapInstance || !city || !ownPosition || centredOnPositionRef.current) {
+      return;
+    }
+    centredOnPositionRef.current = true;
+    const cell = toCell(ownPosition.lat, ownPosition.lon, {
+      origin_lat: city.originLat,
+      origin_lon: city.originLon,
+      grid_width: city.gridWidth,
+      grid_height: city.gridHeight,
+      cell_size_m: city.cellSizeM,
+    });
+    if (cell === null) {
+      return;
+    }
+    mapInstance.jumpTo({ center: [ownPosition.lon, ownPosition.lat] });
+  }, [mapInstance, city, ownPosition]);
 
   useEffect(() => {
     if (!mapInstance) {
@@ -103,6 +173,13 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
     };
   }, [mapInstance, value]);
 
+  function handleGoToMyLocation() {
+    if (!mapInstance || !ownPosition) {
+      return;
+    }
+    mapInstance.flyTo({ center: [ownPosition.lon, ownPosition.lat] });
+  }
+
   return (
     <div className="map-picker">
       <div ref={containerRef} className="map-picker__map" />
@@ -117,6 +194,7 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
           <path d={PIN_SVG_PATH} />
         </svg>
       )}
+      <LocateButton disabled={ownPosition === null} onClick={handleGoToMyLocation} />
       <p className="map-picker__status" role="status">
         {value
           ? `Pin placed at ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}.`

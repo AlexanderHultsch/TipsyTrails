@@ -121,7 +121,13 @@ export function Leaderboard() {
           </div>
         </div>
 
-        {loading && <p role="status">Loading the leaderboard…</p>}
+        {/* Only while there is nothing to show yet. A refetch - switching
+            metric, period or page - leaves the table in place (see above),
+            so the message would appear over a full table and, against a
+            server that answers in tens of milliseconds, vanish again before
+            it could be read: a flash carrying no information. The rows are
+            simply replaced when the new ones arrive. */}
+        {loading && !data && <p role="status">Loading the leaderboard…</p>}
         {error && (
           <p className="error-message" role="alert">
             {error}

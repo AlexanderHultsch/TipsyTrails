@@ -119,21 +119,31 @@ export function DistrictOverview() {
         {map}
         {districts && (
           <div className="district-overview__detail" role="status">
-            {selected ? (
-              <>
-                <span className="district-overview__detail-name">{selected.properties.name}</span>
-                <span className="district-overview__detail-percent">
-                  {(percentByName.get(selected.properties.name) ?? 0).toFixed(1)}%
+            {/* Both rows are always rendered, selected or not: the panel sits
+                directly under a `width: 100%` map, so a height that depended
+                on the selection changed the page height, and with it the
+                scrollbar and the map's own width. See index.css. */}
+            <div className="district-overview__detail-row">
+              {selected ? (
+                <>
+                  <span className="district-overview__detail-name">{selected.properties.name}</span>
+                  <span className="district-overview__detail-percent">
+                    {(percentByName.get(selected.properties.name) ?? 0).toFixed(1)}%
+                  </span>
+                </>
+              ) : (
+                <span className="district-overview__detail-hint">
+                  Tap a district on the map to see its progress.
                 </span>
+              )}
+            </div>
+            <div className="district-overview__detail-row">
+              {selected && (
                 <Link className="district-overview__detail-link" to={mapLinkFor(selected)}>
                   Open on the map
                 </Link>
-              </>
-            ) : (
-              <span className="district-overview__detail-hint">
-                Tap a district on the map to see its progress.
-              </span>
-            )}
+              )}
+            </div>
           </div>
         )}
         {districts && (

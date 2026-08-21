@@ -7,6 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
 import { CheckInPanel } from '../components/CheckInPanel.js';
+import { LocateButton } from '../components/LocateButton.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
@@ -241,18 +242,7 @@ export function MapScreen() {
       <BurgerMenu />
       <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
-      {/* Disabled rather than hidden while there is no fix yet: a control
-          that appears and disappears is harder to find than one that is
-          visibly inert. */}
-      <button
-        type="button"
-        className="map-locate"
-        aria-label="Go to my location"
-        disabled={trackingState.lastPosition === null}
-        onClick={handleGoToMyLocation}
-      >
-        <span aria-hidden="true">&#9678;</span>
-      </button>
+      <LocateButton disabled={trackingState.lastPosition === null} onClick={handleGoToMyLocation} />
       <PendingVisitBanner visits={visits.pendingVisits} outOfRangeVisitIds={outOfRangeVisitIds} />
       <CheckInPanel
         candidates={visits.checkInCandidates}

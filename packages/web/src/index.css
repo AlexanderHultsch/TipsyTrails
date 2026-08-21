@@ -11,6 +11,16 @@
   box-sizing: border-box;
 }
 
+/* Reserve the scrollbar's width on every screen, whether or not the page is
+   currently long enough to need one. Without this, anything that changes the
+   page height - selecting a district, a toast appearing, a list growing -
+   adds or removes the scrollbar on a desktop browser, which changes the
+   available width, which resizes every `width: 100%` element on the page.
+   The district map visibly jumped for exactly that reason. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -706,23 +716,42 @@ button:focus-visible,
 
 /* The selected district's detail panel, sitting directly beneath the map.
    Shaped like a .district-list__item so the two read as the same kind of
-   row. */
+   row.
+
+   Two rows, always both of them, never a single wrapping one: the name and
+   the percentage on the first, the link on the second, and the second still
+   reserved (min-height, one line's worth) while nothing is selected. A
+   wrapping row made the panel's height depend on which district was
+   selected - a long name pushed the link onto a second line, a short one did
+   not - and that changed the page height, hence the scrollbar, hence the
+   width of the `width: 100%` map above it. The rows' height comes from their
+   own line-height rather than a fixed pixel figure. */
 .district-overview__detail {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
+  display: grid;
+  gap: 0.25rem;
   min-height: 44px;
   margin-bottom: 1rem;
   padding: 0.625rem 0.875rem;
   border: 1px solid var(--color-border);
   border-radius: 4px;
+  line-height: 1.5;
   text-align: left;
 }
 
+.district-overview__detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 1.5em;
+}
+
+/* Never broken across two lines - the longest names here are hyphenated
+   ("Weiherfeld-Dammerstock"), and a browser will happily break after the
+   hyphen. Kept whole, never shortened: no truncation, no ellipsis. */
 .district-overview__detail-name {
   font-weight: 600;
+  white-space: nowrap;
 }
 
 /* WCAG 2.1 SC 2.5.5's "Equivalent" control for the map's small shapes
@@ -1036,6 +1065,17 @@ button:focus-visible,
 .map-picker .map-picker__map {
   position: absolute;
   inset: 0;
+}
+
+/* The same control (components/LocateButton.tsx) inside the suggest
+   screen's picker - only its corner differs. The picker's bottom edge
+   already carries .map-picker__status across its full width, so it sits in
+   the free top-right one instead of the bottom left the map screen uses. */
+.map-picker .map-locate {
+  top: 0.5rem;
+  right: 0.5rem;
+  bottom: auto;
+  left: auto;
 }
 
 .map-picker__pin {

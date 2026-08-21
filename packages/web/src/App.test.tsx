@@ -1324,6 +1324,55 @@ describe('App', () => {
       );
     });
 
+    // The panel sits directly beneath a `width: 100%` map, so its height may
+    // not depend on what is in it. It used to: one wrapping flex row held
+    // the name, the percentage and the link, so a long name ("Weiherfeld-
+    // Dammerstock") pushed the link onto a second line and a short one did
+    // not. That changed the page height, hence whether the page scrolled,
+    // hence the desktop scrollbar, hence the content width - and the map
+    // resized. jsdom lays nothing out, so what is pinned here is the
+    // structure that makes the height constant: the same two rows in every
+    // state, with the link never sharing a row with the name.
+    it('keeps the detail panel at the same two rows, selected or not and whatever the name is', async () => {
+      const byLength = [...districtsFixture.features].sort(
+        (a, b) => a.properties.name.length - b.properties.name.length,
+      );
+      const shortest = byLength[0].properties.name;
+      const longest = byLength[byLength.length - 1].properties.name;
+      const indexOf = (name: string) =>
+        districtsFixture.features.findIndex((feature) => feature.properties.name === name);
+
+      await renderDistricts();
+
+      function rowClasses(): string[] {
+        return Array.from(panel().children).map((child) => child.className);
+      }
+
+      const unselectedRows = rowClasses();
+      expect(unselectedRows).toEqual([
+        'district-overview__detail-row',
+        'district-overview__detail-row',
+      ]);
+      // The hint is on the first row and the second is empty but present -
+      // that reserved row is what stops the panel growing on selection.
+      expect(panel().children[0].querySelector('.district-overview__detail-hint')).not.toBeNull();
+      expect(panel().children[1].children).toHaveLength(0);
+
+      for (const name of [shortest, longest]) {
+        await tapDistrict(indexOf(name));
+
+        expect(rowClasses()).toEqual(unselectedRows);
+        expect(
+          panel().children[0].querySelector('.district-overview__detail-name')?.textContent,
+        ).toBe(name);
+        expect(
+          panel().children[0].querySelector('.district-overview__detail-percent'),
+        ).not.toBeNull();
+        expect(panel().children[0].querySelector('.district-overview__detail-link')).toBeNull();
+        expect(panel().children[1].querySelector('.district-overview__detail-link')).not.toBeNull();
+      }
+    });
+
     it('keeps the full list, with every district and its percentage, inside a collapsed <details>', async () => {
       await renderDistricts();
 
