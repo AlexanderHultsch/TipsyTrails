@@ -12,12 +12,22 @@
 // map/position/useOwnPositionMarker.ts does. A failed fetch leaves the map
 // unbounded rather than showing anything - the same best-effort posture
 // screens/BarDetail.tsx takes for its own GET /api/city.
-import { useEffect } from 'react';
+//
+// The metadata this already fetches is handed back as well, null until it
+// arrives, so a caller that needs the grid itself (screens/Map.tsx tests
+// whether the player is inside it before centring on them) gets it without
+// a second GET /api/city. The name still says what the hook *does* to the
+// map: the bounds are the effect, the return value only the by-product -
+// map/MapPicker.tsx calls it for the effect alone.
+import { useEffect, useState } from 'react';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { gridMapBounds } from '@tipsytrails/shared';
 import { getCity } from '../api/client.js';
+import type { CityMeta } from '../api/types.js';
 
-export function useCityMaxBounds(map: MaplibreMap | null): void {
+export function useCityMaxBounds(map: MaplibreMap | null): CityMeta | null {
+  const [city, setCity] = useState<CityMeta | null>(null);
+
   useEffect(() => {
     if (!map) {
       return;
@@ -38,6 +48,7 @@ export function useCityMaxBounds(map: MaplibreMap | null): void {
             cell_size_m: city.cellSizeM,
           }),
         );
+        setCity(city);
       })
       .catch(() => {});
 
@@ -45,4 +56,6 @@ export function useCityMaxBounds(map: MaplibreMap | null): void {
       cancelled = true;
     };
   }, [map]);
+
+  return city;
 }

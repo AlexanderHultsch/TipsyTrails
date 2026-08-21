@@ -23,6 +23,8 @@ const { MockMap, addProtocolMock, removeProtocolMock } = vi.hoisted(() => {
     getLayer = vi.fn();
     loaded = vi.fn(() => true);
     setMaxBounds = vi.fn();
+    jumpTo = vi.fn();
+    flyTo = vi.fn();
     project = vi.fn(() => ({ x: 0, y: 0 }));
     container = document.createElement('div');
     getContainer = () => this.container;

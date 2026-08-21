@@ -381,6 +381,37 @@ button:focus-visible,
   margin-top: 1rem;
 }
 
+/* Section 8.3's "to my location" control, bottom left so it clears the
+   burger menu (top right), the tracking indicator (top left), the toasts
+   (bottom centre) and the attribution (bottom right). Same ink-on-paper
+   treatment and 44px tap target as .tracking-indicator__button, and the
+   same disabled treatment as .button:disabled - it stays in place while
+   there is no fix yet rather than appearing once one arrives. */
+.map-locate {
+  position: absolute;
+  left: 1rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--color-ink);
+  border-radius: 4px;
+  background: rgba(244, 239, 230, 0.85);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.map-locate:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .map-toast {
   position: absolute;
   bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));

@@ -1,5 +1,6 @@
 import { logout } from '../api/client.js';
 import { clearFogState } from '../map/fog/fog-cache.js';
+import { clearLastKnownPosition } from '../tracking/lastKnownPosition.js';
 import { useCurrentUser } from './CurrentUserContext.js';
 
 // Shared by the burger menu and the Settings screen's own log-out action.
@@ -28,6 +29,10 @@ export function useLogout(): () => Promise<void> {
       if (user) {
         clearFogState(user.id);
       }
+      // The in-memory last known position (tracking/lastKnownPosition.ts)
+      // goes with it: unkeyed, so unlike the fog cache it is cleared
+      // whether or not a user was resolved here.
+      clearLastKnownPosition();
       setUser(null);
     }
   };

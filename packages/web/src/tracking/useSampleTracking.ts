@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
 import type { Sample, VisitSummary } from '../api/types.js';
+import { setLastKnownPosition } from './lastKnownPosition.js';
 import { computeConnectionStatus, computeGpsStatus } from './status.js';
 import type { ConnectionStatus, GpsStatus } from './status.js';
 
@@ -113,7 +114,16 @@ export function useSampleTracking(): SampleTrackingState {
       setQueueDepth(queueRef.current.length);
       const now = Date.now();
       setGpsStatus(computeGpsStatus({ accuracy: sample.accuracy, receivedAt: now }, now));
-      setLastPosition({ lat: sample.lat, lon: sample.lon, accuracy: sample.accuracy });
+      const accepted: LastAcceptedPosition = {
+        lat: sample.lat,
+        lon: sample.lon,
+        accuracy: sample.accuracy,
+      };
+      setLastPosition(accepted);
+      // Also outside this component's state, for map/MapPicker.tsx - see
+      // tracking/lastKnownPosition.ts for why that screen reads a holder
+      // rather than mounting this hook.
+      setLastKnownPosition(accepted);
       scheduleStaleCheck();
     }
 

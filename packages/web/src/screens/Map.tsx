@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CONFIG } from '@tipsytrails/shared';
+import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { BurgerMenu } from '../components/BurgerMenu.js';
@@ -95,6 +95,16 @@ export function MapScreen() {
   // ref update alone would not schedule one.
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [searchParams] = useSearchParams();
+  // Read once at mount, for the same reason centerFromSearchParams itself
+  // is (see its comment): the map is built from it in a mount-only effect,
+  // and the one-time centring below has to answer "did the URL carry a
+  // district centre?" long after that, without re-reading a query that may
+  // have changed underneath it.
+  const urlCenterRef = useRef(centerFromSearchParams(searchParams));
+  // Whether the map has already been centred on the player. A ref, not
+  // state: this is a latch the effect below reads and sets, and a re-render
+  // on flipping it would buy nothing.
+  const centredOnPlayerRef = useRef(false);
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const trackingState = useSampleTracking();
@@ -103,7 +113,7 @@ export function MapScreen() {
   // so `user` is already resolved by the time it mounts, but the `null`
   // fallback keeps useFogLayer's own contract honest for the type.
   useFogLayer(mapInstance, trackingState.revealVersion, user?.id ?? null);
-  useCityMaxBounds(mapInstance);
+  const city = useCityMaxBounds(mapInstance);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 8.3: "opening a marker leads to the [bar] detail" screen.
   useBarMarkers(mapInstance, discoveredBars, (bar) => navigate(`/bars/${bar.id}`));
@@ -148,7 +158,7 @@ export function MapScreen() {
     const map = new maplibregl.Map({
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
-      center: centerFromSearchParams(searchParams) ?? INITIAL_CENTER,
+      center: urlCenterRef.current ?? INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
@@ -171,11 +181,78 @@ export function MapScreen() {
     // centerFromSearchParams above.
   }, []);
 
+  // Section 8.3: the map opens on the city, then moves to the player once
+  // their device has produced a fix - once per mount, so it never fights
+  // whoever is panning the map afterwards. jumpTo rather than flyTo: the
+  // screen has just opened and an animation away from the city centre reads
+  // as a glitch rather than as help. The zoom is left alone.
+  //
+  // Only for a player who is actually inside the playable grid. Centring on
+  // one who is not shows them an empty map - the extract covers nothing
+  // there, MapLibre requests no tiles and reports no error, and the result
+  // is indistinguishable from a fully fogged city (the same failure
+  // centerFromSearchParams's own comment above describes).
+  //
+  // The city metadata and the first fix arrive independently and in either
+  // order, so this waits for both rather than assuming one comes first. The
+  // first fix that can be judged decides, and consumes the latch whether or
+  // not it moved the map: someone opening the app on a train approaching the
+  // city would otherwise have the map yanked out from under them minutes
+  // later, mid-pan, which is what "never automatically again" rules out. The
+  // "to my location" control below covers the arriving player as an explicit
+  // action instead.
+  useEffect(() => {
+    const position = trackingState.lastPosition;
+    if (!mapInstance || !city || !position) {
+      return;
+    }
+    if (centredOnPlayerRef.current || urlCenterRef.current !== null) {
+      return;
+    }
+    centredOnPlayerRef.current = true;
+    const cell = toCell(position.lat, position.lon, {
+      origin_lat: city.originLat,
+      origin_lon: city.originLon,
+      grid_width: city.gridWidth,
+      grid_height: city.gridHeight,
+      cell_size_m: city.cellSizeM,
+    });
+    if (cell === null) {
+      return;
+    }
+    mapInstance.jumpTo({ center: [position.lon, position.lat] });
+  }, [mapInstance, city, trackingState.lastPosition]);
+
+  // Section 8.3's "to my location" control. flyTo, not jumpTo: unlike the
+  // automatic centring above this is an explicit request, so the animation
+  // is what tells the player where they were taken from. It honours a
+  // position outside the grid for the same reason - the pan limit
+  // (useCityMaxBounds) then simply stops the map at the city's edge.
+  function handleGoToMyLocation() {
+    const position = trackingState.lastPosition;
+    if (!mapInstance || !position) {
+      return;
+    }
+    mapInstance.flyTo({ center: [position.lon, position.lat] });
+  }
+
   return (
     <main className="screen screen--map">
       <BurgerMenu />
       <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
+      {/* Disabled rather than hidden while there is no fix yet: a control
+          that appears and disappears is harder to find than one that is
+          visibly inert. */}
+      <button
+        type="button"
+        className="map-locate"
+        aria-label="Go to my location"
+        disabled={trackingState.lastPosition === null}
+        onClick={handleGoToMyLocation}
+      >
+        <span aria-hidden="true">&#9678;</span>
+      </button>
       <PendingVisitBanner visits={visits.pendingVisits} outOfRangeVisitIds={outOfRangeVisitIds} />
       <CheckInPanel
         candidates={visits.checkInCandidates}

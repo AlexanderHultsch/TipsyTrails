@@ -3,12 +3,13 @@ import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { CONFIG } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { getLastKnownPosition } from '../tracking/lastKnownPosition.js';
 import { inkStyle } from './ink-style.js';
 import { useCityMaxBounds } from './useCityMaxBounds.js';
 
 // Same fallback view screens/Map.tsx uses (roughly the middle of
-// Karlsruhe's bounding box, Section 6.2) - there is no user location to
-// centre on until a pin is actually placed.
+// Karlsruhe's bounding box, Section 6.2), for when this session has no
+// known position to open at - see tracking/lastKnownPosition.ts.
 const INITIAL_CENTER: [number, number] = [8.4037, 49.0069];
 const INITIAL_ZOOM = 14;
 
@@ -45,10 +46,16 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
     const protocol = new Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
 
+    // Whoever is suggesting a bar is usually standing in front of it, so
+    // this opens at the last position the map screen accepted this session
+    // if there is one - read once at mount, the same one-time initial
+    // centre screens/Map.tsx takes from the URL.
+    const lastKnown = getLastKnownPosition();
+
     const map = new maplibregl.Map({
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
-      center: INITIAL_CENTER,
+      center: lastKnown ? [lastKnown.lon, lastKnown.lat] : INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,

@@ -237,7 +237,7 @@ describe('prefers-reduced-motion (SPEC.md Section 8.2/12)', () => {
 describe('minimum tap targets (SPEC.md Section 8.2)', () => {
   const css = readFileSync(CSS_PATH, 'utf-8');
 
-  it.each(['.burger-menu__button', '.tracking-indicator__button', '.bar-marker'])(
+  it.each(['.burger-menu__button', '.tracking-indicator__button', '.bar-marker', '.map-locate'])(
     '%s reserves at least 44px in both dimensions',
     (selector) => {
       const body = cssRuleBody(css, selector);
