@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.18
+**Version:** 1.19
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -765,7 +765,11 @@ This direction applies to the whole application, not only the map. Chrome, typog
 
 **Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
 
-**No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — burger menu, tracking icons, locate button, pending-visit banner, nearby-bars panel, notices, toasts, attribution — each positioned independently against the map container, and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears the panel along the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. The requirement is the rule, not the two fixes. Correcting today's two collisions individually leaves eight hand-tuned offsets that agree by coincidence, and the ninth overlay breaks them again — what the screen needs is a layout for its edges that positions the overlays relative to each other, so that adding one cannot put it on top of another.
+**No map overlay may obscure another.** The map screen carries nine overlays anchored to its edges — burger menu, tracking icons, locate button, pending-visit banner, bar sheet, nearby-bars panel, notices, toasts, attribution — and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears whatever occupies the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. That phrase means the guarantee holds in both states, not that empty space is reserved: with no banner the controls sit at the edge, and they move down when one appears.
+
+This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed — which is the sentence proving its own point, since the ninth overlay is exactly what a list of hand-tuned offsets cannot survive. The requirement is therefore the rule and never the individual fixes. Nine independently positioned overlays that agree by coincidence are not a layout: what the screen needs is one container laying its edges out as bands that claim their own space, so a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
+
+Two things follow that are worth stating because they are easy to lose. The container must let pointer events through to the map and take them back only on the overlays themselves, or the map stops responding to drags. And the bottom safe-area inset belongs to the layout, applied once, rather than being repeated by every child that happens to sit at that edge.
 
 **The map opens at street level.** The opening view is zoom **16** — a few blocks across, the scale at which a bar marker, the player's own position, and the 50 m grain of the fog are all legible and a player can act on what they see. It opened at zoom 12 before, a city overview: a whole city of fog with nothing in it to walk towards. The city as a whole already has a screen of its own (City overview, above), so the map does not have to be one too. Zooming out to `MAP_MIN_ZOOM` stays available and is unchanged. Like the zoom limits it sits beside, the opening zoom is a constant in `packages/shared/src/config.ts` and never a number at the call site (Section 0, rule 3).
 
@@ -1220,6 +1224,25 @@ These are consequences to design around, not reasons to reconsider:
 
 ## 15. Changelog
 
+### v1.19 — the map's edges become a layout
+
+The last item of the third feedback round. The map screen's overlays are no longer positioned
+one by one against the map; one container lays its edges out as bands, and a control at an edge
+cannot be placed on a bar at that edge because the bands claim their own space. Section 8.3
+records the rule, the pointer-events consequence and the single place the bottom safe-area
+inset belongs.
+
+The section's own list was out of date — it said eight overlays and predated the bar sheet of
+v1.17 — which is the sentence demonstrating exactly what it warns about: a set of hand-tuned
+offsets does not survive its ninth member. Corrected to nine, and the ambiguous "whether or not
+the bar it yields to is currently present" is pinned down to what it was meant to say: the
+guarantee holds in both states, and no empty space is reserved.
+
+A third collision nobody had listed turned up in the process. The attribution sat below the
+full-width bar along the bottom edge, so it was covered whenever the nearby panel or the bar
+sheet was on screen — and Section 10.5 requires it to be persistent and legible. It has a place
+in the bands now.
+
 ### v1.18 — a visit can be ended, and the banner stops lying about it
 
 The last two items of the third feedback round. `POST /api/visits/:id/cancel` acts only on the
@@ -1644,4 +1667,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.18*
+*End of specification v1.19*

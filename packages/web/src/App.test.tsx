@@ -2020,6 +2020,76 @@ describe('App', () => {
       ).not.toBeNull();
     });
 
+    // Section 8.3: "no map overlay may obscure another, and controls
+    // anchored to an edge must yield to any bar occupying that edge". The
+    // rule is enforced by the row layout in index.css, and stylesheet.test.ts
+    // checks that no overlay positions itself against the map any more - but
+    // that check is a text scan of a stylesheet and cannot see JSX. An
+    // overlay rendered outside the container silently falls back to its base
+    // positioning (the burger menu, straight back onto the banner) and the
+    // stylesheet check still passes, which is exactly the hole a mutation
+    // found: moving <BurgerMenu /> out of .map-overlays broke nothing.
+    //
+    // This is the other half. It asserts membership of the container, which
+    // is what the CSS contract is written against; it does not assert
+    // geometry, because jsdom computes none - every rect here is 0x0.
+    //
+    // The overlays that need state to appear (the pending-visit banner, the
+    // bar sheet, the nearby panel) are covered by the same rule but not by
+    // this render, so the sweep checks whatever is present and then requires
+    // that the always-present four were among them - a mistyped selector
+    // list then fails instead of iterating nothing and passing.
+    it('renders every map overlay inside the layout container, not against the map', async () => {
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/bars') {
+          return jsonResponse(200, { bars: [] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      stubGeolocation();
+      stubWakeLock();
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      const overlaySelectors = [
+        '.burger-menu',
+        '.tracking-indicator',
+        '.map-locate',
+        '.map-attribution',
+        '.pending-visit-banner',
+        '.bar-sheet',
+        '.nearby-bars-panel',
+        '.map-toast',
+        '.map-notice',
+      ];
+      const alwaysPresent = ['.burger-menu', '.tracking-indicator', '.map-locate'];
+
+      const found: string[] = [];
+      for (const selector of overlaySelectors) {
+        for (const element of container.querySelectorAll(selector)) {
+          found.push(selector);
+          expect(
+            element.closest('.map-overlays'),
+            `${selector} is rendered outside .map-overlays, so index.css cannot place it`,
+          ).not.toBeNull();
+        }
+      }
+
+      for (const selector of alwaysPresent) {
+        expect(
+          found,
+          `${selector} was not rendered, so this test proved nothing about it`,
+        ).toContain(selector);
+      }
+    });
+
     // Section 7.5 step 1: tapping a marker leads to that bar, where the
     // check-in action is offered - and it does so without leaving the map,
     // because screens/Map.tsx is the only place position tracking runs

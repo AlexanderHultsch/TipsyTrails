@@ -295,88 +295,114 @@ export function MapScreen() {
 
   return (
     <main className="screen screen--map">
-      <BurgerMenu />
-      <TrackingIndicator state={trackingState} />
       <div ref={containerRef} className="map-container" />
-      <LocateButton disabled={trackingState.lastPosition === null} onClick={handleGoToMyLocation} />
-      <PendingVisitBanner
-        visits={visits.pendingVisits}
-        outOfRangeVisitIds={outOfRangeVisitIds}
-        cancellingVisitId={visits.cancellingVisitId}
-        cancelError={visits.cancelError}
-        onCancel={(visitId) => void visits.cancelVisit(visitId)}
-      />
-      {/* Both bottom-edge overlays live in one stacking container rather
-          than being positioned against the map independently, so the sheet
-          cannot land on top of the panel (Section 8.3: "no map overlay may
-          obscure another"). */}
-      <div className="map-bottom">
-        {selectedBar !== null && (
-          <BarSheet
-            bar={selectedBar}
-            onSite={selectedBarOnSite}
-            hasPendingVisit={selectedBarHasPendingVisit}
-            checkingIn={visits.checkingIn}
-            checkInError={visits.checkInError}
-            onCheckIn={(barId) => void handleCheckIn(barId)}
-            onClose={() => {
-              setSelectedBarId(null);
-              visits.clearCheckInError();
-            }}
+      {/* Section 8.3, "no map overlay may obscure another": every overlay on
+          this screen sits in this one container, which lays them out as a
+          grid of rows over the map (index.css, .map-overlays) instead of
+          each of them being positioned against the map on its own. A row
+          owns its band of the screen, so a corner control cannot land on a
+          full-width bar - and an overlay added later goes into a row rather
+          than on top of everything. Each row is a wrapper element that is
+          always rendered, even when what it holds is not: the rows are what
+          the grid places, and an empty one simply has no height.
+          The nesting is load-bearing too - the container passes pointer
+          events through so the map stays draggable, and the overlays take
+          them back one level further in. */}
+      <div className="map-overlays">
+        <div className="map-overlays__top-bars">
+          <PendingVisitBanner
+            visits={visits.pendingVisits}
+            outOfRangeVisitIds={outOfRangeVisitIds}
+            cancellingVisitId={visits.cancellingVisitId}
+            cancelError={visits.cancelError}
+            onCancel={(visitId) => void visits.cancelVisit(visitId)}
           />
-        )}
-        <NearbyBarsPanel candidates={visits.checkInCandidates} />
+        </div>
+        {/* Section 8.4's burger menu is rendered here, inside the grid,
+            rather than left fixed to the viewport as it is on every other
+            screen - fixed, it would keep sitting on the banner above. This
+            is the same single menu every screen renders, moved, not a
+            second one; index.css says how it is released from `fixed`. */}
+        <div className="map-overlays__controls map-overlays__controls--top">
+          <TrackingIndicator state={trackingState} />
+          <BurgerMenu />
+        </div>
+        <div className="map-overlays__middle">
+          {tilesUnavailable && (
+            <div className="map-notice" role="status">
+              <p>
+                Map tiles aren&apos;t installed on this server yet. The rest of Tipsy Trails works
+                normally - only the map is affected.
+              </p>
+            </div>
+          )}
+          {/* Only when the extract is installed: a 503 from /tiles/ produces
+              both states at once, and the notice above is the one that names
+              the actual cause. The raw MapLibre message is shown rather than
+              hidden - a blank map is not diagnosable without it, and this is
+              the only place it is ever visible outside a browser console. */}
+          {!tilesUnavailable && mapError !== null && (
+            <div className="map-notice" role="alert">
+              <p>The map could not be loaded.</p>
+              <p className="map-notice__detail">{mapError}</p>
+            </div>
+          )}
+          {/* Phase 8 task brief, part C: a new account's first view of the
+              map is otherwise just fog and no markers, with nothing telling
+              them what to do next. Gone for good once the first bar is
+              discovered - discoveredBars only ever grows. */}
+          {discoveredBars.length === 0 && (
+            <div className="map-toast" role="status">
+              <p>No bars discovered yet - walk toward one to reveal it here.</p>
+            </div>
+          )}
+          {trackingState.lastNewCells !== null && trackingState.lastNewCells > 0 && (
+            <div className="map-toast" role="status">
+              <p>
+                Revealed {trackingState.lastNewCells} new area
+                {trackingState.lastNewCells === 1 ? '' : 's'}.
+              </p>
+            </div>
+          )}
+          {visits.justMastered.length > 0 && (
+            <div className="map-toast map-toast--mastered" role="status">
+              <p>{visits.justMastered.join(', ')} mastered.</p>
+              <p>Mastering is permanent - it stays even if a later visit expires.</p>
+            </div>
+          )}
+        </div>
+        <div className="map-overlays__controls map-overlays__controls--bottom">
+          <LocateButton
+            disabled={trackingState.lastPosition === null}
+            onClick={handleGoToMyLocation}
+          />
+          <a
+            className="map-attribution"
+            href="https://www.openstreetmap.org/copyright"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            © OpenStreetMap contributors
+          </a>
+        </div>
+        <div className="map-overlays__bottom-bars">
+          {selectedBar !== null && (
+            <BarSheet
+              bar={selectedBar}
+              onSite={selectedBarOnSite}
+              hasPendingVisit={selectedBarHasPendingVisit}
+              checkingIn={visits.checkingIn}
+              checkInError={visits.checkInError}
+              onCheckIn={(barId) => void handleCheckIn(barId)}
+              onClose={() => {
+                setSelectedBarId(null);
+                visits.clearCheckInError();
+              }}
+            />
+          )}
+          <NearbyBarsPanel candidates={visits.checkInCandidates} />
+        </div>
       </div>
-      {tilesUnavailable && (
-        <div className="map-notice" role="status">
-          <p>
-            Map tiles aren&apos;t installed on this server yet. The rest of Tipsy Trails works
-            normally - only the map is affected.
-          </p>
-        </div>
-      )}
-      {/* Only when the extract is installed: a 503 from /tiles/ produces
-          both states at once, and the notice above is the one that names
-          the actual cause. The raw MapLibre message is shown rather than
-          hidden - a blank map is not diagnosable without it, and this is
-          the only place it is ever visible outside a browser console. */}
-      {!tilesUnavailable && mapError !== null && (
-        <div className="map-notice" role="alert">
-          <p>The map could not be loaded.</p>
-          <p className="map-notice__detail">{mapError}</p>
-        </div>
-      )}
-      {/* Phase 8 task brief, part C: a new account's first view of the map
-          is otherwise just fog and no markers, with nothing telling them
-          what to do next. Gone for good once the first bar is discovered -
-          discoveredBars only ever grows. */}
-      {discoveredBars.length === 0 && (
-        <div className="map-toast" role="status">
-          <p>No bars discovered yet - walk toward one to reveal it here.</p>
-        </div>
-      )}
-      {trackingState.lastNewCells !== null && trackingState.lastNewCells > 0 && (
-        <div className="map-toast" role="status">
-          <p>
-            Revealed {trackingState.lastNewCells} new area
-            {trackingState.lastNewCells === 1 ? '' : 's'}.
-          </p>
-        </div>
-      )}
-      {visits.justMastered.length > 0 && (
-        <div className="map-toast map-toast--mastered" role="status">
-          <p>{visits.justMastered.join(', ')} mastered.</p>
-          <p>Mastering is permanent - it stays even if a later visit expires.</p>
-        </div>
-      )}
-      <a
-        className="map-attribution"
-        href="https://www.openstreetmap.org/copyright"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        © OpenStreetMap contributors
-      </a>
     </main>
   );
 }

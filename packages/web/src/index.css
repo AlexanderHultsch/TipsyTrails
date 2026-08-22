@@ -311,9 +311,10 @@ button:focus-visible,
   margin: 0;
 }
 
-/* Map screen (Section 8.3): the map owns the whole viewport beneath the
-   fixed burger menu, so this variant drops .screen's padding and gives the
-   map container something to fill via absolute positioning. */
+/* Map screen (Section 8.3): the map owns the whole viewport, so this variant
+   drops .screen's padding and gives the map container something to fill via
+   absolute positioning. Everything drawn on top of it - the burger menu of
+   Section 8.4 included - is laid out by .map-overlays below. */
 .screen--map {
   padding: 0;
   position: relative;
@@ -335,15 +336,135 @@ button:focus-visible,
   inset: 0;
 }
 
+/* Section 8.3, "No map overlay may obscure another". Every overlay on this
+   screen lives in this one container, and it lays them out as a grid of rows
+   over the map instead of each of them being positioned against the map on
+   its own:
+
+     row 1  full-width bars along the top     (the pending-visit banner)
+     row 2  top corner controls               (tracking icons, burger menu)
+     row 3  the flexible middle               (notices, toasts)
+     row 4  bottom corner controls            (locate, attribution)
+     row 5  full-width bars along the bottom  (the bar sheet, nearby panel)
+
+   A row claims its own space, so a corner control cannot land on a bar
+   whether or not that bar is on screen: with no banner, row 1 collapses to
+   nothing and the controls sit at the top edge; when a banner appears, the
+   row grows and the controls move down with it. That is what Section 8.3
+   asks for - a rule the edges enforce rather than two fixes. The ninth
+   overlay goes into a row instead of on top of everything, so it cannot
+   reintroduce the collision that a pile of hand-tuned offsets leaves open.
+
+   Rows are assigned explicitly rather than left to grid auto-placement:
+   rows 1 and 5 hold overlays that are absent most of the time, and
+   auto-placement would pull every later row up into the wrong band exactly
+   then.
+
+   The two bar rows may shrink below their content (`minmax(0, auto)`) and
+   scroll inside themselves. Rows cannot overlap, so on a short screen a long
+   banner and a tall bar sheet would otherwise push the bottom of the sheet -
+   the check-in action, Section 7.5 - past the bottom edge, where
+   .screen--map's `overflow: hidden` would simply cut it off.
+
+   z-index puts the container above everything drawn inside .map-container,
+   the own-position marker (z-index 4) included, and makes it a stacking
+   context so the overlays only ever stack against one another. */
+.map-overlays {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-rows: minmax(0, auto) auto minmax(0, 1fr) auto minmax(0, auto);
+  /* Section 8.2, phones with a home indicator: applied once, by the layout,
+     rather than repeated by every child that happens to sit at the bottom
+     edge. Rows 4 and 5 clear the inset because the container's content box
+     already does. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* The container covers the whole map, so it must not swallow drags. The
+     rows inherit this; the overlays inside them take pointer events back,
+     which is why every overlay sits exactly two levels deep. */
+  pointer-events: none;
+}
+
+.map-overlays > * > * {
+  pointer-events: auto;
+}
+
+.map-overlays__top-bars {
+  grid-row: 1;
+  overflow-y: auto;
+}
+
+.map-overlays__controls {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+/* Positioned so that the dropdowns these controls open - the burger panel
+   and the tracking explanation, both absolutely positioned against their own
+   control and hanging below it - paint over the rows underneath rather than
+   under them. */
+.map-overlays__controls--top {
+  grid-row: 2;
+  position: relative;
+  z-index: 2;
+  align-items: flex-start;
+}
+
+.map-overlays__middle {
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0 1rem;
+  overflow-y: auto;
+}
+
+.map-overlays__controls--bottom {
+  grid-row: 4;
+  align-items: flex-end;
+}
+
+.map-overlays__bottom-bars {
+  grid-row: 5;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* A row keeps its band and its contents keep their size: without this the
+   flex children would be squashed instead, and a row that scrolls is honest
+   about running out of space where a compressed one is not. */
+.map-overlays__middle > *,
+.map-overlays__bottom-bars > * {
+  flex: none;
+}
+
+/* Section 8.4 puts one burger menu, top right, on every authenticated
+   screen, and .burger-menu above fixes it to the viewport - right for the
+   screens that scroll under it. On the map it has to be part of the layout
+   instead: left fixed, it would keep sitting over row 1's banner exactly as
+   it did before, and no amount of grid would stop it. The map renders its
+   own instance, as every screen does, so this moves that element into row 2
+   rather than adding a second menu. `inset: auto` clears all four offsets in
+   one declaration, so no edge value survives the move; `relative` rather
+   than `static` because .burger-menu__panel is positioned against it. No
+   other screen matches this selector, so their fixed menu is untouched. */
+.map-overlays .burger-menu {
+  position: relative;
+  inset: auto;
+}
+
 /* Section 10.5: a persistent, legible OSM attribution in the map's bottom
    corner, present whether or not tiles loaded - rendered as an ordinary DOM
    element rather than left to MapLibre's own attribution control so it
-   never depends on the map or its sources having loaded successfully. */
+   never depends on the map or its sources having loaded successfully. Laid
+   out by row 4, at the opposite end from the locate button. */
 .map-attribution {
-  position: absolute;
-  right: 0.5rem;
-  bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
-  z-index: 5;
   padding: 0.25rem 0.5rem;
   background: rgba(244, 239, 230, 0.85);
   border-radius: 4px;
@@ -352,13 +473,12 @@ button:focus-visible,
 }
 
 /* Section 8.6: the GPS/connection/foreground-tracking indicator, always
-   visible on the map screen, top left so it doesn't collide with the
-   burger menu (Section 8.4, top right). */
+   visible on the map screen. Row 2's left-hand corner, with the burger menu
+   (Section 8.4) at the other end of the same row - it carries no offsets of
+   its own, the row places it. `relative` only so that the explanation panel
+   below is positioned against this block rather than against the screen. */
 .tracking-indicator {
-  position: absolute;
-  top: 1rem;
-  left: 1rem;
-  z-index: 10;
+  position: relative;
 }
 
 /* One button holding all three icons, not three buttons: one tap target,
@@ -419,6 +539,10 @@ button:focus-visible,
   color: var(--color-status-bad);
 }
 
+/* Against the control above, not against the map: it hangs below the icons
+   that opened it. On a narrow screen it reaches across under the burger
+   menu at the other end of row 2, and the z-index is what keeps it above
+   that button (.burger-menu carries 10) while it is open. */
 .tracking-indicator__panel {
   position: absolute;
   top: calc(100% + 0.5rem);
@@ -459,17 +583,16 @@ button:focus-visible,
   margin-top: 1rem;
 }
 
-/* Section 8.3's "to my location" control, bottom left so it clears the
-   burger menu (top right), the tracking indicator (top left), the toasts
-   (bottom centre) and the attribution (bottom right). Same ink-on-paper
+/* Section 8.3's "to my location" control. It sits in row 4's left-hand
+   corner and clears the bars along the bottom edge because that row is above
+   them, not because of an offset chosen to miss them. Same ink-on-paper
    treatment and 44px tap target as .tracking-indicator__button, and the
    same disabled treatment as .button:disabled - it stays in place while
-   there is no fix yet rather than appearing once one arrives. */
+   there is no fix yet rather than appearing once one arrives.
+   Unpositioned here on purpose: the picker on Suggest a bar has no row
+   layout to place it, so `.map-picker .map-locate` below positions it
+   there. */
 .map-locate {
-  position: absolute;
-  left: 1rem;
-  bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
-  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -490,12 +613,10 @@ button:focus-visible,
   cursor: not-allowed;
 }
 
+/* Row 3, at its bottom edge: directly above the corner controls of row 4 and
+   the bars of row 5, never on them. */
 .map-toast {
-  position: absolute;
-  bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
+  max-width: 100%;
   padding: 0.5rem 1rem;
   background: rgba(244, 239, 230, 0.9);
   border: 1px solid var(--color-border);
@@ -507,13 +628,13 @@ button:focus-visible,
   margin: 0;
 }
 
+/* Also row 3, and the auto margins are what centre it in the band the row
+   leaves free - the toasts keep the bottom of that band. A margin, not an
+   offset against the map: the notice is still inside the row and still
+   cannot reach the bars at either edge. */
 .map-notice {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 5;
-  max-width: 22rem;
+  margin-block: auto;
+  max-width: min(22rem, 100%);
   padding: 1.25rem 1.5rem;
   background: var(--color-paper);
   border: 1px solid var(--color-border);
@@ -548,16 +669,13 @@ button:focus-visible,
 }
 
 /* Section 7.5's transparency requirements: the pending-visit banner, shown
-   persistently at the top of the screen. Full-width, below the burger menu
-   and tracking indicator rows (Section 8.4/8.6) rather than overlapping
-   them. */
+   persistently at the top of the screen. It occupies row 1, the full-width
+   bar along the top edge, and the top corner controls (Section 8.4/8.6) sit
+   in row 2 underneath it - so the 4rem of padding this rule used to carry to
+   duck under those controls is gone with the offsets that made it necessary.
+   The row is full width, so the banner is too. */
 .pending-visit-banner {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  z-index: 6;
-  padding: 4rem 1rem 0.75rem;
+  padding: 0.75rem 1rem;
   background: rgba(244, 239, 230, 0.95);
   border-bottom: 1px solid var(--color-border);
   text-align: left;
@@ -624,32 +742,10 @@ button:focus-visible,
   margin: 0.5rem 0 0;
 }
 
-/* Section 8.3, "no map overlay may obscure another": the two full-width
-   overlays along the bottom edge - the bar sheet (Section 7.5's check-in
-   surface) and the nearby-bars panel - stack inside one container instead of
-   each being positioned against the map on its own, so opening the sheet
-   pushes the panel down rather than covering it. Pointer events are handed
-   to the children only: the container spans the width of the screen even
-   when both are absent, and the map underneath has to stay draggable there. */
-.map-bottom {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 6;
-  display: flex;
-  flex-direction: column;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  pointer-events: none;
-}
-
-.map-bottom > * {
-  pointer-events: auto;
-}
-
 /* Section 7.5 step 1: the sheet a bar's marker opens, carrying the check-in
-   action for that one named bar. Bottom-anchored for thumb reach, like the
-   affordance it replaces. */
+   action for that one named bar. Row 5, above the nearby panel: bottom-
+   anchored for thumb reach, like the affordance it replaces, and stacked
+   with the panel rather than over it. */
 .bar-sheet {
   padding: 0.75rem 1rem;
   background: rgba(244, 239, 230, 0.98);
@@ -1265,12 +1361,15 @@ button:focus-visible,
 /* The same control (components/LocateButton.tsx) inside the suggest
    screen's picker - only its corner differs. The picker's bottom edge
    already carries .map-picker__status across its full width, so it sits in
-   the free top-right one instead of the bottom left the map screen uses. */
+   the free top-right one instead of the bottom left the map screen uses.
+   This is where the button is positioned at all: .map-locate itself carries
+   no positioning, because on the map screen the overlay rows place it. This
+   picker has one map, one status line and one control and no rows to place
+   them with, so here it is positioned against the picker. */
 .map-picker .map-locate {
+  position: absolute;
   top: 0.5rem;
   right: 0.5rem;
-  bottom: auto;
-  left: auto;
 }
 
 /* Above .own-position-marker's z-index: 4. Centring on yourself and then
