@@ -483,7 +483,7 @@ describe('fog state offline', () => {
   // account, on the same device, see the first account's revealed-cells
   // mask before its own GET /api/fog succeeded. These two tests exercise
   // the real scenario end to end - not just fog-cache.ts's own unit tests
-  // - through the full App, including the burger menu's actual "Log out".
+  // - through the full App, including the More sheet's actual "Log out".
   it("never shows one user's cached fog mask to a different account, even while that account is offline", async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
@@ -542,7 +542,7 @@ describe('fog state offline', () => {
     expect(mapInstances[0]?.container.querySelector('canvas.fog-canvas-fallback')).toBeNull();
   });
 
-  it("logging out via the burger menu clears that user's cached fog mask from localStorage", async () => {
+  it("logging out via the More sheet clears that user's cached fog mask from localStorage", async () => {
     stubFetch((url, init) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser({ id: 1 });
@@ -576,13 +576,11 @@ describe('fog state offline', () => {
     expect(mapInstances[0]?.container.querySelector('canvas.fog-canvas-fallback')).not.toBeNull();
     expect(window.localStorage.getItem('tipsytrails:fog-cache:1')).not.toBeNull();
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
-    const logoutButton = Array.from(container.querySelectorAll('.burger-menu__panel button')).find(
-      (button) => button.textContent === 'Log out',
-    ) as HTMLButtonElement;
+    const logoutButton = container.querySelector('.more-sheet__logout') as HTMLButtonElement;
 
     await act(async () => {
       logoutButton.click();

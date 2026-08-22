@@ -10,7 +10,7 @@ import {
   updateAdminBar,
 } from '../api/client.js';
 import type { AdminBar, AdminUser } from '../api/types.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 type SourceFilter = 'all' | 'osm' | 'community' | 'admin';
 
@@ -218,7 +218,7 @@ export function Admin() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content admin">
         <h1>Admin</h1>
 

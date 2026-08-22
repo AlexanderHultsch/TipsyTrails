@@ -409,7 +409,11 @@ describe('minimum tap targets (SPEC.md Section 8.2)', () => {
   const css = readFileSync(CSS_PATH, 'utf-8');
 
   it.each([
-    '.burger-menu__button',
+    // Section 8.4's tab bar replaced the burger menu's single icon button
+    // with five targets sharing a phone's width, which is where 44px is
+    // squeezed hardest - the label under each icon is what makes the height,
+    // and a narrower bar is what a fifth tab would tempt someone into.
+    '.bottom-nav__tab',
     '.tracking-indicator__button',
     '.bar-marker',
     '.map-locate',

@@ -6,7 +6,7 @@ import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { BarSheet } from '../components/BarSheet.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 import { LocateButton } from '../components/LocateButton.js';
 import { NearbyBarsPanel } from '../components/NearbyBarsPanel.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
@@ -318,14 +318,11 @@ export function MapScreen() {
             onCancel={(visitId) => void visits.cancelVisit(visitId)}
           />
         </div>
-        {/* Section 8.4's burger menu is rendered here, inside the grid,
-            rather than left fixed to the viewport as it is on every other
-            screen - fixed, it would keep sitting on the banner above. This
-            is the same single menu every screen renders, moved, not a
-            second one; index.css says how it is released from `fixed`. */}
+        {/* The owner's specification for the tab bar, section 1: the status
+            indicator cluster stays exactly where it is. It is alone in this
+            row now that the burger menu it shared it with is gone. */}
         <div className="map-overlays__controls map-overlays__controls--top">
           <TrackingIndicator state={trackingState} />
-          <BurgerMenu />
         </div>
         <div className="map-overlays__middle">
           {tilesUnavailable && (
@@ -403,6 +400,16 @@ export function MapScreen() {
           <NearbyBarsPanel candidates={visits.checkInCandidates} />
         </div>
       </div>
+      {/* Deliberately outside .map-overlays, and it is the one element on
+          this screen that is. The tab bar is not a map overlay: it is app
+          chrome that every signed-in screen carries, and it sits below the
+          overlay grid rather than in it. .map-overlays reserves its height
+          (index.css, --bottom-nav-space), so row 4's attribution - Section
+          10.5, which requires it persistently visible and legible - is above
+          the bar rather than behind it. Put inside the grid instead, the bar
+          would be a sixth row that only the map has, and it would move with
+          the rows above it. */}
+      <BottomNav />
     </main>
   );
 }

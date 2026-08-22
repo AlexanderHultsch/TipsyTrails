@@ -556,11 +556,13 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
     });
     await flush();
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    // Section 8.4: "Suggest a bar" moved from the burger menu into the More
+    // sheet the tab bar opens. Same journey, one surface further in.
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
-    const suggestLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+    const suggestLink = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
       (entry) => entry.textContent === 'Suggest a bar',
     ) as HTMLAnchorElement;
     await act(async () => {
@@ -600,13 +602,13 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
 
     expect(getLastKnownPosition()).not.toBeNull();
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
-    const logoutButton = Array.from(container.querySelectorAll('.burger-menu__panel button')).find(
-      (entry) => entry.textContent === 'Log out',
-    ) as HTMLButtonElement;
+    // Section 8.4 keeps Log out in the sheet and sets it apart from the
+    // navigation above it; `.more-sheet__logout` is that separation.
+    const logoutButton = container.querySelector('.more-sheet__logout') as HTMLButtonElement;
     await act(async () => {
       logoutButton.click();
       await new Promise((resolve) => setTimeout(resolve, 0));

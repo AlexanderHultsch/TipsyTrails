@@ -1,12 +1,12 @@
 import { Link } from 'react-router-dom';
 import { DERIVED } from '@tipsytrails/shared';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 import { usePushSubscription } from '../tracking/usePushSubscription.js';
 
 const REQUIRED_MINUTES = Math.round(DERIVED.VISIT_REQUIRED_S / 60);
 
 // Section 7.5's transparency requirements: a short, honest explanation of
-// the actual mechanic, reachable from the burger menu at any time and
+// the actual mechanic, reachable from the More sheet at any time and
 // shown automatically once after the first check-in
 // (tracking/masteringExplainer.ts, wired up from screens/Map.tsx). Phase 5
 // step 5 adds the push opt-in here rather than on Settings (where SPEC.md
@@ -18,7 +18,7 @@ export function HowMasteringWorks() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content how-it-works">
         <h1>How mastering works</h1>
         <p>

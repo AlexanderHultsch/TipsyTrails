@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError, getDistrictBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeature, BoundaryFeatureCollection } from '../api/geo-types.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 import { centerOfGeometry, pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
 import { computeBoundingBox, createProjector } from '../geo/project.js';
 
@@ -107,7 +107,7 @@ export function DistrictOverview() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content">
         <h1>Districts</h1>
         {loading && <p role="status">Loading districts…</p>}

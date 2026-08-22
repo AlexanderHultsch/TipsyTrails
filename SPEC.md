@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.21
+**Version:** 1.22
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -672,7 +672,7 @@ Because completion needs only *two* valid samples 20 minutes apart, the app does
 - Explicit wording of what is needed, matching the state the visit is actually in. On site: *"Open Tipsy Trails again while you're still here to complete this visit."* Away from the bar, the instruction is the opposite one — return to the bar and open the app there to finish — and the on-site wording is replaced by it rather than shown alongside it. A banner that says a player has moved away and, directly beneath, tells them to stay where they are is not guidance; it is two sentences that cannot both be true.
 - A Web Push notification at `VISIT_PUSH_AFTER_MS`, dispatched by the maintenance job (Section 7.9) and recorded in `push_sent_at` so it fires at most once per visit, and only while the visit is still `pending`.
 - If a sample arrives out of range, show *"You've moved away from {bar} — your visit is still pending"* rather than silently failing, and switch that visit's guidance to the return-to-finish wording of the bullet above.
-- A short "How mastering works" explainer is reachable from the burger menu and shown once after the first check-in. "Shown once" is client-side state in `localStorage`; no server column for it.
+- A short "How mastering works" explainer is reachable from the More sheet (Section 8.4) and shown once after the first check-in. "Shown once" is client-side state in `localStorage`; no server column for it.
 
 Multiple simultaneous pending visits are allowed (adjacent bars); each is evaluated independently. At most one pending visit per bar (Section 5.7).
 
@@ -765,7 +765,7 @@ This direction applies to the whole application, not only the map. Chrome, typog
 
 **Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
 
-**No map overlay may obscure another.** The map screen carries nine overlays anchored to its edges — burger menu, tracking icons, locate button, pending-visit banner, bar sheet, nearby-bars panel, notices, toasts, attribution — and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears whatever occupies the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. That phrase means the guarantee holds in both states, not that empty space is reserved: with no banner the controls sit at the edge, and they move down when one appears.
+**No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — tracking icons, locate button, pending-visit banner, bar sheet, nearby-bars panel, notices, toasts, attribution — with Section 8.4's tab bar fixed below them, outside the overlay layout and clearing it rather than competing with it — and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears whatever occupies the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. That phrase means the guarantee holds in both states, not that empty space is reserved: with no banner the controls sit at the edge, and they move down when one appears.
 
 This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed — which is the sentence proving its own point, since the ninth overlay is exactly what a list of hand-tuned offsets cannot survive. The requirement is therefore the rule and never the individual fixes. Nine independently positioned overlays that agree by coincidence are not a layout: what the screen needs is one container laying its edges out as bands that claim their own space, so a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
 
@@ -777,7 +777,13 @@ Two things follow that are worth stating because they are easy to lose. The cont
 
 ### 8.4 Navigation
 
-A single burger menu, top right, on every authenticated screen. Contents: Map, Districts, Leaderboard, Profile, Suggest a bar, Settings, Admin (admins only), Log out. No bottom tab bar, no other persistent chrome — the map should own the screen.
+A persistent bottom tab bar on every signed-in screen, with five tabs in this order: **Cities**, **Map**, **Ranks**, **Profile**, **More**. Map sits in the middle and carries the primary visual weight — a larger icon and a heavier label — because the fog-clearing loop is the reason the rest of the app exists. It is not given the accent colour: Section 8.1 reserves that for the player's position and for active states, and a tab that is permanently accented would leave "which tab am I on?" without a colour of its own. The current tab is marked three ways — colour, weight, and `aria-current` — because Section 8.1 forbids the accent being the only carrier of meaning.
+
+**More opens a sheet, not a page.** It has no URL and no history entry, and it carries the secondary destinations in this order: Suggest a bar, How mastering works, Settings, Privacy, Admin (admins only, the same visibility rule as everything else admin), and then, separated by a divider and styled apart from the navigation above it, Log out. Log out is the one item in the sheet that is not navigation, and it is set apart by more than colour for the same reason the active tab is.
+
+**This reverses a decision this specification made.** Until v1.22 this section read "A single burger menu, top right … No bottom tab bar, no other persistent chrome — the map should own the screen." That was a defensible reading of a map-first app, and it is not being corrected as an error: the owner's judgement is that a mobile-native bottom bar makes the app's own structure visible at a glance, where a flat eleven-item dropdown behind an icon made every destination equally hidden. The map still owns the screen everywhere above the bar.
+
+**The bar is signed-in chrome, and that has a consequence worth stating.** Two of its five tabs need a session to mean anything — Profile addresses the player's own handle, and the sheet's Log out needs a session to end — so the bar does not render for a signed-out reader. `/privacy` is the one route outside the auth gate that a signed-out reader is sent to (Register links it), and in the installed PWA there is no browser chrome to go back with, so that screen carries a back link of its own when there is no user. The burger menu used to serve that role incidentally; removing it without replacing it would have walled a reader into the privacy page.
 
 ### 8.5 Avatars
 
@@ -955,7 +961,7 @@ No automatic synchronisation in v1. Re-running the import script produces a diff
 
 ### 11.3 Community submissions
 
-Users submit via the burger menu: a map picker to place the pin (mandatory — this is how position is set, not geocoding), plus name and address.
+Users submit via the More sheet (Section 8.4): a map picker to place the pin (mandatory — this is how position is set, not geocoding), plus name and address.
 
 Submitted bars go live **immediately** for all users, with `source = 'community'`, and are rendered with a small distinguishing marker in list and detail views. The admin can edit, hide, or delete them afterwards.
 
@@ -1027,7 +1033,7 @@ Scaffold monorepo, Docker Compose (Caddy + API), SQLite with migration runner, h
 
 ### Phase 1 — Accounts
 
-Registration, login, logout, sessions, security-question password reset, forced admin password change, age gate, settings skeleton, burger menu, deterministic avatars.
+Registration, login, logout, sessions, security-question password reset, forced admin password change, age gate, settings skeleton, the navigation chrome (a burger menu then; Section 8.4's tab bar since v1.22), deterministic avatars.
 
 **Definition of Done**
 - [ ] A user can register, log out, and log back in on a phone
@@ -1098,7 +1104,7 @@ Visit creation, presence evaluation, 20-minute rule, expiry, pending banner, mai
 - [x] A visit expires after 6 hours and the user can immediately check in again
 - [x] Expiry is correct after an API restart that skipped several maintenance ticks
 - [x] Mastered status is permanent and survives visit expiry of later visits
-- [x] The explainer is reachable from the burger menu and appears once after the first check-in
+- [x] The explainer is reachable from the More sheet and appears once after the first check-in
 
 ### Phase 6 — Progress, Leaderboard, Badges
 
@@ -1133,7 +1139,7 @@ Suggest-a-bar with map picker, duplicate guard, community marker, admin area.
 - [x] Community bars carry a visible distinguishing marker — `packages/web/src/App.community.test.tsx`, describe `community marker`: `shows a community bar marker distinctly from an OSM bar marker`
 - [x] Submissions within 25 m of a similarly named active bar are rejected with a message naming the conflict — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `rejects a near-duplicate within SUGGEST_DUPLICATE_RADIUS_M, naming the conflicting bar`
 - [x] The submitter immediately has the bar as discovered — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `creates a community bar that appears immediately in GET /api/bars for the submitter, discovered` (asserts the `bar_discoveries` row exists for the submitter)
-- [x] The admin section is visible in the burger menu only for admins, and admin endpoints return 403 otherwise — `packages/web/src/App.community.test.tsx`, describe `admin menu visibility`: `hides the Admin entry from the burger menu for a non-admin user`, `shows the Admin entry in the burger menu for an admin user`; `packages/api/src/routes/admin.test.ts`, describe `admin guard`: `returns 403 for a logged-in non-admin at $method $url` (parameterised over every `/api/admin/*` route)
+- [x] The admin section is visible in the More sheet only for admins, and admin endpoints return 403 otherwise — `packages/web/src/App.community.test.tsx`, describe `admin menu visibility`: `hides the Admin entry from the More sheet for a non-admin user`, `shows the Admin entry in the More sheet for an admin user`; `packages/api/src/routes/admin.test.ts`, describe `admin guard`: `returns 403 for a logged-in non-admin at $method $url` (parameterised over every `/api/admin/*` route)
 - [x] The admin can create, edit, hide, and delete bars; moving a bar recomputes cell and district; deletion cascades cleanly — `packages/api/src/routes/admin.test.ts`: describe `POST /api/admin/bars`: `creates a bar directly, active, source=admin, submitted by the admin`; describe `PATCH /api/admin/bars/:id`: `edits name, address, and status`, `recomputes cell_index and district_id to the values the projection gives for the new position`; describe `DELETE /api/admin/bars/:id`: `deletes a bar with discoveries and visits, cascading both away`; describe `hiding a bar and player-facing endpoints`: `a hidden bar vanishes from GET /api/bars for a player who had discovered it`
 - [x] Submission rate limits are enforced — `packages/api/src/routes/bars.test.ts`, describe `POST /api/bars/suggest`: `enforces the suggest rate limit`
 
@@ -1233,6 +1239,35 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.22 — the burger menu becomes a bottom tab bar
+
+The owner's redesign, and the first change in this document to reverse one of its own explicit
+refusals. Section 8.4 said "No bottom tab bar, no other persistent chrome — the map should own
+the screen." It now specifies exactly that bar. The old rule was a defensible reading of a
+map-first app rather than a mistake; what changed is the judgement that a flat eleven-item
+dropdown behind an icon made every destination equally hidden, where five tabs make the app's
+structure visible without being opened. The map still owns everything above the bar.
+
+Five tabs — Cities, Map, Ranks, Profile, More — with Map in the middle carrying the primary
+weight, and the secondary destinations behind a More sheet that has no URL and no history entry.
+"Ranks" renames the destination and not merely the tab: a tab leading to a page headed
+something else is a navigation defect, not a shorter label. The route `/leaderboard` is
+unchanged, because renaming it would break existing links for nothing a reader can see.
+
+One consequence had to be designed rather than discovered. The bar is signed-in chrome — Profile
+needs the player's own handle, Log out needs a session — so it cannot render for a signed-out
+reader, and `/privacy` is the one route outside the auth gate that a signed-out reader is sent
+to. The burger menu had been that reader's only way back, incidentally rather than by design, and
+in the installed PWA there is no browser chrome behind it. That screen now carries its own back
+link when there is no user, and a test pins it: removing the old menu without this would have
+walled a reader into the privacy page with no way out.
+
+Section 8.3's overlay count drops from nine to eight — the burger menu was one of them — and the
+tab bar sits below the overlay layout rather than inside it, so Section 10.5's attribution stays
+persistently visible above the bar rather than behind it. The bottom safe-area inset moved with
+the bar: it is declared once, as a token, and everything that has to clear the bar reads that
+token rather than repeating `env()` and double-counting the gap.
 
 ### v1.21 — the admin bar list is alphabetical, in German
 
@@ -1737,4 +1772,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.21*
+*End of specification v1.22*

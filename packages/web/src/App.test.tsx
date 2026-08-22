@@ -525,7 +525,7 @@ describe('App', () => {
     );
   });
 
-  it('opens the burger menu with exactly the Phase 1, 2, 5, 6, 7 and 8 destinations, and closes it on Escape', async () => {
+  it('shows exactly the five tabs of Section 8.4, with the More sheet carrying the rest and closing on Escape', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(200, {
@@ -542,21 +542,27 @@ describe('App', () => {
 
     await renderApp('/app');
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
-    expect(menuButton).not.toBeNull();
-    expect(container.querySelector('.burger-menu__panel')).toBeNull();
+    // Section 8.4 fixes the order as well as the set: Cities, Map, Ranks,
+    // Profile, More, left to right, with Map in the middle carrying the
+    // primary weight. Asserted as a list rather than as five separate
+    // lookups, so a reordering fails here.
+    const tabs = container.querySelectorAll('.bottom-nav__tab');
+    expect(Array.from(tabs).map((tab) => tab.textContent)).toEqual([
+      'Cities',
+      'Map',
+      'Ranks',
+      'Profile',
+      'More',
+    ]);
 
+    expect(container.querySelector('.more-sheet__panel')).toBeNull();
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
 
-    const entries = container.querySelectorAll('.burger-menu__panel a, .burger-menu__panel button');
+    const entries = container.querySelectorAll('.more-sheet__panel a, .more-sheet__panel button');
     expect(Array.from(entries).map((entry) => entry.textContent)).toEqual([
-      'Map',
-      'City',
-      'Districts',
-      'Leaderboard',
-      'Profile',
       'Suggest a bar',
       'How mastering works',
       'Settings',
@@ -568,10 +574,48 @@ describe('App', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });
 
-    expect(container.querySelector('.burger-menu__panel')).toBeNull();
+    expect(container.querySelector('.more-sheet__panel')).toBeNull();
   });
 
-  it('does not render the burger menu on signed-out screens', async () => {
+  // Two things the tab list above cannot see, and both survived a mutation
+  // until this test existed: which tab reports itself current, and where the
+  // Profile tab actually points.
+  //
+  // /app belongs to no tab - it is not one of the four destinations - so the
+  // honest answer here is "none", and that is what makes this test bite. A
+  // derivation that fell back to a default (say, treating anything unmatched
+  // as the Map tab) would light a tab the reader is not on, which is worse
+  // than lighting none: it is a wrong answer to "where am I?" rather than a
+  // missing one.
+  it('marks no tab current on a screen that belongs to none, and points Profile at the signed-in user', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return jsonResponse(200, {
+          id: 7,
+          username: 'alice',
+          avatarSeed: 'seed',
+          isAdmin: false,
+          isAnonymous: false,
+          mustChangePassword: false,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/app');
+
+    expect(container.querySelectorAll('.bottom-nav [aria-current]')).toHaveLength(0);
+
+    // The handle is the signed-in user's own, not a fixed string: this tab is
+    // "my profile", and pointing it at anyone else sends every player to the
+    // same stranger.
+    const profileTab = Array.from(container.querySelectorAll('.bottom-nav a')).find(
+      (tab) => tab.textContent?.trim() === 'Profile',
+    ) as HTMLAnchorElement;
+    expect(profileTab.getAttribute('href')).toBe('/profile/player-7');
+  });
+
+  it('does not render the tab bar on signed-out screens', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
@@ -581,7 +625,7 @@ describe('App', () => {
 
     await renderApp('/');
 
-    expect(container.querySelector('.burger-menu')).toBeNull();
+    expect(container.querySelector('.bottom-nav')).toBeNull();
   });
 
   it('renders the avatar as an inline svg, with identical markup for the same seed across renders', async () => {
@@ -924,11 +968,11 @@ describe('App', () => {
     const mapInstance = mapInstances[0];
     expect(mapInstance.remove).not.toHaveBeenCalled();
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const menuButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
       menuButton.click();
     });
-    const settingsLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+    const settingsLink = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
       (entry) => entry.textContent === 'Settings',
     ) as HTMLAnchorElement;
 
@@ -1752,11 +1796,11 @@ describe('App', () => {
       expect(geo.watchPosition).toHaveBeenCalledTimes(1);
       expect(wakeLock.request).toHaveBeenCalledWith('screen');
 
-      const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+      const menuButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
       act(() => {
         menuButton.click();
       });
-      const settingsLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+      const settingsLink = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
         (entry) => entry.textContent === 'Settings',
       ) as HTMLAnchorElement;
 
@@ -2026,7 +2070,7 @@ describe('App', () => {
     // checks that no overlay positions itself against the map any more - but
     // that check is a text scan of a stylesheet and cannot see JSX. An
     // overlay rendered outside the container silently falls back to its base
-    // positioning (the burger menu, straight back onto the banner) and the
+    // positioning (the attribution, straight back onto the bottom bar) and the
     // stylesheet check still passes, which is exactly the hole a mutation
     // found: moving <BurgerMenu /> out of .map-overlays broke nothing.
     //
@@ -2059,7 +2103,6 @@ describe('App', () => {
       await renderMapWithFakeTimers();
 
       const overlaySelectors = [
-        '.burger-menu',
         '.tracking-indicator',
         '.map-locate',
         '.map-attribution',
@@ -2069,7 +2112,7 @@ describe('App', () => {
         '.map-toast',
         '.map-notice',
       ];
-      const alwaysPresent = ['.burger-menu', '.tracking-indicator', '.map-locate'];
+      const alwaysPresent = ['.tracking-indicator', '.map-locate', '.map-attribution'];
 
       const found: string[] = [];
       for (const selector of overlaySelectors) {

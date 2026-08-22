@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ApiError, getBar, getCity } from '../api/client.js';
 import type { Bar } from '../api/types.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 // Section 8.3's bar detail row: name, address, district, mastered status, a
 // community tag when applicable, and a Check in button. Mastered status and
@@ -69,7 +69,7 @@ export function BarDetail() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content bar-detail">
         {loading && <p role="status">Loading…</p>}
         {error && (

@@ -1248,7 +1248,7 @@ describe('check-in and mastering', () => {
     expect(container.querySelector('h1')?.textContent).not.toBe('How mastering works');
   });
 
-  it('is reachable from the burger menu on the map screen regardless of check-in state', async () => {
+  it('is reachable from the More sheet on the map screen regardless of check-in state', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -1267,12 +1267,12 @@ describe('check-in and mastering', () => {
 
     await renderMap();
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
 
-    const explainerLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+    const explainerLink = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
       (entry) => entry.textContent === 'How mastering works',
     ) as HTMLAnchorElement;
     expect(explainerLink).not.toBeUndefined();

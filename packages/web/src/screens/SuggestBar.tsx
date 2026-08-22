@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, suggestBar } from '../api/client.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 import { MapPicker } from '../map/MapPicker.js';
 import type { PickedPosition } from '../map/MapPicker.js';
 
@@ -47,7 +47,7 @@ export function SuggestBar() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content suggest-bar">
         <h1>Suggest a bar</h1>
         <p>Tap the map to place a pin at the bar&apos;s exact location.</p>

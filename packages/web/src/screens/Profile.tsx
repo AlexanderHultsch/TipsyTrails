@@ -5,7 +5,7 @@ import { ApiError, getProfile } from '../api/client.js';
 import type { BadgeKind, ProfileResponse } from '../api/types.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 const PROGRESS_PERIODS: readonly BadgePeriod[] = ['week', 'month', 'year'];
 
@@ -65,7 +65,7 @@ export function Profile() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content profile">
         {loading && <p role="status">Loading profile…</p>}
         {error && (

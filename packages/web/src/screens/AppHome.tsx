@@ -1,6 +1,6 @@
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 // Authenticated placeholder. The map and the rest of the real screens
 // (districts, leaderboard, profile, ...) arrive in their own phases.
@@ -9,7 +9,7 @@ export function AppHome() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content screen__content--middle">
         {user && <Avatar seed={user.avatarSeed} />}
         <h1>Tipsy Trails</h1>

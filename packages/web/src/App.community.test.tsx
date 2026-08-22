@@ -347,7 +347,7 @@ describe('community marker', () => {
 });
 
 describe('admin menu visibility', () => {
-  it('hides the Admin entry from the burger menu for a non-admin user', async () => {
+  it('hides the Admin entry from the More sheet for a non-admin user', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser({ isAdmin: false });
@@ -356,18 +356,18 @@ describe('admin menu visibility', () => {
     });
 
     await renderApp('/settings');
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
 
-    const links = Array.from(container.querySelectorAll('.burger-menu__panel a')).map(
+    const links = Array.from(container.querySelectorAll('.more-sheet__panel a')).map(
       (link) => link.textContent,
     );
     expect(links).not.toContain('Admin');
   });
 
-  it('shows the Admin entry in the burger menu for an admin user', async () => {
+  it('shows the Admin entry in the More sheet for an admin user', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser({ isAdmin: true });
@@ -376,12 +376,12 @@ describe('admin menu visibility', () => {
     });
 
     await renderApp('/settings');
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
 
-    const links = Array.from(container.querySelectorAll('.burger-menu__panel a')).map(
+    const links = Array.from(container.querySelectorAll('.more-sheet__panel a')).map(
       (link) => link.textContent,
     );
     expect(links).toContain('Admin');

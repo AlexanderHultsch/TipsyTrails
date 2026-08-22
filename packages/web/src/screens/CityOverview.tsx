@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError, getCityBoundary, getNeighbourBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeatureCollection } from '../api/geo-types.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 import { pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
 import { computeBoundingBox, createProjector } from '../geo/project.js';
 
@@ -89,7 +89,7 @@ export function CityOverview() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content">
         <h1>Karlsruhe</h1>
         {loading && <p role="status">Loading the city outline…</p>}

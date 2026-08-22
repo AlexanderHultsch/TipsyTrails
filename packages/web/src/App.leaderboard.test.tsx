@@ -68,16 +68,24 @@ async function click(element: Element) {
   });
 }
 
-function openBurgerMenu(): void {
-  const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
-  act(() => {
-    menuButton.click();
-  });
+// Section 8.4: navigation is a bottom tab bar plus a More sheet, so what used
+// to be one dropdown is now two surfaces. Which one a destination lives on is
+// part of what this change decided, so the tests reach for it the way a
+// player would rather than through one helper that searches both.
+async function navigateViaTab(label: string) {
+  const tab = Array.from(container.querySelectorAll('.bottom-nav a')).find(
+    (entry) => entry.textContent?.trim() === label,
+  ) as HTMLAnchorElement;
+  await click(tab);
 }
 
-async function navigateViaMenu(label: string) {
-  openBurgerMenu();
-  const link = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+async function navigateViaMoreSheet(label: string) {
+  // The tabs are links; the only button in the bar is More.
+  const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
+  act(() => {
+    moreButton.click();
+  });
+  const link = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
     (entry) => entry.textContent === label,
   ) as HTMLAnchorElement;
   await click(link);
@@ -531,12 +539,12 @@ describe('leaderboard', () => {
     expect(container.querySelector('.leaderboard__name')?.textContent).toContain('alice');
     expect(container.querySelector('.leaderboard__name')?.textContent).not.toContain('Player #9');
 
-    await navigateViaMenu('Settings');
+    await navigateViaMoreSheet('Settings');
     const checkbox = container.querySelector('#settings-anonymous') as HTMLInputElement;
     await click(checkbox);
     expect(checkbox.checked).toBe(true);
 
-    await navigateViaMenu('Leaderboard');
+    await navigateViaTab('Ranks');
     await flush();
 
     expect(container.querySelector('.leaderboard__name')?.textContent).toContain('Player #9');

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, deleteAccount, updateSettings } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { useLogout } from '../auth/useLogout.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 export function Settings() {
   const { user, setUser } = useCurrentUser();
@@ -51,7 +51,7 @@ export function Settings() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content">
         <h1>Settings</h1>
 

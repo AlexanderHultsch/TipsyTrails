@@ -161,9 +161,10 @@ describe('/privacy', () => {
     expect(container.textContent).toContain('how much new area you uncovered');
   });
 
-  // In the installed PWA there is no browser chrome, so a screen without the
-  // burger menu is a dead end with no way back.
-  it("renders the burger menu, the app's one way off this screen", async () => {
+  // In the installed PWA there is no browser chrome, so a screen with no way
+  // off it is a dead end. Section 8.4's tab bar is that way off - for a
+  // signed-in reader.
+  it("renders the tab bar, the app's way off this screen", async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -173,22 +174,20 @@ describe('/privacy', () => {
 
     await renderApp('/privacy');
 
-    expect(container.querySelector('.burger-menu__button')).not.toBeNull();
-
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
-    act(() => {
-      menuButton.click();
-    });
-    const mapLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+    expect(container.querySelector('.bottom-nav')).not.toBeNull();
+    const mapTab = Array.from(container.querySelectorAll('.bottom-nav a')).find(
       (a) => a.getAttribute('href') === '/map',
     );
-    expect(mapLink).not.toBeUndefined();
+    expect(mapTab).not.toBeUndefined();
   });
 
-  // This is the one screen the burger menu reaches a signed-out reader on, so
-  // it is the one screen where "Log out" would be offered to someone with no
-  // session to end.
-  it('offers no "Log out" control in that menu while signed out', async () => {
+  // The reason this screen needs its own answer: /privacy is the one route
+  // outside RequireAuth that a signed-out reader is sent to (Register links
+  // it), and the tab bar cannot serve them - two of its five tabs need a
+  // session to mean anything, so it renders for a signed-in reader only.
+  // Removing the burger menu without this would have walled a signed-out
+  // reader into the privacy page with no way back.
+  it('gives a signed-out reader a way back instead of a tab bar', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
@@ -198,20 +197,16 @@ describe('/privacy', () => {
 
     await renderApp('/privacy');
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
-    expect(menuButton).not.toBeNull();
-    act(() => {
-      menuButton.click();
-    });
-    expect(container.querySelector('.burger-menu__panel')).not.toBeNull();
-    expect(
-      Array.from(container.querySelectorAll('.burger-menu__panel button')).map(
-        (button) => button.textContent,
-      ),
-    ).not.toContain('Log out');
+    expect(container.querySelector('.bottom-nav')).toBeNull();
+    const back = Array.from(container.querySelectorAll('a')).find(
+      (a) => a.getAttribute('href') === '/register',
+    );
+    expect(back, 'a signed-out reader has no way off /privacy').not.toBeUndefined();
+    // And nothing offers to end a session that does not exist.
+    expect(container.querySelector('.more-sheet__logout')).toBeNull();
   });
 
-  it('offers the "Log out" control in that menu while signed in', async () => {
+  it('offers the "Log out" control in the More sheet while signed in', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -221,15 +216,11 @@ describe('/privacy', () => {
 
     await renderApp('/privacy');
 
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
-    expect(
-      Array.from(container.querySelectorAll('.burger-menu__panel button')).map(
-        (button) => button.textContent,
-      ),
-    ).toContain('Log out');
+    expect(container.querySelector('.more-sheet__logout')?.textContent).toBe('Log out');
   });
 
   it('names Cloudflare and the browser push service rather than OpenStreetMap as the outside services that see traffic', async () => {
@@ -297,7 +288,7 @@ describe('/privacy', () => {
     expect(registerLink).not.toBeUndefined();
   });
 
-  it('is linked from the burger menu', async () => {
+  it('is linked from the More sheet', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return stubSignedInUser();
@@ -306,11 +297,11 @@ describe('/privacy', () => {
     });
 
     await renderApp('/settings');
-    const menuButton = container.querySelector('.burger-menu__button') as HTMLButtonElement;
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
     act(() => {
-      menuButton.click();
+      moreButton.click();
     });
-    const menuLink = Array.from(container.querySelectorAll('.burger-menu__panel a')).find(
+    const menuLink = Array.from(container.querySelectorAll('.more-sheet__panel a')).find(
       (a) => a.getAttribute('href') === '/privacy',
     );
     expect(menuLink).not.toBeUndefined();

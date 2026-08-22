@@ -26,6 +26,32 @@
   --color-border: rgba(28, 26, 23, 0.25);
   --font-serif: Georgia, 'Times New Roman', Times, serif;
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* Section 8.4's bottom tab bar, and the space every screen has to leave
+     for it. Three tokens rather than one number repeated, because three
+     different elements need three different halves of the same fact:
+
+       --bottom-nav-height  the bar's own content height, tall enough for the
+                            44px tap targets of Section 8.2 with a label
+                            under each icon
+       --bottom-nav-inset   the home indicator along the bottom edge of the
+                            phones this runs on. This is the *only* place
+                            `env(safe-area-inset-bottom)` appears in this
+                            stylesheet, and it has to stay that way: the bar
+                            occupies that edge now, so the inset is the bar's
+                            to clear, and a second element also padding
+                            itself by it would double the gap. The map's
+                            overlay layout used to apply it and no longer
+                            does - it clears the whole bar instead, below.
+       --bottom-nav-space   what the bar actually occupies, which is what
+                            everything above it has to keep clear
+
+     A style value, not a constant of the specification: it lives here with
+     the other style values (the palette above, the road opacities in
+     map/ink-style.ts), not in packages/shared/src/config.ts, which holds
+     the rate limits, radii and thresholds Section 0 rule 3 is about. */
+  --bottom-nav-height: 3.5rem;
+  --bottom-nav-inset: env(safe-area-inset-bottom, 0px);
+  --bottom-nav-space: calc(var(--bottom-nav-height) + var(--bottom-nav-inset));
 }
 
 * {
@@ -47,8 +73,8 @@ html {
    were collapsed - while `100dvh` is what is visible at this moment. Sized in
    `vh` alone, this element stays taller than the screen by exactly the height
    of the URL bar, so the document scrolls even where there is nothing to
-   scroll to; on the map that scroll carried the status icons and the burger
-   menu out of sight. The plain `vh` line is the fallback for browsers without
+   scroll to; on the map that scroll carried the status icons and the top row
+   with them out of sight. The plain `vh` line is the fallback for browsers without
    `dvh` support and has to come first; the `dvh` line overrides it where it is
    understood. .screen below already carried the pair and these two did not,
    and that disagreement is what produced the scroll - so index.css's own test
@@ -105,7 +131,29 @@ button:focus-visible,
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 2rem 1.5rem calc(2rem + env(safe-area-inset-bottom, 0px));
+  padding: 2rem 1.5rem calc(2rem + var(--bottom-nav-inset));
+}
+
+/* Section 8.4: the tab bar is fixed to the bottom edge, so it is out of the
+   flow and a scrolling page runs underneath it - the last item of Settings,
+   the last row of the leaderboard, the last paragraph of the privacy page,
+   all unreachable behind chrome that is always there. Every screen that
+   carries the bar therefore reserves its height at the bottom of its own
+   padding.
+
+   Matched from the bar's presence rather than from a class each screen
+   passes, for the same reason the active tab is derived from the router:
+   the bar renders only for a signed-in reader (components/BottomNav.tsx),
+   so /privacy - which renders both ways - would otherwise have to know
+   which one it is in two places instead of one, and a screen that forgot
+   the class would lose its last line to the bar silently.
+
+   The map is excluded and it is the only exclusion: it is not a scrolling
+   page. It fills the viewport under the bar and .map-overlays below
+   reserves the same space inside itself, which is what keeps Section 10.5's
+   attribution above the bar rather than behind it. */
+.screen:has(.bottom-nav):not(.screen--map) {
+  padding-bottom: calc(2rem + var(--bottom-nav-space));
 }
 
 .screen__content {
@@ -242,65 +290,175 @@ button:focus-visible,
   height: 100%;
 }
 
-/* Section 8.4: single burger menu, top right, on every authenticated
-   screen. */
-.burger-menu {
+/* Section 8.4: the persistent bottom tab bar, on every signed-in screen.
+   Fixed to the bottom edge - it is chrome, not part of any page, and it must
+   not scroll away with the content it sits over. It claims the home
+   indicator's inset (--bottom-nav-inset above), which is why nothing else in
+   this stylesheet does any more; its height is what every screen and the
+   map's overlay layout reserve. */
+.bottom-nav {
   position: fixed;
-  top: 1rem;
-  right: 1rem;
-  z-index: 10;
-}
-
-.burger-menu__button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  min-height: 44px;
-  border: 1px solid var(--color-ink);
-  border-radius: 4px;
-  background: var(--color-paper);
-  color: var(--color-ink);
-  font-size: 1.25rem;
-  cursor: pointer;
-}
-
-.burger-menu__panel {
-  position: absolute;
-  top: calc(100% + 0.5rem);
   right: 0;
-  margin: 0;
-  padding: 0.5rem;
-  list-style: none;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  height: var(--bottom-nav-space);
+  padding-bottom: var(--bottom-nav-inset);
+  background: var(--color-paper);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Five equal tabs across the width. Section 8.2's 44px minimum is what the
+   min-width and min-height hold: five tabs on the narrowest phone this
+   targets is 64px each, and the floor keeps that true if a sixth is ever
+   added rather than letting them shrink silently past it. */
+.bottom-nav__tab {
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  min-width: 10rem;
-  background: var(--color-paper);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-}
-
-.burger-menu__panel a,
-.burger-menu__panel button {
-  display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 0.1875rem;
+  min-width: 44px;
   min-height: 44px;
-  width: 100%;
-  padding: 0.5rem 0.75rem;
+  padding: 0.25rem;
   border: none;
-  border-radius: 4px;
   background: transparent;
-  font: inherit;
   color: var(--color-ink);
-  text-align: left;
+  font: inherit;
+  font-size: 0.6875rem;
+  line-height: 1;
+  text-align: center;
   text-decoration: none;
   cursor: pointer;
 }
 
-.burger-menu__panel a:hover,
-.burger-menu__panel button:hover {
+/* The same ink-style line work as the status icons of Section 8.6: stroked
+   in currentColor, no fill, no shadow (Section 8.1). */
+.bottom-nav__icon {
+  display: block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bottom-nav__icon-dot {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* The current tab is marked three ways, and Section 8.1 is why: the accent
+   is never the only carrier of meaning. The rule along the top edge is the
+   one that works in greyscale and the one the Map tab needs, since its label
+   is already the heaviest on the bar. `aria-current="page"` in the markup is
+   the third, for a reader who sees neither. */
+.bottom-nav__tab--active {
+  color: var(--color-accent);
+  box-shadow: inset 0 2px 0 currentColor;
+}
+
+.bottom-nav__tab--active .bottom-nav__label {
+  font-weight: 700;
+}
+
+/* The owner's specification: the Map tab carries the primary visual weight,
+   because the fog-clearing loop is what the application is for. A larger
+   icon and a heavier label - and deliberately not the accent colour, which
+   Section 8.1 reserves for active states and which the rule above needs to
+   still mean something here. */
+.bottom-nav__tab--primary .bottom-nav__icon {
+  width: 28px;
+  height: 28px;
+}
+
+.bottom-nav__tab--primary .bottom-nav__label {
+  font-weight: 600;
+}
+
+/* Section 8.4's More sheet: the secondary destinations, in a dialog over the
+   screen rather than a route of its own. The backdrop covers everything,
+   including the tab bar it was opened from (z-index above .bottom-nav's), so
+   a tap anywhere outside the panel closes it. */
+.more-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(28, 26, 23, 0.35);
+}
+
+/* Anchored to the bottom edge, where the thumb is (Section 8.2) and where
+   the tab that opened it is. It clears the home indicator itself because it
+   covers the bar that otherwise would. The viewport-height pair is the one
+   index.css uses everywhere: `vh` first as the fallback, `dvh` after it. */
+.more-sheet__panel {
+  max-height: 80vh;
+  max-height: 80dvh;
+  overflow-y: auto;
+  padding: 1rem 1rem calc(1rem + var(--bottom-nav-inset));
+  background: var(--color-paper);
+  border-top: 1px solid var(--color-border);
+  border-radius: 8px 8px 0 0;
+}
+
+.more-sheet__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.more-sheet__items a {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  color: var(--color-ink);
+  text-align: left;
+  text-decoration: none;
+}
+
+.more-sheet__items a:hover {
   background: var(--color-border);
+}
+
+.more-sheet__divider {
+  margin: 0.75rem 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+
+/* The one item in the sheet that is not navigation. Section 8.1: the accent
+   may not carry that on its own, so the separation is structural first - a
+   rule above it, a gap, an outlined box instead of a plain row, a heavier
+   label, and it is centred where every item above is left-aligned. The
+   colour is the last of five signals rather than the only one. */
+.more-sheet__logout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .settings-section {
@@ -328,15 +486,17 @@ button:focus-visible,
 
 /* Map screen (Section 8.3): the map owns the whole viewport, so this variant
    drops .screen's padding and gives the map container something to fill via
-   absolute positioning. Everything drawn on top of it - the burger menu of
-   Section 8.4 included - is laid out by .map-overlays below.
+   absolute positioning. Everything drawn on top of it is laid out by
+   .map-overlays below - everything except Section 8.4's tab bar, which is
+   not a map overlay but the same app chrome every signed-in screen carries,
+   fixed to the bottom edge with the overlay grid reserving its height.
 
    Pinned to the viewport rather than left in the document flow, and that is
    the point of `fixed` here. `overflow: hidden` keeps the map's own content
    from scrolling but says nothing about the document scrolling underneath it,
    which is what actually moved: this screen has nothing to scroll to, so any
-   scroll only carries the top row - the status icons of Section 8.6 and the
-   burger menu of Section 8.4 - off the screen. Out of flow, the screen is no
+   scroll only carries the top row - the status icons of Section 8.6 - off
+   the screen. Out of flow, the screen is no
    longer a tall child the document can scroll, and it also stops tracking the
    viewport unit as it moves: `dvh` grows and shrinks as the URL bar collapses
    and expands, which on a full-screen map reads as drift.
@@ -378,7 +538,7 @@ button:focus-visible,
    its own:
 
      row 1  full-width bars along the top     (the pending-visit banner)
-     row 2  top corner controls               (tracking icons, burger menu)
+     row 2  top corner controls               (the tracking icons)
      row 3  the flexible middle               (notices, toasts)
      row 4  bottom corner controls            (locate, attribution)
      row 5  full-width bars along the bottom  (the bar sheet, nearby panel)
@@ -411,11 +571,15 @@ button:focus-visible,
   z-index: 10;
   display: grid;
   grid-template-rows: minmax(0, auto) auto minmax(0, 1fr) auto minmax(0, auto);
-  /* Section 8.2, phones with a home indicator: applied once, by the layout,
-     rather than repeated by every child that happens to sit at the bottom
-     edge. Rows 4 and 5 clear the inset because the container's content box
-     already does. */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Section 8.4's tab bar occupies the bottom edge of this screen, so the
+     grid stops at the top of it: rows 4 and 5 clear the bar because the
+     container's content box already does, which is what keeps Section 10.5's
+     attribution legible without a tap rather than behind chrome. The home
+     indicator's inset is inside --bottom-nav-space and is the bar's to
+     clear - this layout applied it directly until the bar existed, and both
+     of them applying it would leave a bar's worth of empty screen above the
+     bar. */
+  padding-bottom: var(--bottom-nav-space);
   /* The container covers the whole map, so it must not swallow drags. The
      rows inherit this; the overlays inside them take pointer events back,
      which is why every overlay sits exactly two levels deep. */
@@ -438,10 +602,9 @@ button:focus-visible,
   padding: 1rem;
 }
 
-/* Positioned so that the dropdowns these controls open - the burger panel
-   and the tracking explanation, both absolutely positioned against their own
-   control and hanging below it - paint over the rows underneath rather than
-   under them. */
+/* Positioned so that the dropdown this row's control opens - the tracking
+   explanation, absolutely positioned against the icons and hanging below
+   them - paints over the rows underneath rather than under them. */
 .map-overlays__controls--top {
   grid-row: 2;
   position: relative;
@@ -480,21 +643,6 @@ button:focus-visible,
   flex: none;
 }
 
-/* Section 8.4 puts one burger menu, top right, on every authenticated
-   screen, and .burger-menu above fixes it to the viewport - right for the
-   screens that scroll under it. On the map it has to be part of the layout
-   instead: left fixed, it would keep sitting over row 1's banner exactly as
-   it did before, and no amount of grid would stop it. The map renders its
-   own instance, as every screen does, so this moves that element into row 2
-   rather than adding a second menu. `inset: auto` clears all four offsets in
-   one declaration, so no edge value survives the move; `relative` rather
-   than `static` because .burger-menu__panel is positioned against it. No
-   other screen matches this selector, so their fixed menu is untouched. */
-.map-overlays .burger-menu {
-  position: relative;
-  inset: auto;
-}
-
 /* Section 10.5: a persistent, legible OSM attribution in the map's bottom
    corner, present whether or not tiles loaded - rendered as an ordinary DOM
    element rather than left to MapLibre's own attribution control so it
@@ -509,9 +657,8 @@ button:focus-visible,
 }
 
 /* Section 8.6: the GPS/connection/foreground-tracking indicator, always
-   visible on the map screen. Row 2's left-hand corner, with the burger menu
-   (Section 8.4) at the other end of the same row - it carries no offsets of
-   its own, the row places it. `relative` only so that the explanation panel
+   visible on the map screen. Row 2's left-hand corner - it carries no
+   offsets of its own, the row places it. `relative` only so that the explanation panel
    below is positioned against this block rather than against the screen. */
 .tracking-indicator {
   position: relative;
@@ -576,9 +723,9 @@ button:focus-visible,
 }
 
 /* Against the control above, not against the map: it hangs below the icons
-   that opened it. On a narrow screen it reaches across under the burger
-   menu at the other end of row 2, and the z-index is what keeps it above
-   that button (.burger-menu carries 10) while it is open. */
+   that opened it. On a narrow screen it reaches across the whole of row 2,
+   and the z-index is what keeps it above the rows it paints over while it is
+   open. */
 .tracking-indicator__panel {
   position: absolute;
   top: calc(100% + 0.5rem);

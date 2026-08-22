@@ -160,7 +160,19 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
   // The container covers the map rather than sitting at one of its edges,
   // and `inset: 0` is how it covers; .map-container is the map itself and
   // .screen is the page under it. None of the three is an overlay.
-  const NOT_OVERLAYS = new Set(['screen', 'map-container', OVERLAY_CONTAINER]);
+  //
+  // .bottom-nav is the fourth, and it is the one that needs saying. Section
+  // 8.4's tab bar is not drawn on the map: it is the same app chrome every
+  // signed-in screen carries, fixed to the bottom edge of the viewport, and
+  // the map screen is one of its twelve callers rather than its owner. It
+  // therefore does position itself - `fixed` with a `bottom` offset - and
+  // that is correct rather than the defect the checks below look for. What
+  // keeps it from obscuring an overlay is not this layout but the space the
+  // layout reserves for it (`--bottom-nav-space`, asserted below), which is
+  // why it is excluded here and checked there instead. The scan finds it at
+  // all because screens/Map.tsx imports the component, which is the same
+  // property that made it find the burger menu this bar replaced.
+  const NOT_OVERLAYS = new Set(['screen', 'map-container', 'bottom-nav', OVERLAY_CONTAINER]);
   const EDGE_PROPERTIES = new Set(['top', 'right', 'bottom', 'left', 'inset']);
 
   function source(relative: string): string {
@@ -237,17 +249,6 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
     );
   }
 
-  // Wider: the container, one of its rows, an overlay, or any element inside
-  // one of those - everything the overlay layout is made of.
-  function partOfTheOverlayLayout(selectorPart: string): boolean {
-    return (
-      inForceOnTheMapScreen(selectorPart) &&
-      subjectClassesOf(selectorPart).some(
-        (name) => blockOf(name) === OVERLAY_CONTAINER || overlayBlocks.includes(blockOf(name)),
-      )
-    );
-  }
-
   function rulesFor(block: string): { selector: string; body: string }[] {
     return rules().filter((rule) => rule.selector.split(',').some((part) => targets(part, block)));
   }
@@ -279,9 +280,12 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
 
   // The one way an overlay may keep positioning of its own and still be part
   // of the layout: a rule scoped to the container that takes it out of the
-  // flow it was in and drops every edge offset with it. The burger menu is
-  // the case that needs it - Section 8.4 fixes it to the viewport on every
-  // other screen, and only the map moves it into a row.
+  // flow it was in and drops every edge offset with it. Nothing needs it
+  // today - the burger menu was the case that did, fixed to the viewport on
+  // every other screen and moved into a row only on the map, and it is gone.
+  // The escape hatch stays because the failure message below offers it as
+  // the remedy, and an overlay that is shared with a screen having no row
+  // layout would need it again.
   function releasedIntoTheLayout(block: string): boolean {
     return rulesFor(block).some((rule) => {
       if (!rule.selector.includes(`.${OVERLAY_CONTAINER}`)) {
@@ -321,7 +325,6 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
     for (const overlay of [
       'pending-visit-banner',
       'tracking-indicator',
-      'burger-menu',
       'map-locate',
       'map-attribution',
       'bar-sheet',
@@ -385,7 +388,7 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
         'edge landing on a bar at that edge whether or not the bar is on screen ' +
         '(Section 8.3). An overlay that must keep positioning of its own has to be ' +
         `released into the layout by a ".${OVERLAY_CONTAINER} .${block}" rule setting ` +
-        'position: relative and inset: auto, the way the burger menu is.',
+        'position: relative and inset: auto.',
     ).toBe(true);
   });
 
@@ -413,21 +416,140 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
     ).toBe(true);
   });
 
-  it('applies the bottom safe-area inset once, in the layout', () => {
+  // This used to require the bottom safe-area inset on .map-overlays and
+  // nowhere else in the layout, because the overlay rows were what occupied
+  // that edge. Section 8.4's tab bar occupies it now, so the inset moved with
+  // it - and the rule did not change, only what satisfies it: whatever sits
+  // at the bottom edge clears the home indicator, exactly once, and everything
+  // above that element clears the element rather than repeating the inset.
+  // Two elements both padding themselves by it is the defect either version
+  // is written against; the tab bar simply made the second one easy to write
+  // by accident, since a screen reserving the bar's height is one `+ env(...)`
+  // away from double-counting it.
+  //
+  // Checked across the whole stylesheet rather than within the overlay
+  // layout, which is stricter: the token is defined once, in :root, and the
+  // elements that need it - the bar, the sheet over it, every scrolling
+  // screen - reach it by name.
+  it('applies the bottom safe-area inset exactly once, where the tab bar claims it', () => {
     const bottomInset = /env\(\s*safe-area-inset-bottom/;
-    const carrying = rules().filter(
-      (rule) =>
-        bottomInset.test(rule.body) &&
-        rule.selector.split(',').some((part) => partOfTheOverlayLayout(part)),
-    );
+    const carrying = rules().filter((rule) => bottomInset.test(rule.body));
 
     expect(
       carrying.map((rule) => rule.selector),
       'the phones this runs on have a home indicator along the bottom edge, and ' +
-        'whatever occupies that edge has to clear it. The layout applies the inset ' +
-        `once, on .${OVERLAY_CONTAINER}, so rows 4 and 5 clear it without each child ` +
-        'repeating the value - and so that a child that forgot it cannot be wrong.',
-    ).toEqual([`.${OVERLAY_CONTAINER}`]);
+        'exactly one element may pad itself by it: the one that occupies that edge, ' +
+        'which since Section 8.4 is the tab bar. It reads the inset from the ' +
+        '--bottom-nav-inset token, so this is the only rule that may name env() at ' +
+        'all - a second one is a second element claiming the same strip of screen.',
+    ).toEqual([':root']);
+
+    expect(
+      declarationsOf(carrying[0]?.body ?? '').some(
+        (declaration) =>
+          declaration.property === '--bottom-nav-inset' && bottomInset.test(declaration.value),
+      ),
+      'the inset is still declared somewhere in :root, but not as --bottom-nav-inset, ' +
+        'which is the name the tab bar and everything clearing it read it by',
+    ).toBe(true);
+  });
+
+  // Section 10.5 requires the OSM attribution persistently visible and
+  // legible without a tap, and it sits in row 4 - the bottom corner controls.
+  // The tab bar is fixed over the bottom edge of the same screen, so the only
+  // thing keeping the two apart is the space this layout reserves for the
+  // bar. Take it away and the attribution is behind chrome: still in the DOM,
+  // still "rendered", and unreadable - which no test that does not lay the
+  // screen out can see, and which is a licence obligation rather than a
+  // matter of taste.
+  it('reserves the tab bar height, so rows 4 and 5 clear it', () => {
+    const reserved = rules()
+      .filter((rule) =>
+        rule.selector.split(',').some((part) => part.trim() === `.${OVERLAY_CONTAINER}`),
+      )
+      .flatMap((rule) => declarationsOf(rule.body))
+      .filter((declaration) => declaration.property === 'padding-bottom')
+      .map((declaration) => declaration.value);
+
+    expect(reserved, `.${OVERLAY_CONTAINER} reserves no space at its bottom edge`).not.toHaveLength(
+      0,
+    );
+    expect(
+      reserved[reserved.length - 1],
+      'the last padding-bottom on the overlay container is what the cascade uses, and ' +
+        'it must be the whole of --bottom-nav-space (the bar plus the safe-area inset ' +
+        'it carries). Anything smaller puts row 4 - the locate button and Section ' +
+        "10.5's attribution - behind the tab bar.",
+    ).toContain('var(--bottom-nav-space)');
+  });
+});
+
+// Section 8.4's tab bar. It is the one piece of chrome that is on every
+// signed-in screen at once, and the only element allowed to sit on the bottom
+// edge - everything else on that edge clears it. Both halves of that bargain
+// are single declarations with no visible effect until a phone renders them,
+// and nothing else in this repository lays out a screen at all.
+describe('index.css: the bottom tab bar', () => {
+  function declarationsOf(body: string): { property: string; value: string }[] {
+    return body
+      .split(';')
+      .map((declaration) => declaration.split(':'))
+      .filter((parts) => parts.length > 1)
+      .map((parts) => ({
+        property: (parts[0] ?? '').trim().toLowerCase(),
+        value: parts.slice(1).join(':').trim().toLowerCase(),
+      }));
+  }
+
+  function declarationsFor(selector: string): { property: string; value: string }[] {
+    return rules()
+      .filter((rule) => rule.selector.split(',').some((part) => part.trim() === selector))
+      .flatMap((rule) => declarationsOf(rule.body));
+  }
+
+  it('is fixed to the bottom edge, at the height every screen reserves', () => {
+    const bar = declarationsFor('.bottom-nav');
+    expect(bar.length, 'no rule targets .bottom-nav').toBeGreaterThan(0);
+
+    const declares = (property: string, value: string): boolean =>
+      bar.some(
+        (declaration) => declaration.property === property && declaration.value.includes(value),
+      );
+
+    expect(
+      declares('position', 'fixed') && declares('bottom', '0'),
+      '.bottom-nav must be fixed to the bottom edge of the viewport. In the flow it ' +
+        'scrolls away with the page it sits over, and a tab bar that is only sometimes ' +
+        'there is worse than none - it is the only navigation left after the burger ' +
+        'menu.',
+    ).toBe(true);
+    expect(
+      declares('height', 'var(--bottom-nav-space)'),
+      '.bottom-nav must be exactly the height every other rule reserves for it. Sized ' +
+        'independently, the bar and the space kept clear of it drift apart and the ' +
+        'difference is either a strip of dead screen or content behind the bar.',
+    ).toBe(true);
+  });
+
+  it('lets the scrolling screens clear it', () => {
+    const clearing = rules().filter(
+      (rule) =>
+        rule.selector.includes('.bottom-nav') &&
+        rule.selector.includes('.screen') &&
+        declarationsOf(rule.body).some(
+          (declaration) =>
+            declaration.property === 'padding-bottom' &&
+            declaration.value.includes('var(--bottom-nav-space)'),
+        ),
+    );
+
+    expect(
+      clearing.map((rule) => rule.selector),
+      'a screen carrying the tab bar has to reserve its height at the bottom of its ' +
+        'own padding, or its last line - the last row of the leaderboard, the delete ' +
+        'account button on Settings - sits behind the bar and cannot be reached. The ' +
+        'map is the exception and has its own reservation inside .map-overlays.',
+    ).not.toHaveLength(0);
   });
 });
 

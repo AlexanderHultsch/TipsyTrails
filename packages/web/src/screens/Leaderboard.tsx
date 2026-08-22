@@ -4,7 +4,7 @@ import type { LeaderboardResponse } from '../api/types.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 type Metric = 'area' | 'bars';
 type Period = 'all' | 'week' | 'month';
@@ -80,9 +80,14 @@ export function Leaderboard() {
 
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content leaderboard">
-        <h1>Leaderboard</h1>
+        {/* "Ranks", with the tab that leads here (components/BottomNav.tsx).
+            A tab labelled Ranks arriving at a page headed Leaderboard is a
+            navigation defect rather than a difference of wording, so the two
+            were renamed together. The route, the API and everything else on
+            this screen keep the name they had. */}
+        <h1>Ranks</h1>
 
         <div className="leaderboard__controls">
           <div className="leaderboard__toggle" role="group" aria-label="Metric">

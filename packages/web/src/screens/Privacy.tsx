@@ -1,5 +1,7 @@
+import { Link } from 'react-router-dom';
 import { CONFIG } from '@tipsytrails/shared';
-import { BurgerMenu } from '../components/BurgerMenu.js';
+import { useCurrentUser } from '../auth/CurrentUserContext.js';
+import { BottomNav } from '../components/BottomNav.js';
 
 const MAIN_SITE_PRIVACY_URL = 'https://ahultsch.com/privacy';
 const MAIN_SITE_LEGAL_URL = 'https://ahultsch.com/legal';
@@ -12,10 +14,26 @@ const MAIN_SITE_LEGAL_URL = 'https://ahultsch.com/legal';
 // out). Every claim below is written against what Section 10.2 and the
 // schema (Section 5) actually store - nothing here is generic policy
 // boilerplate, and nothing claims a protection the code does not implement.
+//
+// This is the one screen in the app that renders for a signed-out reader and
+// for a signed-in one, and the two leave it by different doors. A signed-in
+// reader has the bottom tab bar (components/BottomNav.tsx). A signed-out one
+// does not - the bar is signed-in chrome, because two of its five tabs need
+// a session to mean anything - so this screen gives them a plain link back
+// instead. Without one the page is a dead end in the installed PWA, which
+// has no browser chrome to go back with, and it is reached from exactly one
+// place while signed out: the "See what Tipsy Trails stores about you" link
+// on Register (screens/Register.tsx), where consent is given. The link
+// therefore points back there, at a fixed target rather than at a guess
+// about history - a reader who arrived from a bookmark or a shared link
+// lands on the screen that would have sent them here, which is also where
+// the app begins.
 export function Privacy() {
+  const { user } = useCurrentUser();
+
   return (
     <main className="screen">
-      <BurgerMenu />
+      <BottomNav />
       <div className="screen__content privacy">
         <h1>Privacy</h1>
         <p>
@@ -108,6 +126,13 @@ export function Privacy() {
           </a>
         </p>
       </div>
+      {!user && (
+        <div className="screen__actions">
+          <Link className="button button--secondary" to="/register">
+            Back to registration
+          </Link>
+        </div>
+      )}
     </main>
   );
 }
