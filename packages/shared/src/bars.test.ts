@@ -65,6 +65,49 @@ describe('buildBarsQuery', () => {
     // The amenity list itself does not change with the config.
     expect(otherQuery).toContain('amenity"~"^(bar|pub|biergarten|nightclub)$"');
   });
+
+  it('additionally contains a bar=yes clause for node, way and relation, independent of amenity', () => {
+    const query = buildBarsQuery(KARLSRUHE_CONFIG);
+    // Additive: the amenity clause from the test above is still present, unchanged.
+    expect(query).toContain('amenity"~"^(bar|pub|biergarten|nightclub)$"');
+    expect(query).toContain('node["bar"="yes"]');
+    expect(query).toContain('way["bar"="yes"]');
+    expect(query).toContain('relation["bar"="yes"]');
+  });
+
+  it('scopes both the amenity clause and the bar=yes clause inside the one area.cityArea union', () => {
+    const query = buildBarsQuery(KARLSRUHE_CONFIG);
+
+    // Extract exactly the union block: from the opening "(" that follows
+    // ".city map_to_area->.cityArea;" up to its closing ");". A mutation
+    // that moves the bar=yes statements outside this block — querying them
+    // city-wide or worldwide instead of inside the union — must fail this,
+    // not just a substring-anywhere-in-the-query check.
+    const unionMatch = query.match(/\.cityArea;\n\(\n([\s\S]*?)\n\);\nout center;/);
+    expect(unionMatch).not.toBeNull();
+    const unionBody = unionMatch![1];
+
+    expect(unionBody).toContain(
+      'node["amenity"~"^(bar|pub|biergarten|nightclub)$"](area.cityArea);',
+    );
+    expect(unionBody).toContain(
+      'way["amenity"~"^(bar|pub|biergarten|nightclub)$"](area.cityArea);',
+    );
+    expect(unionBody).toContain(
+      'relation["amenity"~"^(bar|pub|biergarten|nightclub)$"](area.cityArea);',
+    );
+    expect(unionBody).toContain('node["bar"="yes"](area.cityArea);');
+    expect(unionBody).toContain('way["bar"="yes"](area.cityArea);');
+    expect(unionBody).toContain('relation["bar"="yes"](area.cityArea);');
+
+    // Every statement line inside the union must itself carry the
+    // area.cityArea scope — nothing unscoped smuggled into the block.
+    const statementLines = unionBody.split('\n').filter((line) => line.trim().length > 0);
+    expect(statementLines.length).toBeGreaterThan(0);
+    for (const line of statementLines) {
+      expect(line).toContain('(area.cityArea)');
+    }
+  });
 });
 
 describe('parseBarsPayload', () => {
@@ -191,6 +234,29 @@ describe('osmElementsToBars', () => {
       { type: 'node', id: 1, lat: 60.0, lon: 8.4, tags: { amenity: 'bar', name: 'Way Up North' } },
     ];
     expect(() => osmElementsToBars({ elements }, KARLSRUHE_CONFIG)).toThrow(/outside the grid/);
+  });
+
+  it('converts a non-drinking amenity carrying bar=yes exactly like any other match (regression guard: the filtering is entirely in the query, not here)', () => {
+    const elements: OverpassBarElement[] = [
+      {
+        type: 'node',
+        id: 42,
+        lat: 49.0,
+        lon: 8.4,
+        tags: { amenity: 'restaurant', bar: 'yes', name: 'Enchilada Karlsruhe' },
+      },
+    ];
+    const result = osmElementsToBars({ elements }, KARLSRUHE_CONFIG);
+
+    expect(result.bars).toHaveLength(1);
+    expect(result.bars[0]).toMatchObject({
+      osm_id: 'node/42',
+      name: 'Enchilada Karlsruhe',
+      lat: 49.0,
+      lon: 8.4,
+      source: 'osm',
+    });
+    expect(result.discardedNoName).toBe(0);
   });
 });
 

@@ -79,6 +79,9 @@ function computeGridDimensions(
 // every city, unlike `osm_admin_filter` or `bounding_box`, which are
 // genuinely per-city facts. Section 11.4's config field table lists what
 // each script reads from the config; the amenity list is not among them.
+// The `bar=yes` criterion added to `buildBarsQuery` below is the same kind
+// of normative, city-independent fact and lives the same way — inline in
+// the query builder, not in `config.ts` or the per-city config.
 // ---------------------------------------------------------------------------
 
 export const BAR_AMENITY_VALUES = ['bar', 'pub', 'biergarten', 'nightclub'] as const;
@@ -96,11 +99,25 @@ function regionalKeyClause(prefix: string | undefined): string {
 }
 
 /**
- * Nodes, ways and relations tagged `amenity` in `BAR_AMENITY_VALUES` inside
- * the city boundary (SPEC.md Section 11.1). `out center` so ways and
- * relations come back with a centroid — simpler and more accurate than
- * assembling rings to average one by hand, and Section 11.1 only requires
- * they end up reduced to a centroid, not how.
+ * Nodes, ways and relations tagged `amenity` in `BAR_AMENITY_VALUES`, OR
+ * carrying `bar=yes` regardless of their `amenity` value, inside the city
+ * boundary (SPEC.md Section 11.1). The `bar=yes` clause exists because OSM's
+ * "one main tag" convention files a venue's primary business under
+ * `amenity` — a restaurant that also runs a bar stays `amenity=restaurant`
+ * — and puts the bar-ness as the secondary tag `bar=yes`; the amenity-only
+ * clause above never sees those. Both clauses live in the same
+ * `area.cityArea`-scoped union, so an element matching both (e.g. a
+ * redundant `bar=yes` on an `amenity=bar` node) is not double-counted —
+ * Overpass QL's union statement is true set semantics: it writes into its
+ * result set "all objects that it has seen in one of the partial results",
+ * not a concatenation of them, so the same (type, id) surviving more than
+ * one branch of the union still appears once in `out`'s output. See the
+ * module note above and the `buildBarsQuery` tests for the corresponding
+ * regression guard.
+ *
+ * `out center` so ways and relations come back with a centroid — simpler
+ * and more accurate than assembling rings to average one by hand, and
+ * Section 11.1 only requires they end up reduced to a centroid, not how.
  */
 export function buildBarsQuery(
   config: CityConfig,
@@ -120,6 +137,9 @@ export function buildBarsQuery(
     `  node["amenity"~"${amenity}"](area.cityArea);`,
     `  way["amenity"~"${amenity}"](area.cityArea);`,
     `  relation["amenity"~"${amenity}"](area.cityArea);`,
+    `  node["bar"="yes"](area.cityArea);`,
+    `  way["bar"="yes"](area.cityArea);`,
+    `  relation["bar"="yes"](area.cityArea);`,
     `);`,
     `out center;`,
   ].join('\n');

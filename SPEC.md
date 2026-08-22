@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.19
+**Version:** 1.20
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -933,9 +933,9 @@ Bars submitted by that user are **not** deleted — they are part of the shared 
 
 `scripts/import-osm-bars.ts` runs **once, locally, offline from the app** and writes `data/seed/karlsruhe/bars.json`, which is committed.
 
-Overpass query: nodes, ways, and relations within the Karlsruhe boundary relation with `amenity` in `bar`, `pub`, `biergarten`, `nightclub`.
+Overpass query: nodes, ways, and relations within the Karlsruhe boundary relation with `amenity` in `bar`, `pub`, `biergarten`, `nightclub`, **or** carrying the tag `bar=yes`, regardless of `amenity` value.
 
-OSM tagging of drinking establishments in Germany is inconsistent — bars are frequently tagged as `pub`, `restaurant`, or `cafe`, and the seed will contain both false positives and gaps. The seed is therefore a **starting point requiring manual curation**, not authoritative data. The admin interface exists primarily for this.
+OSM tagging of drinking establishments in Germany is inconsistent — bars are frequently tagged as `pub`, `restaurant`, or `cafe`, and the seed will contain both false positives and gaps. The `bar=yes` clause widens both: it catches restaurants and hotels that also run a real bar under OSM's "one main tag" convention (their primary business stays `amenity=restaurant`, `amenity=cafe`, or similar, with `bar=yes` as the secondary tag), but it will just as readily pull in a café or hotel with a token `bar=yes` and nothing bar-like about it. The seed is therefore a **starting point requiring manual curation**, not authoritative data. The admin interface exists primarily for this.
 
 Entries without a `name` tag are discarded. Ways and relations are reduced to their centroid.
 
@@ -1223,6 +1223,34 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.20 — the bar import widens to catch a bar's secondary tag
+
+Not a fix. The owner looked up two real, named venues on OpenStreetMap — Enchilada Karlsruhe
+and Aposto Karlsruhe — and found both tagged `amenity=restaurant`, per OSM's "one main tag"
+convention: a venue's primary business goes under `amenity`, so a restaurant that also runs a
+bar stays `amenity=restaurant` rather than `amenity=bar`. Both carry `bar=yes` as the secondary
+tag. The Section 11.1 query, `amenity` in `bar`, `pub`, `biergarten`, `nightclub`, never had a
+defect — it did exactly what it said — but it also never had a way to see either venue. The
+owner decided, knowing the cost, to widen it: pull in anything tagged `bar=yes` regardless of
+`amenity`. His words: "das greift auch Cafés und Hotels, aber solange sie eine Bar haben möchte
+ich sie aufnehmen." Section 11.1 now states the query as an OR and says plainly that this
+widens both the true positives and the false positives the same way the amenity-only version
+already accepted — a café or hotel with a token `bar=yes` and nothing bar-like about it will
+show up too, and curation still runs through the admin interface, same as it always has for
+every other bad tag OSM hands the importer.
+
+`buildBarsQuery` in `packages/shared/src/bars.ts` gained three more statements in its existing
+union — `node`, `way`, and `relation` matching `bar=yes` — inside the same
+`area.cityArea`-scoped block the amenity clause already lives in, not a second query. Overpass
+QL's union is true set semantics (`drolbr/overpass-doc`'s own union example is this exact
+amenity-plus-secondary-tag shape, for ATMs rather than bars): a venue matching both clauses
+appears once in the response, so no de-duplication was needed on this side.
+`osmElementsToBars` needed no change at all — it already accepted any element with a `name`
+regardless of `amenity`, because the filtering has only ever lived in the query text, never in
+local code. A new test pins that down against exactly this shape (`amenity=restaurant`,
+`bar=yes`), so a future "helpful" filter added there cannot silently reintroduce the exclusion
+this change removes.
 
 ### v1.19 — the map's edges become a layout
 
@@ -1667,4 +1695,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.19*
+*End of specification v1.20*
