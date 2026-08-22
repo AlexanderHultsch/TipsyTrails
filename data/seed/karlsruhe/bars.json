@@ -1,5 +1,14 @@
 [
   {
+    "osm_id": "node/29990261",
+    "name": "Enchilada",
+    "address": "Waldstraße 63, 76133 Karlsruhe",
+    "lat": 49.0086383,
+    "lon": 8.3957504,
+    "cell_index": 63143,
+    "source": "osm"
+  },
+  {
     "osm_id": "node/29990270",
     "name": "Spalato",
     "address": null,
@@ -72,15 +81,6 @@
     "source": "osm"
   },
   {
-    "osm_id": "way/54732961",
-    "name": "Traube",
-    "address": null,
-    "lat": 48.9988391,
-    "lon": 8.4734095,
-    "cell_index": 54500,
-    "source": "osm"
-  },
-  {
     "osm_id": "node/69119734",
     "name": "Alter Brauhof",
     "address": null,
@@ -96,15 +96,6 @@
     "lat": 49.0098358,
     "lon": 8.4053966,
     "cell_index": 64408,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/83854933",
-    "name": "AKK-Biergarten",
-    "address": null,
-    "lat": 49.0111098,
-    "lon": 8.4154011,
-    "cell_index": 65674,
     "source": "osm"
   },
   {
@@ -135,60 +126,6 @@
     "source": "osm"
   },
   {
-    "osm_id": "way/108793480",
-    "name": "kap",
-    "address": "Kapellenstraße 68, 76131 Karlsruhe",
-    "lat": 49.0068708,
-    "lon": 8.4122986,
-    "cell_index": 61499,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/115564781",
-    "name": "Substage",
-    "address": "Alter Schlachthof 19, 76131 Karlsruhe",
-    "lat": 49.0052734,
-    "lon": 8.4297309,
-    "cell_index": 60274,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/129532713",
-    "name": "Dr. Bier",
-    "address": "Dreikönigstraße 13, 76187 Karlsruhe",
-    "lat": 49.0336946,
-    "lon": 8.3351728,
-    "cell_index": 86406,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/132233854",
-    "name": "Kaisers Biergärtle",
-    "address": null,
-    "lat": 49.0534098,
-    "lon": 8.3838878,
-    "cell_index": 104409,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/132747721",
-    "name": "NaN20 Bar",
-    "address": "Nancystraße 20, 76187 Karlsruhe",
-    "lat": 49.0209409,
-    "lon": 8.3706102,
-    "cell_index": 74365,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/151387743",
-    "name": "Bierseidel",
-    "address": "Karl-Leopold-Straße 2, 76229 Karlsruhe",
-    "lat": 49.0108481,
-    "lon": 8.4948434,
-    "cell_index": 65373,
-    "source": "osm"
-  },
-  {
     "osm_id": "node/248953635",
     "name": "Taverne",
     "address": null,
@@ -213,15 +150,6 @@
     "lat": 49.0107673,
     "lon": 8.3933915,
     "cell_index": 65225,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/255108283",
-    "name": "Beim Schupi",
-    "address": null,
-    "lat": 49.0075459,
-    "lon": 8.3560434,
-    "cell_index": 62251,
     "source": "osm"
   },
   {
@@ -279,15 +207,6 @@
     "source": "osm"
   },
   {
-    "osm_id": "way/304549322",
-    "name": "Hubertus 2.0",
-    "address": "Schneidemühler Straße 23d, 76139 Karlsruhe",
-    "lat": 49.0358681,
-    "lon": 8.4363731,
-    "cell_index": 88639,
-    "source": "osm"
-  },
-  {
     "osm_id": "node/304952071",
     "name": "Prinz S",
     "address": null,
@@ -330,24 +249,6 @@
     "lat": 49.008273,
     "lon": 8.3914405,
     "cell_index": 62720,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/336489099",
-    "name": "der Vogelbräu",
-    "address": null,
-    "lat": 48.9984453,
-    "lon": 8.465575,
-    "cell_index": 54071,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/350178487",
-    "name": "Burggarten",
-    "address": "Haid-und-Neu-Straße 30, 76131 Karlsruhe",
-    "lat": 49.0129317,
-    "lon": 8.4279065,
-    "cell_index": 67360,
     "source": "osm"
   },
   {
@@ -468,6 +369,33 @@
     "source": "osm"
   },
   {
+    "osm_id": "node/746786773",
+    "name": "Aposto",
+    "address": "Waldstraße 57, 76133 Karlsruhe",
+    "lat": 49.0088635,
+    "lon": 8.3963852,
+    "cell_index": 63561,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/769843872",
+    "name": "Hotel Rio Karlsruhe",
+    "address": "Hans-Sachs-Straße 2, 76133 Karlsruhe",
+    "lat": 49.0096854,
+    "lon": 8.3862119,
+    "cell_index": 64380,
+    "source": "osm"
+  },
+  {
+    "osm_id": "node/789347829",
+    "name": "hubRäumle",
+    "address": "Amthausstraße 3, 76227 Karlsruhe",
+    "lat": 48.9989106,
+    "lon": 8.4717393,
+    "cell_index": 54497,
+    "source": "osm"
+  },
+  {
     "osm_id": "node/819154360",
     "name": "Tipico Sportsbar",
     "address": "Kaiserstraße 57, 76131 Karlsruhe",
@@ -486,15 +414,6 @@
     "source": "osm"
   },
   {
-    "osm_id": "way/840619154",
-    "name": "Gärtner Hütt",
-    "address": null,
-    "lat": 49.0191363,
-    "lon": 8.3772075,
-    "cell_index": 73124,
-    "source": "osm"
-  },
-  {
     "osm_id": "node/841782761",
     "name": "Winzereck",
     "address": null,
@@ -510,15 +429,6 @@
     "lat": 49.0124389,
     "lon": 8.363919,
     "cell_index": 66850,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/910156687",
-    "name": "Il Vino",
-    "address": null,
-    "lat": 49.0066167,
-    "lon": 8.402668,
-    "cell_index": 61485,
     "source": "osm"
   },
   {
@@ -654,15 +564,6 @@
     "lat": 48.9943924,
     "lon": 8.4004404,
     "cell_index": 50223,
-    "source": "osm"
-  },
-  {
-    "osm_id": "way/1529476400",
-    "name": "ROTAG Garten",
-    "address": "Hardeckstraße 2a, 76185 Karlsruhe",
-    "lat": 49.0015785,
-    "lon": 8.3619851,
-    "cell_index": 56839,
     "source": "osm"
   },
   {
@@ -990,6 +891,15 @@
     "source": "osm"
   },
   {
+    "osm_id": "node/3686979049",
+    "name": "Pescobar Karlsruhe",
+    "address": "Waldstraße 30, 76133 Karlsruhe",
+    "lat": 49.0102878,
+    "lon": 8.3978086,
+    "cell_index": 64814,
+    "source": "osm"
+  },
+  {
     "osm_id": "node/3708646419",
     "name": "Warsteiner Seminar",
     "address": "Kaiserstraße 65, 76131 Karlsruhe",
@@ -1305,6 +1215,15 @@
     "source": "osm"
   },
   {
+    "osm_id": "node/7216954768",
+    "name": "Portale 50",
+    "address": "Erbprinzenstraße 4-12, 76133 Karlsruhe",
+    "lat": 49.0074042,
+    "lon": 8.4023866,
+    "cell_index": 62319,
+    "source": "osm"
+  },
+  {
     "osm_id": "node/7223335010",
     "name": "PS Lounge & Cocktail Bar",
     "address": "Kaiserallee 1, 76133 Karlsruhe",
@@ -1527,6 +1446,177 @@
     "lat": 48.9893188,
     "lon": 8.4573969,
     "cell_index": 45719,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/54732961",
+    "name": "Traube",
+    "address": null,
+    "lat": 48.9988391,
+    "lon": 8.4734095,
+    "cell_index": 54500,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/83854933",
+    "name": "AKK-Biergarten",
+    "address": null,
+    "lat": 49.0111098,
+    "lon": 8.4154011,
+    "cell_index": 65674,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/90041444",
+    "name": "Leonardo Hotel Karlsruhe",
+    "address": "Ettlinger Straße 23, 76137 Karlsruhe",
+    "lat": 49.0002181,
+    "lon": 8.4041494,
+    "cell_index": 55649,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/90983330",
+    "name": "Schlosshotel",
+    "address": "Bahnhofplatz 2, 76137 Karlsruhe",
+    "lat": 48.9951521,
+    "lon": 8.4022779,
+    "cell_index": 50643,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/108279712",
+    "name": "GenoHotel Karlsruhe",
+    "address": null,
+    "lat": 48.981253,
+    "lon": 8.4138235,
+    "cell_index": 38150,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/108793480",
+    "name": "kap",
+    "address": "Kapellenstraße 68, 76131 Karlsruhe",
+    "lat": 49.0068708,
+    "lon": 8.4122986,
+    "cell_index": 61499,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/109715027",
+    "name": "Hotel Royal",
+    "address": "Reinhold-Frank-Straße 46a, 76133 Karlsruhe",
+    "lat": 49.0097005,
+    "lon": 8.3877069,
+    "cell_index": 64382,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/115564781",
+    "name": "Substage",
+    "address": "Alter Schlachthof 19, 76131 Karlsruhe",
+    "lat": 49.0052734,
+    "lon": 8.4297309,
+    "cell_index": 60274,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/129532713",
+    "name": "Dr. Bier",
+    "address": "Dreikönigstraße 13, 76187 Karlsruhe",
+    "lat": 49.0336946,
+    "lon": 8.3351728,
+    "cell_index": 86406,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/132233854",
+    "name": "Kaisers Biergärtle",
+    "address": null,
+    "lat": 49.0534098,
+    "lon": 8.3838878,
+    "cell_index": 104409,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/132747721",
+    "name": "NaN20 Bar",
+    "address": "Nancystraße 20, 76187 Karlsruhe",
+    "lat": 49.0209409,
+    "lon": 8.3706102,
+    "cell_index": 74365,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/151387743",
+    "name": "Bierseidel",
+    "address": "Karl-Leopold-Straße 2, 76229 Karlsruhe",
+    "lat": 49.0108481,
+    "lon": 8.4948434,
+    "cell_index": 65373,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/255108283",
+    "name": "Beim Schupi",
+    "address": null,
+    "lat": 49.0075459,
+    "lon": 8.3560434,
+    "cell_index": 62251,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/304549322",
+    "name": "Hubertus 2.0",
+    "address": "Schneidemühler Straße 23d, 76139 Karlsruhe",
+    "lat": 49.0358681,
+    "lon": 8.4363731,
+    "cell_index": 88639,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/336489099",
+    "name": "der Vogelbräu",
+    "address": null,
+    "lat": 48.9984453,
+    "lon": 8.465575,
+    "cell_index": 54071,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/350178487",
+    "name": "Burggarten",
+    "address": "Haid-und-Neu-Straße 30, 76131 Karlsruhe",
+    "lat": 49.0129317,
+    "lon": 8.4279065,
+    "cell_index": 67360,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/840619154",
+    "name": "Gärtner Hütt",
+    "address": null,
+    "lat": 49.0191363,
+    "lon": 8.3772075,
+    "cell_index": 73124,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/910156687",
+    "name": "Il Vino",
+    "address": null,
+    "lat": 49.0066167,
+    "lon": 8.402668,
+    "cell_index": 61485,
+    "source": "osm"
+  },
+  {
+    "osm_id": "way/1529476400",
+    "name": "ROTAG Garten",
+    "address": "Hardeckstraße 2a, 76185 Karlsruhe",
+    "lat": 49.0015785,
+    "lon": 8.3619851,
+    "cell_index": 56839,
     "source": "osm"
   }
 ]
