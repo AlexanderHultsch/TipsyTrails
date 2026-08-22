@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.20
+**Version:** 1.21
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -851,13 +851,23 @@ All require `is_admin`. Prefix `/api/admin`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/api/admin/bars` | All bars including hidden, filterable by source |
+| GET | `/api/admin/bars` | All bars including hidden, filterable by source, ordered by name |
 | PATCH | `/api/admin/bars/:id` | Edit name, address, position, status |
 | DELETE | `/api/admin/bars/:id` | Delete (cascades discoveries and visits) |
 | POST | `/api/admin/bars` | Create bar directly |
 | GET | `/api/admin/users` | User list with stats |
 
 Editing a bar's position recomputes `cell_index` and `district_id`. Existing discoveries are not revoked.
+
+**The bar list comes back ordered by name, and stays that way on screen.** The order is a
+locale-aware, case-insensitive collation of German place names — umlauts belong where a reader
+looks for them, not after `Z` — with equal names broken by `id`, since the data really does
+contain two bars of the same name and the order must not reshuffle between requests. It is not
+a SQL `COLLATE NOCASE`: SQLite's built-in collation folds ASCII `A`–`Z` and compares everything
+else by code point, which files every umlaut-initial name at the end of the list. The one
+comparator lives in `packages/shared/src/bars.ts` so the API and the Admin screen cannot drift
+apart about it, and the screen re-applies it when a bar is created or renamed, rather than
+appending the new one at the bottom and leaving the renamed one in its old slot until a reload.
 
 ### 9.4 Rate limits
 
@@ -1223,6 +1233,38 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.21 — the admin bar list is alphabetical, in German
+
+The owner asked for one thing: "Können wir die Bars im Admin panel alphabetisch sortieren?" The
+list came back in insertion order, which for 180 imported bars is the order Overpass happened to
+answer in — findable only by scrolling.
+
+The obvious fix, `ORDER BY name COLLATE NOCASE`, is the wrong one, and quietly so. SQLite's
+built-in NOCASE collation folds ASCII `A`–`Z` and nothing else, so everything outside that range
+falls back to code-point order: `Ä` is U+00C4 and `Z` is U+005A, and every umlaut-initial name
+would pile up after the Zs on a German city's data. A test with `Alpha`/`Beta`/`Charlie` in its
+fixture cannot tell that implementation from a correct one, which is why the fixtures added here
+carry umlauts and lower-case initials — `Bärenstüble` and `Bergbräustube` are real names from
+the seed file, `uBu` is the real lower-case one, and the umlaut-initial cases are synthetic
+because the current import happens to have produced none — and why the ordering moved out of
+SQL into `Intl.Collator`, the ICU collation Node and the browsers already ship.
+The locale is pinned to German rather than left to resolve: the UI is English (C9) but the data
+is German place names, and an unpinned locale would resolve to the container's on the server and
+to the admin's browser language on the client, so the same list could be ordered two ways
+depending on who was looking. A second city would want this per-city, alongside the other
+per-city facts — an observation for whoever adds one, not something built now.
+
+Sorting the server alone would have fixed the list until the first edit. `screens/Admin.tsx`
+appends a created bar and replaces an edited one in place, so a new bar sat at the bottom and a
+renamed one kept its old slot until the admin reloaded. The single comparator lives in
+`packages/shared/src/bars.ts` and both callers use it, which is the point: "alphabetical" now
+has one definition rather than one per side. Section 9.3 states the ordering, because it is a
+user-visible contract and the next person to touch that query should find it written down.
+
+The user list in the same file has the same shape of problem — `ORDER BY users.id` — and is
+deliberately left alone: the owner asked about bars, and usernames are a different question
+(anonymity, admins first) that nobody has asked yet.
 
 ### v1.20 — the bar import widens to catch a bar's secondary tag
 
@@ -1695,4 +1737,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.20*
+*End of specification v1.21*

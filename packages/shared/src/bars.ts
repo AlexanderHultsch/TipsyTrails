@@ -436,6 +436,76 @@ export function osmElementsToBars(
 }
 
 // ---------------------------------------------------------------------------
+// Display ordering for a list of bars (SPEC.md Section 9.3).
+//
+// Defined here, once, and used by both the admin endpoint
+// (`packages/api/src/routes/admin.ts`) and the admin screen
+// (`packages/web/src/screens/Admin.tsx`), so the server and the client cannot
+// disagree about what "alphabetical" means: the server sends a sorted list,
+// the client keeps it sorted as bars are created and renamed in place, and
+// both call this one function to do it.
+//
+// Not `ORDER BY name COLLATE NOCASE` in SQL. SQLite's built-in NOCASE
+// collation folds ASCII A–Z only and otherwise compares by code point, so
+// every umlaut sorts after `Z` (`Ä` is U+00C4, `Z` is U+005A) — on a German
+// city's bar names that is visibly wrong, and it is invisible to any test
+// whose fixture is ASCII. `Intl.Collator` is the ICU collation Node and every
+// browser this app targets already ship, so it costs no dependency; the list
+// is one unpaginated page of a few hundred rows, so sorting it in memory
+// costs nothing either.
+//
+// The locale is pinned to German deliberately. The UI is English-only
+// (constraint C9), but the *data* being ordered is German place names, and the
+// app serves one city (Section 5.1). Pinning it also keeps the two callers in
+// agreement: an unspecified locale resolves to the environment's — the
+// container's on the server, the *admin's browser language* on the client —
+// so the same list could be ordered two different ways depending on who is
+// looking at it. A second city would want this per-city, alongside the other
+// per-city facts in `data/cities/<slug>.json`; that is an observation for
+// whoever adds one, not something built here.
+//
+// `numeric: true` because the real data has numbered names — "Bar 23" and
+// "Bar 137", "P10" and "Studio 83" — and a reader expects 23 before 137.
+// Sensitivity is left at its default ("variant"), so upper- and lower-case
+// spellings of the same name sort next to each other but are still ordered
+// against each other rather than compared equal; the comparison therefore
+// stays a total order over distinct names.
+//
+// The collator is built once, at module scope: constructing one inside a
+// comparator would rebuild it on every one of the O(n log n) comparisons.
+//
+// Like everything else in this module, this uses no relative value import —
+// `Intl` is a JavaScript built-in — so `scripts/import-osm-bars.ts` can still
+// run this file as raw source (see the module note at the top).
+// ---------------------------------------------------------------------------
+
+/** The two fields the ordering reads. Every bar list entry in the app has both. */
+export interface BarListEntry {
+  id: number;
+  name: string;
+}
+
+const BAR_NAME_COLLATOR = new Intl.Collator('de', { numeric: true });
+
+/**
+ * Orders bars by name for display, case-insensitively in the way a reader
+ * expects and with umlauts in their German places.
+ *
+ * Equal names are broken by `id`: this data set really does contain two bars
+ * of the same name (the same chain in two districts), and without a stable
+ * second key their relative order would be whatever the sort implementation
+ * and the row order happened to produce, so the list would reshuffle between
+ * requests for no visible reason. `id` is the right key because it is unique,
+ * immutable and present on every bar the admin area handles — a newly created
+ * bar included, which `created_at` (seconds, and equal for a batch import)
+ * could not promise.
+ */
+export function compareBarsByName(a: BarListEntry, b: BarListEntry): number {
+  const byName = BAR_NAME_COLLATOR.compare(a.name, b.name);
+  return byName !== 0 ? byName : a.id - b.id;
+}
+
+// ---------------------------------------------------------------------------
 // Diff between two sets of bars (SPEC.md Section 11.2) — re-running the
 // import must report what changed to stdout, never apply it anywhere but
 // the seed file.

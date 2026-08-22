@@ -27,5 +27,7 @@ export {
   onsiteRadiusM,
 } from './visits.js';
 export type { OnsiteCandidate } from './visits.js';
+export { compareBarsByName } from './bars.js';
+export type { BarListEntry } from './bars.js';
 export { findConflictingBar, levenshteinRatio, normalizeBarName } from './suggest.js';
 export type { DuplicateCandidateBar } from './suggest.js';

@@ -1,3 +1,4 @@
+import { compareBarsByName } from '@tipsytrails/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth/cookie.js';
@@ -175,7 +176,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           .all(parsed.data.source)
       : db.prepare<[], BarRow>('SELECT * FROM bars ORDER BY id').all();
 
-    return { bars: rows.map(toAdminBarSummary) };
+    // SPEC.md Section 9.3: the list is ordered by name. The ordering is
+    // applied here rather than in SQL, and once rather than per query path,
+    // for the reasons `compareBarsByName` (packages/shared/src/bars.ts)
+    // states: SQLite's NOCASE collation would file every umlaut after Z, and
+    // two sort sites are two things that can drift apart. The queries keep
+    // `ORDER BY id` only so the rows reaching the sort are in a defined
+    // order; the comparator's own tie-break, not that clause, is what makes
+    // same-named bars come back the same way every time.
+    return { bars: rows.map(toAdminBarSummary).sort(compareBarsByName) };
   });
 
   // SPEC.md Section 9.3: created with source='admin', active immediately,

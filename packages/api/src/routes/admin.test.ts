@@ -527,6 +527,57 @@ describe('GET /api/admin/bars', () => {
     expect(bars.some((bar: { name: string }) => bar.name === 'Admin Only Bar')).toBe(true);
     expect(bars.some((bar: { name: string }) => bar.name === 'Zum Schlossgarten')).toBe(false);
   });
+
+  // SPEC.md Section 9.3: the list is ordered by name. The fixture names are
+  // deliberately not ASCII-only - "Bärenstüble" and "Änderungsbar" are the
+  // cases that tell German collation apart from SQLite's NOCASE, which folds
+  // ASCII A-Z and otherwise compares by code point, filing every umlaut after
+  // "Z"; "apfel" is the case that tells it apart from a bare code-point sort,
+  // which files every lower-case name after every upper-case one. Both query
+  // paths are checked: they are two statements, and an ordering applied to
+  // one of them only is exactly the regression this pins down.
+  const COLLATION_FIXTURE = ['Zeta Bar', 'Bärenstüble', 'apfel', 'Änderungsbar', 'Bergbräustube'];
+  const COLLATION_FIXTURE_ORDERED = [
+    'Änderungsbar',
+    'apfel',
+    'Bärenstüble',
+    'Bergbräustube',
+    'Zeta Bar',
+  ];
+
+  async function createCollationFixture(cookie: string): Promise<void> {
+    for (const [index, name] of COLLATION_FIXTURE.entries()) {
+      const response = await adminCreateBar(cookie, {
+        name,
+        address: null,
+        ...offsetMeters(SCHLOSS, (index + 1) * 60, 0),
+      });
+      expect(response.statusCode).toBe(201);
+    }
+  }
+
+  it('orders bars by name, umlauts and lower-case names included', async () => {
+    const cookie = await registerAdmin('boss');
+    await createCollationFixture(cookie);
+
+    const response = await adminGetBars(cookie);
+
+    expect(response.statusCode).toBe(200);
+    const names = response.json().bars.map((bar: { name: string }) => bar.name);
+    // The seeded OSM bar sorts last of the six, after "Zeta Bar".
+    expect(names).toEqual([...COLLATION_FIXTURE_ORDERED, 'Zum Schlossgarten']);
+  });
+
+  it('orders bars by name on the source-filtered path too', async () => {
+    const cookie = await registerAdmin('boss');
+    await createCollationFixture(cookie);
+
+    const response = await adminGetBars(cookie, '?source=admin');
+
+    expect(response.statusCode).toBe(200);
+    const names = response.json().bars.map((bar: { name: string }) => bar.name);
+    expect(names).toEqual(COLLATION_FIXTURE_ORDERED);
+  });
 });
 
 describe('GET /api/admin/users', () => {

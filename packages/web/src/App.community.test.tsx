@@ -464,3 +464,102 @@ describe('admin bar management', () => {
     expect(container.querySelector('.admin-bar-row')).toBeNull();
   });
 });
+
+// SPEC.md Section 9.3: the admin bar list is ordered by name. The server
+// sends it that way, but this screen edits the list in place afterwards -
+// appending a created bar and replacing an edited one - so the order has to
+// survive both without a reload. "Änderungsbar" is the fixture name in both
+// tests on purpose: it sorts first under the shared comparator and last under
+// a code-point sort, so a list that merely looks sorted in ASCII cannot pass.
+describe('admin bar list ordering', () => {
+  function listedBarNames(): string[] {
+    return Array.from(container.querySelectorAll('.admin-bar-row__name')).map(
+      (element) => element.textContent ?? '',
+    );
+  }
+
+  it('puts a newly created bar in its alphabetical place, not at the bottom', async () => {
+    const bars = [
+      adminBar({ id: 10, name: 'Bergbräustube' }),
+      adminBar({ id: 11, name: 'Zeta Bar' }),
+    ];
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars' && init?.method === 'POST') {
+        return jsonResponse(201, adminBar({ id: 12, name: 'Änderungsbar', source: 'admin' }));
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars });
+      }
+      if (url === '/api/admin/users') {
+        return jsonResponse(200, { users: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/admin');
+
+    expect(listedBarNames()).toEqual(['Bergbräustube', 'Zeta Bar']);
+
+    setInputValue(
+      container.querySelector('#admin-create-name') as HTMLInputElement,
+      'Änderungsbar',
+    );
+    setInputValue(container.querySelector('#admin-create-lat') as HTMLInputElement, '49.0135');
+    setInputValue(container.querySelector('#admin-create-lon') as HTMLInputElement, '8.4044');
+    await click(
+      Array.from(container.querySelectorAll('.admin-create-form button')).find(
+        (button) => button.textContent === 'Create bar',
+      ) as HTMLButtonElement,
+    );
+
+    expect(listedBarNames()).toEqual(['Änderungsbar', 'Bergbräustube', 'Zeta Bar']);
+  });
+
+  it('moves a renamed bar to its new place in the list', async () => {
+    const bars = [
+      adminBar({ id: 10, name: 'Bergbräustube' }),
+      adminBar({ id: 11, name: 'Zeta Bar' }),
+    ];
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars/11' && init?.method === 'PATCH') {
+        const body = JSON.parse((init.body as string) ?? '{}') as { name?: string };
+        return jsonResponse(200, adminBar({ id: 11, name: body.name }));
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars });
+      }
+      if (url === '/api/admin/users') {
+        return jsonResponse(200, { users: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/admin');
+
+    expect(listedBarNames()).toEqual(['Bergbräustube', 'Zeta Bar']);
+
+    const editButton = Array.from(container.querySelectorAll('.admin-bar-row'))[1]?.querySelector(
+      '.admin-bar-row__actions button',
+    ) as HTMLButtonElement;
+    expect(editButton.textContent).toBe('Edit');
+    await click(editButton);
+
+    setInputValue(
+      container.querySelector('#admin-edit-name-11') as HTMLInputElement,
+      'Änderungsbar',
+    );
+    await click(
+      Array.from(container.querySelectorAll('.admin-bar-row__edit-form button')).find(
+        (button) => button.textContent === 'Save',
+      ) as HTMLButtonElement,
+    );
+
+    expect(listedBarNames()).toEqual(['Änderungsbar', 'Bergbräustube']);
+  });
+});

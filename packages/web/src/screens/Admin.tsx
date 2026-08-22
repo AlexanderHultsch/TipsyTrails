@@ -1,3 +1,4 @@
+import { compareBarsByName } from '@tipsytrails/shared';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
@@ -31,6 +32,20 @@ const EMPTY_BAR_FORM: BarFormState = { name: '', address: '', lat: '', lon: '' }
 
 function genericError(err: unknown): string {
   return err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
+}
+
+// GET /api/admin/bars sends the list ordered by name (SPEC.md Section 9.3),
+// but this screen then edits that list in place: a created bar would sit at
+// the bottom and a renamed one would keep its old slot until the admin
+// reloaded the page. The two local changes that can move a row - creating a
+// bar and saving an edited name - go through here, using the same comparator
+// the server sorted with (packages/shared/src/bars.ts), so the order the
+// admin sees is the order Section 9.3 promises whatever they have just done
+// to it. Hiding and deleting need no re-sort: neither touches a name, and
+// removing a row cannot disorder the rest. `sort` mutates, so this copies
+// first - the argument is React state.
+function sortedByName(bars: AdminBar[]): AdminBar[] {
+  return [...bars].sort(compareBarsByName);
 }
 
 // SPEC.md Section 8.3/9.3, Phase 7 step 3: bar management (list including
@@ -120,7 +135,7 @@ export function Admin() {
         lat: coords.lat,
         lon: coords.lon,
       });
-      setBars((current) => [...current, bar]);
+      setBars((current) => sortedByName([...current, bar]));
       setCreateForm(EMPTY_BAR_FORM);
     } catch (err) {
       setCreateError(genericError(err));
@@ -161,7 +176,7 @@ export function Admin() {
         lat: coords.lat,
         lon: coords.lon,
       });
-      setBars((current) => current.map((bar) => (bar.id === barId ? updated : bar)));
+      setBars((current) => sortedByName(current.map((bar) => (bar.id === barId ? updated : bar))));
       setEditingId(null);
     } catch (err) {
       setEditError(genericError(err));

@@ -3,6 +3,7 @@ import type { CityConfig } from './city.js';
 import { toCell } from './grid.js';
 import {
   buildBarsQuery,
+  compareBarsByName,
   diffBars,
   gridParamsFromCityConfig,
   osmElementsToBars,
@@ -413,5 +414,85 @@ describe('diffBars', () => {
     expect(diff.added).toHaveLength(0);
     expect(diff.removed).toHaveLength(0);
     expect(diff.changed).toHaveLength(0);
+  });
+});
+
+describe('compareBarsByName', () => {
+  // Real names from data/seed/karlsruhe/bars.json, chosen so that a
+  // code-point comparison (which is what `ORDER BY name COLLATE NOCASE`
+  // degrades to outside ASCII A-Z) gets a different answer from the one a
+  // German reader expects: "ä" is U+00E4, so it sorts after every ASCII
+  // letter by code point and "Bärenstüble" would land after
+  // "Bergbräustube"; the lower-case names would all pile up after the
+  // upper-case ones. No name in that file starts with a digit or a quote -
+  // the closest the real data comes is a digit or an apostrophe inside the
+  // name ("Bar 137", "Johnny's Pub"), and both are here.
+  function bars(...names: string[]) {
+    return names.map((name, index) => ({ id: index + 1, name }));
+  }
+
+  function sortedNames(entries: { id: number; name: string }[]): string[] {
+    return [...entries].sort(compareBarsByName).map((entry) => entry.name);
+  }
+
+  it('sorts umlauts where a German reader expects them, not after Z', () => {
+    expect(
+      sortedNames(
+        bars('Zum Schlossgarten', 'Bergbräustube', 'Bärenstüble', 'Änderungsbar', 'Ost-Bar'),
+      ),
+    ).toEqual(['Änderungsbar', 'Bärenstüble', 'Bergbräustube', 'Ost-Bar', 'Zum Schlossgarten']);
+  });
+
+  it('is case-insensitive in the way a reader expects', () => {
+    expect(sortedNames(bars('Zeta Bar', 'uBu', 'Bar Alpha', 'apfel'))).toEqual([
+      'apfel',
+      'Bar Alpha',
+      'uBu',
+      'Zeta Bar',
+    ]);
+  });
+
+  it('orders numbers in a name by value, and handles apostrophes', () => {
+    expect(sortedNames(bars('Bar 137', 'Bar 23', "Johnny's Pub", 'Johnnys Pub'))).toEqual([
+      'Bar 23',
+      'Bar 137',
+      "Johnny's Pub",
+      'Johnnys Pub',
+    ]);
+  });
+
+  it('breaks a tie on id, so two bars of the same name keep a stable order', () => {
+    const first = { id: 7, name: 'Traube' };
+    const second = { id: 3, name: 'Traube' };
+
+    expect(compareBarsByName(first, second)).toBeGreaterThan(0);
+    expect(compareBarsByName(second, first)).toBeLessThan(0);
+    expect(compareBarsByName(first, first)).toBe(0);
+    expect([first, second].sort(compareBarsByName).map((bar) => bar.id)).toEqual([3, 7]);
+  });
+
+  // The tie-break above is only meant to catch bars that genuinely share a
+  // name. That holds because the collator distinguishes every other pair —
+  // and that is a choice, not a given: `sensitivity: 'base'` would make
+  // `Bar`/`bar` and `Cafe`/Café` compare equal, hand them to the id
+  // tie-break, and order two differently spelled bars by whichever happened
+  // to be inserted first. Nothing else here would have noticed; the ordering
+  // stays plausible and quietly stops being alphabetical for those pairs.
+  it('treats names that differ only in case or accent as distinct, not as a tie', () => {
+    // Both entries carry the SAME id on purpose, so `a.id - b.id` is zero and
+    // what is left is the collator's own verdict on the two names. Giving them
+    // different ids would have made this test pass under exactly the
+    // implementation it exists to reject: the tie-break would have supplied a
+    // non-zero answer and hidden that the names compared equal. (Written that
+    // way first, and it did.)
+    for (const [left, right] of [
+      ['Bar Alpha', 'bar Alpha'],
+      ['Cafe Zentral', 'Café Zentral'],
+    ]) {
+      expect(
+        compareBarsByName({ id: 1, name: left }, { id: 1, name: right }),
+        `"${left}" and "${right}" must not compare equal, or the id tie-break decides their order`,
+      ).not.toBe(0);
+    }
   });
 });
