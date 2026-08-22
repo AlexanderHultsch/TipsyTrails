@@ -431,6 +431,142 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
   });
 });
 
+// The map screen scrolled the document, and scrolling it carried the top row
+// - the status icons of Section 8.6 and the burger menu of Section 8.4 - off
+// the screen. There is nothing on the map to scroll to, so the scroll was
+// pure loss.
+//
+// .screen--map already set `overflow: hidden`, which is why the map's own
+// content could not scroll; what moved was the document underneath it. `body`
+// and `#root` were `min-height: 100vh` with no `dvh` line while `.screen`
+// carried both. On a mobile browser `100vh` is the *large* viewport height -
+// what the page would get with the URL bar collapsed - and `100dvh` is what
+// is visible now, so the two ancestors stayed taller than the screen by
+// exactly the height of the URL bar and the document scrolled by that much.
+//
+// The defect was not "body had the wrong number". It was two rules that must
+// agree about viewport height silently disagreeing, so what is checked here
+// is the rule and not the instance: anything sizing itself to the viewport
+// height carries the `vh` fallback and the `dvh` line that overrides it. The
+// set is derived by scanning for the unit rather than listed, because a
+// fourth rule added tomorrow with a bare `100vh` is precisely the regression
+// this exists for and a list of three selectors would not see it.
+//
+// WHAT THIS CANNOT PROVE, plainly, and it is the same limit the overlay scan
+// above states. This reads the stylesheet as text. jsdom computes no
+// geometry, no test in this repository lays this screen out with index.css
+// applied, and nothing here can show that a real browser has stopped
+// scrolling - only that the declarations which made it scroll are gone and
+// cannot come back unnoticed. It says nothing about whether `dvh` is
+// supported by any particular browser, nothing about how tall anything
+// actually is, and nothing about how the screen behaves while the URL bar
+// animates. That still needs eyes on a phone.
+describe('index.css: the map screen does not scroll the document', () => {
+  // Both `100vh` and `100dvh` end in "vh", so the unit is matched from the
+  // digits that immediately precede it: `100dvh` has a "d" in the way and
+  // does not match the first pattern, and `100vw` matches neither.
+  const STATIC_VIEWPORT_HEIGHT = /\d(?:\.\d+)?vh\b/;
+  const DYNAMIC_VIEWPORT_HEIGHT = /\d(?:\.\d+)?dvh\b/;
+
+  function declarationsOf(body: string): { property: string; value: string }[] {
+    return body
+      .split(';')
+      .map((declaration) => declaration.split(':'))
+      .filter((parts) => parts.length > 1)
+      .map((parts) => ({
+        property: (parts[0] ?? '').trim().toLowerCase(),
+        value: parts.slice(1).join(':').trim().toLowerCase(),
+      }));
+  }
+
+  // One entry per (rule, property) that is sized in a viewport-height unit,
+  // with that property's values in the order the rule declares them - which
+  // is the order the cascade resolves them in, so the last one wins.
+  function viewportHeightSized(): { selector: string; property: string; values: string[] }[] {
+    return rules().flatMap((rule) => {
+      const byProperty = new Map<string, string[]>();
+      for (const { property, value } of declarationsOf(rule.body)) {
+        if (!STATIC_VIEWPORT_HEIGHT.test(value) && !DYNAMIC_VIEWPORT_HEIGHT.test(value)) {
+          continue;
+        }
+        byProperty.set(property, [...(byProperty.get(property) ?? []), value]);
+      }
+      return [...byProperty].map(([property, values]) => ({
+        selector: rule.selector,
+        property,
+        values,
+      }));
+    });
+  }
+
+  it('sizes everything that follows the viewport height to the visible one', () => {
+    const sized = viewportHeightSized();
+
+    // A floor under the scan, not the list it works from: if the scan stopped
+    // finding rules, the check below would run over an empty list and pass
+    // without looking at anything. These three are the chain the map screen
+    // hangs from - body, the React root, and the page shell - and they are
+    // the ones that have to agree with each other.
+    for (const selector of ['body', '#root', '.screen']) {
+      expect(
+        sized.map((entry) => entry.selector),
+        `the scan no longer finds a viewport height on ${selector}`,
+      ).toContain(selector);
+    }
+
+    const offending = sized
+      .filter(
+        (entry) =>
+          !entry.values.some((value) => STATIC_VIEWPORT_HEIGHT.test(value)) ||
+          !DYNAMIC_VIEWPORT_HEIGHT.test(entry.values[entry.values.length - 1] ?? ''),
+      )
+      .map((entry) => `${entry.selector} { ${entry.property}: ${entry.values.join(' / ')} }`);
+
+    expect(
+      offending,
+      'every rule that sizes itself to the viewport height must declare the pair, ' +
+        'plain `vh` first and `dvh` after it. `100vh` is the large viewport - the ' +
+        'height the page would have with the mobile URL bar collapsed - and `100dvh` ' +
+        'is what is actually visible, so a rule left on `vh` alone stays taller than ' +
+        'the screen by the height of that bar and the document scrolls. The `vh` line ' +
+        'is the fallback for browsers without `dvh` and has to come first; the `dvh` ' +
+        'line has to come last or it never wins.',
+    ).toEqual([]);
+  });
+
+  it('pins the map screen to the viewport', () => {
+    const mapScreen = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim() === '.screen--map'),
+    );
+
+    expect(mapScreen.length, 'no rule targets .screen--map').toBeGreaterThan(0);
+
+    const declared = mapScreen.flatMap((rule) => declarationsOf(rule.body));
+    const declares = (property: string, value: string): boolean =>
+      declared.some(
+        (declaration) => declaration.property === property && declaration.value === value,
+      );
+
+    expect(
+      declares('position', 'fixed'),
+      '.screen--map must be `position: fixed`. In the document flow it is a child ' +
+        'as tall as the viewport, so the document scrolls - and on this screen there ' +
+        'is nothing to scroll to, so the only effect is carrying the status icons and ' +
+        'the burger menu off the top. `overflow: hidden` does not cover this: it stops ' +
+        'the map\'s own content scrolling, not the document underneath it. "fixed" is ' +
+        'safe here because the screen has no text input to raise a keyboard over.',
+    ).toBe(true);
+
+    expect(
+      declares('inset', '0') ||
+        (['top', 'right', 'bottom', 'left'] as const).every((edge) => declares(edge, '0')),
+      '.screen--map is taken out of the flow, so it has no size of its own to ' +
+        'inherit. Without all four offsets it shrinks to its content instead of ' +
+        'covering the viewport, and the map with it.',
+    ).toBe(true);
+  });
+});
+
 // The districts screen visibly jumped when a district was selected: the
 // detail panel's height changes with the selection, the page height changes
 // with it, a desktop scrollbar appears or disappears, and every `width: 100%`

@@ -42,16 +42,31 @@ html {
   scrollbar-gutter: stable;
 }
 
+/* Two min-heights, and the second is not a duplicate of the first. `100vh` is
+   the *large* viewport height - what the page would get if the mobile URL bar
+   were collapsed - while `100dvh` is what is visible at this moment. Sized in
+   `vh` alone, this element stays taller than the screen by exactly the height
+   of the URL bar, so the document scrolls even where there is nothing to
+   scroll to; on the map that scroll carried the status icons and the burger
+   menu out of sight. The plain `vh` line is the fallback for browsers without
+   `dvh` support and has to come first; the `dvh` line overrides it where it is
+   understood. .screen below already carried the pair and these two did not,
+   and that disagreement is what produced the scroll - so index.css's own test
+   (stylesheet.test.ts) now scans for the unit and fails any rule that sizes
+   itself to the viewport height without the pair. */
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-sans);
 }
 
+/* The pair again, for the reason given on body above. */
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 h1 {
@@ -314,10 +329,31 @@ button:focus-visible,
 /* Map screen (Section 8.3): the map owns the whole viewport, so this variant
    drops .screen's padding and gives the map container something to fill via
    absolute positioning. Everything drawn on top of it - the burger menu of
-   Section 8.4 included - is laid out by .map-overlays below. */
+   Section 8.4 included - is laid out by .map-overlays below.
+
+   Pinned to the viewport rather than left in the document flow, and that is
+   the point of `fixed` here. `overflow: hidden` keeps the map's own content
+   from scrolling but says nothing about the document scrolling underneath it,
+   which is what actually moved: this screen has nothing to scroll to, so any
+   scroll only carries the top row - the status icons of Section 8.6 and the
+   burger menu of Section 8.4 - off the screen. Out of flow, the screen is no
+   longer a tall child the document can scroll, and it also stops tracking the
+   viewport unit as it moves: `dvh` grows and shrinks as the URL bar collapses
+   and expands, which on a full-screen map reads as drift.
+
+   The usual objection to `position: fixed` is iOS, where the on-screen
+   keyboard shrinks the visual viewport and a fixed element can end up behind
+   it. Considered, and it does not arise here: this screen has no text input,
+   so nothing on it can raise the keyboard.
+
+   This rule is still the containing block for the two `position: absolute;
+   inset: 0` children below (.map-container and .map-overlays) - any position
+   other than `static` establishes one, `fixed` included - so both are placed
+   exactly as they were under `relative`. */
 .screen--map {
   padding: 0;
-  position: relative;
+  position: fixed;
+  inset: 0;
   overflow: hidden;
 }
 
