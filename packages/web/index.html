@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) report real
+         values in an installed iOS PWA rather than 0px. Without it the bottom
+         tab bar's --bottom-nav-inset token (index.css) never receives the
+         home-indicator's actual height, so the bar sits flush against the
+         bottom edge with no clearance - the defect this line fixes. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Tipsy Trails</title>
     <meta
       name="description"

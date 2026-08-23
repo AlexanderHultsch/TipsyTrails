@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.22
+**Version:** 1.23
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -741,6 +741,7 @@ This direction applies to the whole application, not only the map. Chrome, typog
 
 - One serif family for headings and map labels, one neutral sans for UI text. Both self-hosted, subset to Latin, `font-display: swap`.
 - Minimum tap target 44 × 44 px. Bottom-anchored primary actions (thumb reach).
+- **The app extends under the device's safe areas, and pads around them itself.** `index.html`'s viewport meta tag carries `viewport-fit=cover`, without which `env(safe-area-inset-*)` reports `0px` in an installed iOS PWA and the bottom tab bar sits flush against the home indicator with no clearance at all. Turning that on makes the top edge-to-edge too, so both insets are read from one named token each — `--bottom-nav-inset` and `--safe-area-top` — declared once in `:root` and referenced by name everywhere else. A second raw `env()` anywhere in the stylesheet is a second element claiming the same strip of screen, and doubles the gap rather than widening it; the stylesheet's own tests enforce the single declaration and the two places that must read the top token (`.screen`, and the map's top controls row, which sits at the physical top edge because the map screen is `position: fixed`).
 - Respect `prefers-reduced-motion`: disable the fog dissolve animation and all transitions.
 
 ### 8.3 Screens
@@ -1239,6 +1240,29 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.23 — the app pads around the device's safe areas
+
+Reported from a phone with a screenshot: the tab bar of v1.22 sat too low, hard against the
+bottom of an iPhone. The bar's `--bottom-nav-inset` token was already correct and had been since
+the day it was written — `env(safe-area-inset-bottom, 0px)` — and it was resolving to `0px` on
+every device, because `index.html`'s viewport meta tag never carried `viewport-fit=cover`.
+Without it iOS reports no safe area at all rather than reporting the wrong one, so the token was
+a correct expression of a number the browser was never going to supply.
+
+That is the whole fix, and it has a counterpart that had to come with it: `viewport-fit=cover`
+makes the *top* edge-to-edge as well, so the notch and status-bar row became a second strip every
+screen has to clear. Section 8.2 now states both as one rule — one named token per inset,
+declared once in `:root`, read by name everywhere else — and the stylesheet's tests enforce it
+from both ends: exactly one rule may name `env()` for each inset, and the two places that must
+read the top token actually do. The map's top controls row is one of them, and not obviously so:
+the map screen is `position: fixed; inset: 0`, so that row sits at the physical top edge of the
+device rather than inside a page with its own padding.
+
+Worth recording because it is the second time this shape of defect has appeared here: a token
+being right is not the same as anything supplying it a value, nor as anything reading it. The
+v1.22 work checked that the bar reserved space and that nothing double-counted the inset; neither
+check could see that the inset was zero.
 
 ### v1.22 — the burger menu becomes a bottom tab bar
 
@@ -1772,4 +1796,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.22*
+*End of specification v1.23*

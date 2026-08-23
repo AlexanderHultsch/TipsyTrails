@@ -52,6 +52,18 @@
   --bottom-nav-height: 3.5rem;
   --bottom-nav-inset: env(safe-area-inset-bottom, 0px);
   --bottom-nav-space: calc(var(--bottom-nav-height) + var(--bottom-nav-inset));
+
+  /* --bottom-nav-inset above only reports a real number in an installed iOS
+     PWA when index.html's viewport meta tag carries viewport-fit=cover -
+     without it env() falls back to 0px and the bar sits flush against the
+     home indicator with no clearance at all, which is the report this fixes.
+     Turning that on makes the *top* edge-to-edge too, so this is its
+     counterpart: the notch/Dynamic Island/status-bar row every screen's own
+     top edge has to clear. Falls back to 0px the same way, so it costs
+     nothing on a device or status-bar-style that already reserves the
+     space itself. The only place `env(safe-area-inset-top)` may appear in
+     this stylesheet, for the same reason as its bottom counterpart above. */
+  --safe-area-top: env(safe-area-inset-top, 0px);
 }
 
 * {
@@ -131,7 +143,7 @@ button:focus-visible,
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: 2rem 1.5rem calc(2rem + var(--bottom-nav-inset));
+  padding: calc(2rem + var(--safe-area-top)) 1.5rem calc(2rem + var(--bottom-nav-inset));
 }
 
 /* Section 8.4: the tab bar is fixed to the bottom edge, so it is out of the
@@ -604,12 +616,18 @@ button:focus-visible,
 
 /* Positioned so that the dropdown this row's control opens - the tracking
    explanation, absolutely positioned against the icons and hanging below
-   them - paints over the rows underneath rather than under them. */
+   them - paints over the rows underneath rather than under them.
+
+   .screen--map is `position: fixed; inset: 0` (below), so this row sits at
+   the physical top edge of the screen rather than inside a scrolling page
+   with its own padding - it has to clear the notch/status-bar row itself,
+   the same way .screen does for every other screen. */
 .map-overlays__controls--top {
   grid-row: 2;
   position: relative;
   z-index: 2;
   align-items: flex-start;
+  padding-top: calc(1rem + var(--safe-area-top));
 }
 
 .map-overlays__middle {

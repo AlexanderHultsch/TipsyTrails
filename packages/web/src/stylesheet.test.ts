@@ -454,6 +454,48 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
     ).toBe(true);
   });
 
+  // The top counterpart of the test above, and the same reasoning: turning on
+  // viewport-fit=cover (index.html) for the bottom inset's sake also makes
+  // the top edge-to-edge, so the notch/status-bar row is a second strip every
+  // screen has to clear, exactly once, by name - not by a second raw env()
+  // scattered wherever someone next reaches for "a bit more top padding".
+  it('applies the top safe-area inset exactly once, by name, not as a second raw env()', () => {
+    const topInset = /env\(\s*safe-area-inset-top/;
+    const carrying = rules().filter((rule) => topInset.test(rule.body));
+
+    expect(
+      carrying.map((rule) => rule.selector),
+      'the notch/Dynamic Island/status-bar row every screen has to clear is read from the ' +
+        '--safe-area-top token, so :root is the only rule that may name env() for it at all',
+    ).toEqual([':root']);
+
+    expect(
+      declarationsOf(carrying[0]?.body ?? '').some(
+        (declaration) =>
+          declaration.property === '--safe-area-top' && topInset.test(declaration.value),
+      ),
+      'the inset is declared somewhere in :root, but not as --safe-area-top, which is the ' +
+        "name .screen and the map's top controls row read it by",
+    ).toBe(true);
+  });
+
+  // The token existing is not the same as anything actually reading it -
+  // that gap is exactly what the reported bug was: --bottom-nav-inset was
+  // already correct before viewport-fit=cover was added, and it still sat at
+  // 0px on every device because nothing made env() report a real number.
+  // This is the --safe-area-top equivalent of that check: the two places the
+  // owner's report and its own top-edge counterpart apply to must actually
+  // reference the token, not merely have it available.
+  it("clears the top safe area on every plain screen and on the map's top controls", () => {
+    const token = 'var(--safe-area-top)';
+    for (const block of ['screen', 'map-overlays__controls--top']) {
+      const usesIt = rulesFor(block).some((rule) =>
+        declarationsOf(rule.body).some((declaration) => declaration.value.includes(token)),
+      );
+      expect(usesIt, `.${block} does not read ${token}`).toBe(true);
+    }
+  });
+
   // Section 10.5 requires the OSM attribution persistently visible and
   // legible without a tap, and it sits in row 4 - the bottom corner controls.
   // The tab bar is fixed over the bottom edge of the same screen, so the only

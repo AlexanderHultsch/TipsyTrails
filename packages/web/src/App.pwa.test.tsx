@@ -237,6 +237,21 @@ describe('manifest and install meta', () => {
     expect(html).toContain('apple-mobile-web-app-capable');
   });
 
+  // Without viewport-fit=cover, env(safe-area-inset-*) reports 0px in an
+  // installed iOS PWA, so index.css's --bottom-nav-inset and --safe-area-top
+  // tokens (Section 8.4) never receive the device's real home-indicator and
+  // notch/status-bar heights - the bottom tab bar sits flush against the
+  // edge with no clearance, which was reported directly from a phone. This
+  // is the one line responsible; nothing renders this app in a real iOS
+  // WebKit engine here, so the test is confined to the meta tag actually
+  // being present rather than the layout it produces.
+  it('extends under the safe areas so index.css can pad around them (viewport-fit=cover)', () => {
+    const html = readFileSync(`${WEB_ROOT}/index.html`, 'utf-8');
+    const viewportTag = html.match(/<meta name="viewport" content="([^"]*)"/);
+    expect(viewportTag, 'no <meta name="viewport"> tag found in index.html').not.toBeNull();
+    expect(viewportTag![1]).toContain('viewport-fit=cover');
+  });
+
   it('serves a valid, installable manifest.json whose icon files actually exist', () => {
     const manifestPath = `${WEB_ROOT}/public/manifest.json`;
     expect(existsSync(manifestPath)).toBe(true);
