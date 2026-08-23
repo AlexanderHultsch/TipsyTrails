@@ -24,10 +24,26 @@
 // and the diff is printed to stdout before the file itself is overwritten.
 // Applying that diff to a running app is a manual admin decision.
 //
-// Node 22 strips TypeScript types natively, so relative imports here use an
-// explicit `.ts` extension and resolve straight to source with no build
-// step — unlike `packages/api` and `packages/shared`, which are compiled by
-// tsc and use NodeNext's `.js`-extension convention instead (CLAUDE.md).
+// **Build `@tipsytrails/shared` before running this.** `pnpm install` does it
+// (the root `prepare` script), as do `pnpm test` and `pnpm typecheck`; on its
+// own it is `pnpm --filter @tipsytrails/shared build`. Without it the imports
+// below fail immediately with ERR_MODULE_NOT_FOUND naming the missing
+// `packages/shared/dist/*.js` file.
+//
+// This script used to import `packages/shared/src/*.ts` directly and run it
+// as source under Node's native type stripping, with no build step at all.
+// That only works for a module with no relative *value* imports of its own:
+// Node does not resolve a NodeNext ".js" specifier back to the ".ts" file
+// beside it, so the first such import inside the imported source fails to
+// resolve. `packages/shared/src/bars.ts` now genuinely needs one — Section
+// 11.1's duplicate collapse is Section 11.3's duplicate rule, and reusing
+// that one implementation means importing `suggest.ts`, which reads `CONFIG`
+// and `haversineDistanceM`. Copying either into `bars.ts` to keep the
+// no-build property would mean a second similarity function and a second
+// copy of `SUGGEST_DUPLICATE_RADIUS_M`, which is the thing CLAUDE.md's config
+// rule exists to prevent. So the build step is the price, and it is paid by a
+// command the repository already runs.
+//
 // The query-building and OSM→bar conversion logic itself lives in
 // `packages/shared/src/bars.ts`, not here, so it is covered by the existing
 // `pnpm test` / `pnpm typecheck` pipeline (see the report for why).
@@ -37,7 +53,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { citySeedDir, parseCityConfig, type CityConfig } from '../packages/shared/src/city.ts';
+import { citySeedDir, parseCityConfig, type CityConfig } from '../packages/shared/dist/city.js';
 import {
   DEFAULT_OVERPASS_TIMEOUT_S,
   buildBarsQuery,
@@ -46,8 +62,9 @@ import {
   parseBarsPayload,
   type Bar,
   type BarDiff,
+  type CollapsedDuplicate,
   type OverpassBarsResponse,
-} from '../packages/shared/src/bars.ts';
+} from '../packages/shared/dist/bars.js';
 
 const DEFAULT_OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const USER_AGENT =
@@ -227,6 +244,21 @@ function printDiffReport(diff: BarDiff): void {
   );
 }
 
+// SPEC.md Section 11.1: the venues the import merged, named individually
+// rather than only counted. A collapse is the one thing this script does that
+// silently removes a real OSM object from the output, so it has to be
+// readable — and if the rule ever merges two genuinely different bars, this
+// listing is where that shows up.
+function printCollapseReport(collapsed: CollapsedDuplicate[]): void {
+  console.log(`--- ${collapsed.length} duplicate venue(s) collapsed ---`);
+  for (const pair of collapsed) {
+    console.log(
+      `    ${pair.kept.name} (${pair.kept.osm_id}) absorbed ${pair.dropped.name} ` +
+        `(${pair.dropped.osm_id}), ${pair.distanceM.toFixed(1)} m apart`,
+    );
+  }
+}
+
 function writeAtomic(targetPath: string, contents: string): number {
   const tmpPath = `${targetPath}.tmp-${randomBytes(6).toString('hex')}`;
   writeFileSync(tmpPath, contents, 'utf-8');
@@ -268,6 +300,10 @@ async function main(): Promise<void> {
 
   const result = osmElementsToBars(response, config);
 
+  if (result.collapsedDuplicates.length > 0) {
+    printCollapseReport(result.collapsedDuplicates);
+  }
+
   const previousBars = loadPreviousBars(outputPath);
   if (previousBars) {
     console.log(`Existing ${outputPath} found (${previousBars.length} bar(s)); computing diff...`);
@@ -280,7 +316,8 @@ async function main(): Promise<void> {
 
   console.log(
     `Wrote ${config.name}: ${result.bars.length} bar(s), ${result.discardedNoName} discarded for ` +
-      `missing a name tag, ${result.wayOrRelationCount} way(s)/relation(s) reduced to a centroid.`,
+      `missing a name tag, ${result.collapsedDuplicates.length} collapsed as duplicate venue(s), ` +
+      `${result.wayOrRelationCount} way(s)/relation(s) reduced to a centroid.`,
   );
   console.log(`  bars.json  ${bytes} bytes  (${outputPath})`);
   console.log(

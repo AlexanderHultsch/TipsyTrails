@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.23
+**Version:** 1.24
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -663,6 +663,18 @@ Because completion needs only *two* valid samples 20 minutes apart, the app does
 
 **A pending visit can be cancelled.** Step 5 is not the only way out of a pending visit. A player who checked in at the wrong bar, or by accident, must be able to end it there and then rather than carry it around for hours until the inactivity expiry catches it. A cancel endpoint under `/api/visits` (Section 9.2) acts only on the caller's own pending visit and moves it to `cancelled` (Section 5.7); it is the caller's decision alone, so nothing else — no sample, no maintenance tick — ever produces that state. The pending-visit banner carries the control that calls it, behind a confirmation, because cancelling throws away whatever confirmed time the visit has accumulated and there is no route back to it. Cancelling has nothing to do with expiry: `VISIT_EXPIRY_MS` keeps its value, its behaviour and its description exactly as step 5 states them.
 
+**A request with no body must not declare one.** The cancel endpoint takes its only argument in the path and sends nothing else, and the same is true of `POST /api/auth/logout` and `DELETE /api/admin/bars/:id`. A client that sets `Content-Type: application/json` on such a request is rejected by the API's JSON body parser with a 400 before the route is reached — "Body cannot be empty when content-type is set to `application/json`" — so the header is sent only when there is a body to describe. This is recorded here, in the mechanic it broke, because it is not a matter of style: sent unconditionally it made cancelling a visit fail on every attempt, for every user, from the day the endpoint shipped, while every call that does carry a body went on working and hid the pattern. Any test that would catch a regression of it has to have a real body parser behind it; a client-side test with a stubbed `fetch` cannot see it at all.
+
+**A 404 from cancel means the visit is gone, and the client must treat it as success.** The cancel endpoint answers one deliberately identical 404 (Section 9.5) for every case in which the caller has no pending visit with that id — another user's, already completed, already expired, already cancelled, never existed. Every one of those is the state the player was asking for. The caller therefore removes the visit from the banner and reports no failure. Every other failure — a network error, a 500, a 403 — genuinely changed nothing on the server, so the visit stays and the failure is reported. Decided on the status code and not on "the request failed", and not on the error's `code` either: a 404 on that path means "not pending" whoever produced it, a proxy included.
+
+This rule is not what fixed the report above; it is what stops the same symptom having other causes. **The banner must never be able to hold a visit the server does not agree is pending**, whatever put it into that state — and a cancel button that visibly does nothing is indistinguishable to a player whether the visit expired an hour ago, was cancelled on another device, or never reached the server at all.
+
+**The banner re-checks itself when the screen returns to the foreground.** `GET /api/visits/pending` expires stale visits lazily on read (Section 7.9) and returns only live ones, so it is the only thing that can tell a client that a visit ended for a reason the client never saw. Fetched once per mount it is a snapshot: an installed PWA is backgrounded rather than unmounted, so a player who leaves the app and comes back hours later is looking at a screen that never asked again. The client refetches on `visibilitychange` when the document becomes visible, and applies the answer only if nothing local changed the list while the request was in flight — a cancel must not be undone on screen by a response that left the server before it.
+
+There is deliberately **no periodic refetch** beside it. While the screen is visible the figures in the banner move only when a sample is accepted, and `POST /api/samples` already returns the visits it touched. The one thing a timer would catch that this does not is a visit expiring under a screen that stays continuously visible for the whole of `VISIT_EXPIRY_MS`, and buying that costs every open client a repeating authenticated request against the Pi for a transition that happens at most once per visit. See O14.
+
+**The confirmation must be reachable.** The banner occupies a bounded, scrollable row of the map's overlay layout (Section 8.3), and the confirmation is the tallest thing it renders. With two pending visits on a phone this is not hypothetical — it was photographed: the banner filling the upper half of the screen with its own scrollbar, and the second visit's cancel control cut off mid-glyph at the row's edge. Opening the confirmation therefore scrolls its buttons into view rather than trusting them to be on screen, and the banner is capped at the row's height so that it keeps a visible bottom edge instead of appearing to end mid-sentence. A control below a clip the player cannot see is indistinguishable from a control that does not work.
+
 **Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — it would require either background tracking (impossible, Section 7.2) or punishing users whose phone slept. See O9.
 
 **Transparency requirements — these are product requirements, not suggestions.** The mechanic must be legible at every moment:
@@ -956,6 +968,24 @@ OSM tagging of drinking establishments in Germany is inconsistent — bars are f
 
 Entries without a `name` tag are discarded. Ways and relations are reduced to their centroid.
 
+**Duplicate venues are collapsed on import.** OSM maps the same physical venue twice more often than it should: a node for the venue and a way for the building it occupies, or simply two nodes surveyed years apart by two mappers. Karlsruhe's seed contains both shapes. Two rows means two bar ids, and every rule keyed on a bar id then treats them as two bars — including the partial unique index of Section 5.7, which stops a second pending visit at the same id and cannot stop one at the twin. A player standing in front of one building sees two markers an arm's length apart carrying the same name and can check into both.
+
+The rule for deciding that two records are one venue is **Section 11.3's duplicate guard, shared in every part but its radius**: one implementation, the same normalisation, the same `SUGGEST_NAME_SIMILARITY`, and a radius supplied by the caller. The similarity gate is what discriminates, and it is common to both. The radius is not, because the two callers compare different kinds of point: a submission is two places a person tapped, while the import compares a surveyed POI node against a **building centroid**, which sits half a building from the door. The import therefore uses `IMPORT_DUPLICATE_RADIUS_M` (40 m) and the submission form `SUGGEST_DUPLICATE_RADIUS_M` (25 m), and neither number can be changed by changing the other — which is the point, since loosening the import must not loosen what a player is allowed to submit.
+
+Which of a pair survives is decided by a total order over the two records, never by the order Overpass answered in — re-running the import over the same data must produce the same file:
+
+1. The record with an address beats the record without one. It carries information the other does not, and information the app uses.
+2. Then a node beats a way, and a way beats a relation. A node is the surveyed position of the venue; a way or relation is reduced to a *building* centroid, which need not be where the bar is.
+3. Then the lower OSM id wins. Within one element type the lower id is the older object, so it is the one an already-seeded database is more likely to hold already — keeping it makes the re-import a no-op for that venue rather than a delete that would take its discoveries and visits with it (Section 5.6).
+
+Step 3 alone would be stable; steps 1 and 2 make the stable answer the better record as well. The script names every pair it merged on stdout, because a collapse is the one thing the import does that silently removes a real OSM object from its output.
+
+This is a filter, not a merge: the surviving record is kept exactly as it was and nothing is copied across from the record that was dropped. A pair the rule does not catch — the same name well beyond the radius — stays two bars and is the admin interface's job, like every other curation decision here.
+
+**The 40 m was measured, not chosen.** Across the whole committed Karlsruhe seed there are exactly two pairs that clear `SUGGEST_NAME_SIMILARITY` within 60 m, and both are one venue mapped twice: Fettschmelze as two nodes 6.2 m apart, and Traube as a node and the building way around it 25.3 m apart. Nothing else in the city becomes a candidate at any radius up to 60 m, so 40 m collapses both real duplicates with twenty metres of headroom before it could reach anything else. Traube is the pair that forced the separate constant — it is the one a player was checked into twice at once, and the 25 m submission radius misses it by thirty-four centimetres. Re-measure before carrying this number to a second city; it is a fact about how this city is mapped, not a universal one.
+
+The `import-osm-bars.ts` script therefore needs `@tipsytrails/shared` **built** before it runs (`pnpm install` does it; so do `pnpm test` and `pnpm typecheck`). It used to run entirely from source with no build step, which is only possible for modules with no relative value imports of their own; sharing Section 11.3's rule means importing one, and the alternative — a second similarity function and a second copy of the radius — is what Section 0's rule 3 exists to prevent.
+
 ### 11.2 Refresh
 
 No automatic synchronisation in v1. Re-running the import script produces a diff report to stdout; applying changes is a manual admin decision. The script must never write to the live database.
@@ -1235,11 +1265,80 @@ These are consequences to design around, not reasons to reconsider:
 | O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
 | O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
 | O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
-| O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. `POST /api/samples` deliberately reports only the visits its sample touched, and `GET /api/visits/pending` is fetched once per mount, so a visit that reaches `VISIT_EXPIRY_S` with the app open keeps rendering as pending until the screen is remounted. It is the same family as the confirmed-time defect v1.14 named — the banner asserting a state the server does not hold — and it was found while fixing that one, not by it. Closing it means either the sample response reporting the visits it expired, or the banner refetching; both are small, and neither was done at the time because it was outside that task's scope. | Open |
+| O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
 
 ---
 
 ## 15. Changelog
+
+### v1.24 — cancelling works, and one venue stops being two bars
+
+Three findings from the owner's first real field test, and the two that matter share a shape: the
+app holding a state the server does not hold.
+
+**Cancel did not work at all, even hours later**, and the cause turned out to be one line in the
+web client that had nothing to do with visits. `request()` set
+`Content-Type: application/json` on every call it made, whether or not it had anything to send.
+Fastify's JSON body parser rejects a request that declares that content type and then sends zero
+bytes, with a 400 before any route handler runs — and the screenshot the owner sent renders that
+exact sentence inside the banner. `POST /api/visits/:id/cancel` carries no body, so it had never
+once succeeded, for anyone, since the day it shipped; `POST /api/visits` carries `{barId}`, which
+is why checking in always worked and hid the pattern. Two more bodyless calls were dead the same
+way: logging out, and deleting a bar from the admin screen.
+
+Worth recording is *why nothing caught it*. Every test in the web package stubs `fetch`, so no
+client call in this repository had ever had a real body parser behind it, and every route test
+built its request by hand rather than the way the client does. The regression test that matters is
+therefore in `packages/api`, not `packages/web`: a bodyless cancel injected into a real Fastify
+instance, plus its mirror image asserting that the same request with the header is a 400 and
+saying why.
+
+The reading of the mechanic that the fix was originally designed around still stands, and shipped
+beside it, because a cancel button that visibly does nothing is indistinguishable to a player
+whatever the cause. Section 7.5 now states what the banner is *not allowed to do*: hold a visit
+the server does not agree is pending. A 404 from cancel means the visit is not pending, which is
+what the player asked for, so the row goes and nothing is reported. And the banner refetches when
+the screen returns to the foreground, because an installed PWA is backgrounded rather than
+unmounted and "I closed Safari, came back, and was still checked in" describes a screen that never
+asked again. A periodic refetch was considered and rejected on the argument written into Section
+7.5; O14 is narrowed by this rather than closed, and says what is left.
+
+One more, and this one is layout rather than state: the banner is a bounded scrollable row, and
+the second screenshot shows its second cancel control cut off mid-glyph by the map beneath it.
+Opening a confirmation now scrolls its buttons into view, and the banner is capped at its row so
+that it keeps a visible bottom edge rather than appearing to end mid-sentence.
+
+**He also checked into "the same bar" twice, after which the app was unusable.** Not a race and
+not an index failure: `bars.json` holds two venues twice each. Fettschmelze is two OSM nodes six
+metres apart with the same name and the same address; Traube is a node and a way 25.3 metres
+apart. Two rows means two ids, so Section 5.7's partial unique index was working exactly as
+specified — it only ever stopped a second pending visit at the *same* id, and the player standing
+in front of one building saw two markers an arm's length apart and checked into both.
+
+Section 11.1 now collapses near-identical venues at import time, and the rule it collapses by is
+not a new one: it is Section 11.3's community-submission duplicate guard, same radius, same
+similarity threshold, same normalisation, one implementation shared by both. Which of a pair
+survives is a total order over the two records — address, then element type, then the lower OSM id
+— so the import is reproducible and the survivor is the better record rather than whichever one
+Overpass listed first. Over the committed seed this collapses 180 bars to 179.
+
+**Traube is why the radius is a constant of its own.** The import guard began by reusing Section
+11.3's submission radius outright, and that missed the very pair the field test got stuck in: its
+two records are 25.34 m apart against a 25 m radius — thirty-four centimetres. Widening the shared
+constant was rejected, because it would have loosened what a player is allowed to submit in order
+to fix what the importer reads. The two now have separate radii, 40 m for the import and 25 m for
+submissions, and the choice was measured rather than argued: in the whole seed only two pairs clear
+the similarity threshold within 60 m, and both are one venue mapped twice. The import collapses
+180 records to 178.
+
+Sharing the rule cost the import script its no-build-step property, and that trade is recorded in
+Section 11.1 rather than worked around: the alternative was a second similarity function and a
+second copy of a radius, which is the thing Section 0's rule 3 exists to prevent.
+
+Independent of all of it, the admin screen grows a list of the signed-in admin's *own* pending
+visits with a cancel control — no new endpoint, no reach into anyone else's data. It exists
+because the owner had visits he could not clear and the map's banner was the only place that could
+clear them, and a second door costs almost nothing.
 
 ### v1.23 — the app pads around the device's safe areas
 
@@ -1796,4 +1895,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.23*
+*End of specification v1.24*

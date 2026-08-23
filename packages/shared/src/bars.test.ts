@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { CityConfig } from './city.js';
+import { CONFIG } from './config.js';
 import { toCell } from './grid.js';
 import {
   buildBarsQuery,
+  collapseDuplicateBars,
   compareBarsByName,
   diffBars,
   gridParamsFromCityConfig,
@@ -258,6 +260,290 @@ describe('osmElementsToBars', () => {
       source: 'osm',
     });
     expect(result.discardedNoName).toBe(0);
+  });
+
+  // SPEC.md Section 11.1: the collapse is part of the conversion, not
+  // something the caller is trusted to remember. Both nodes below are the
+  // Fettschmelze pair as OSM actually holds it (see the collapse suite).
+  it('collapses a duplicate venue as part of the conversion, and reports it', () => {
+    const elements: OverpassBarElement[] = [
+      {
+        type: 'node',
+        id: 5408199821,
+        lat: 49.0046399,
+        lon: 8.4290321,
+        tags: { amenity: 'bar', name: 'Fettschmelze' },
+      },
+      {
+        type: 'node',
+        id: 5075975976,
+        lat: 49.0045932,
+        lon: 8.4290774,
+        tags: { amenity: 'bar', name: 'Fettschmelze' },
+      },
+    ];
+    const result = osmElementsToBars({ elements }, KARLSRUHE_CONFIG);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/5075975976']);
+    expect(result.collapsedDuplicates).toHaveLength(1);
+    expect(result.collapsedDuplicates[0].dropped.osm_id).toBe('node/5408199821');
+  });
+});
+
+// SPEC.md Section 11.1's import-side duplicate rule, which is Section 11.3's
+// community-submission rule applied to the seed: within
+// SUGGEST_DUPLICATE_RADIUS_M and a normalized name similarity of at least
+// SUGGEST_NAME_SIMILARITY means one venue, not two.
+//
+// The fixtures are the two real pairs from `data/seed/karlsruhe/bars.json`
+// that the owner's field test ran into, at their committed coordinates, so
+// these tests are pinned to the data that produced the bug rather than to a
+// synthetic pair chosen to sit comfortably inside the threshold.
+describe('collapseDuplicateBars', () => {
+  function importedBar(overrides: Partial<Bar> = {}): Bar {
+    return {
+      osm_id: 'node/1',
+      name: 'Zum Fass',
+      address: null,
+      lat: 49.0,
+      lon: 8.4,
+      cell_index: 0,
+      source: 'osm',
+      ...overrides,
+    };
+  }
+
+  // node/5075975976 and node/5408199821: the same building, 6.2 m apart,
+  // same name, same address. The player saw two markers an arm's length
+  // apart and checked into both.
+  const FETTSCHMELZE_A = importedBar({
+    osm_id: 'node/5075975976',
+    name: 'Fettschmelze',
+    address: 'Alter Schlachthof 25, 76131 Karlsruhe',
+    lat: 49.0045932,
+    lon: 8.4290774,
+  });
+  const FETTSCHMELZE_B = importedBar({
+    osm_id: 'node/5408199821',
+    name: 'Fettschmelze',
+    address: 'Alter Schlachthof 25, 76131 Karlsruhe',
+    lat: 49.0046399,
+    lon: 8.4290321,
+  });
+
+  // node/1447845917 and way/54732961: the same name, but 25.3 m apart —
+  // just outside SUGGEST_DUPLICATE_RADIUS_M, so the rule leaves them alone.
+  const TRAUBE_NODE = importedBar({
+    osm_id: 'node/1447845917',
+    name: 'Traube',
+    lat: 48.9986991,
+    lon: 8.4731355,
+  });
+  const TRAUBE_WAY = importedBar({
+    osm_id: 'way/54732961',
+    name: 'Traube',
+    lat: 48.9988391,
+    lon: 8.4734095,
+  });
+
+  it('collapses two records of the same venue metres apart into one', () => {
+    const result = collapseDuplicateBars([FETTSCHMELZE_A, FETTSCHMELZE_B]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/5075975976']);
+    expect(result.collapsed).toHaveLength(1);
+    expect(result.collapsed[0].kept.osm_id).toBe('node/5075975976');
+    expect(result.collapsed[0].dropped.osm_id).toBe('node/5408199821');
+    expect(result.collapsed[0].distanceM).toBeCloseTo(6.2, 1);
+  });
+
+  // The radius half of the rule, from both sides: same name, 25.3 m apart,
+  // and they stay two bars. A radius widened far enough to swallow this pair
+  // would start merging genuinely distinct neighbouring venues, which in a
+  // city centre is the more damaging failure of the two — a bar that cannot
+  // be checked into at all.
+  // The pair that made IMPORT_DUPLICATE_RADIUS_M a constant of its own: one
+  // venue mapped twice, as the surveyed node and as the building way around
+  // it. Their centroids are 25.34 m apart, which the 25 m *submission* radius
+  // misses by 34 cm - and this is the pair the owner actually got stuck in,
+  // checked into both halves of it at once. Real coordinates from the seed,
+  // so a change to either radius is measured against the venue that produced
+  // the requirement rather than against a rounded stand-in.
+  it('collapses a venue mapped as both a node and the building way around it', () => {
+    const result = collapseDuplicateBars([TRAUBE_NODE, TRAUBE_WAY]);
+
+    expect(result.bars).toHaveLength(1);
+    expect(result.collapsed).toHaveLength(1);
+    // The surveyed node survives the way's centroid (see the survivor order).
+    expect(result.bars[0].osm_id).toBe('node/1447845917');
+    expect(result.collapsed[0].distanceM).toBeGreaterThan(CONFIG.SUGGEST_DUPLICATE_RADIUS_M);
+    expect(result.collapsed[0].distanceM).toBeLessThan(CONFIG.IMPORT_DUPLICATE_RADIUS_M);
+  });
+
+  // The distance half of the rule still has to bite somewhere, so this is the
+  // same name at a separation no building explains - two genuinely different
+  // pubs sharing a common name, which is the case the radius exists to spare.
+  it('keeps two same-named bars that are further apart than the import radius', () => {
+    const result = collapseDuplicateBars([
+      TRAUBE_NODE,
+      importedBar({
+        osm_id: 'node/901',
+        name: 'Traube',
+        // ~89 m north of TRAUBE_NODE, comfortably past the 40 m radius.
+        lat: 48.9994991,
+        lon: 8.4731355,
+      }),
+    ]);
+
+    expect(result.bars).toHaveLength(2);
+    expect(result.collapsed).toHaveLength(0);
+  });
+
+  // The name half of the rule: neighbours, metres apart, different names.
+  it('keeps two differently named bars at the same address', () => {
+    const result = collapseDuplicateBars([
+      FETTSCHMELZE_A,
+      importedBar({
+        osm_id: 'node/900',
+        name: 'Kohi',
+        address: 'Alter Schlachthof 25, 76131 Karlsruhe',
+        lat: 49.0046399,
+        lon: 8.4290321,
+      }),
+    ]);
+
+    expect(result.bars).toHaveLength(2);
+  });
+
+  // And the name half from close range, which is where the threshold
+  // actually earns its value. Two venues in one complex whose names share a
+  // word are the ordinary case in a converted industrial site like the Alter
+  // Schlachthof, and they are two bars: 0.65 on this ratio, well under
+  // SUGGEST_NAME_SIMILARITY. A threshold loosened far enough to merge these
+  // would take real, separately checkable venues off the map.
+  it('keeps two neighbours whose names merely share a word', () => {
+    const result = collapseDuplicateBars([
+      importedBar({ osm_id: 'node/10', name: 'Schlachthof', lat: 49.0045932, lon: 8.4290774 }),
+      importedBar({
+        osm_id: 'node/11',
+        name: 'Alter Schlachthof',
+        lat: 49.0046399,
+        lon: 8.4290321,
+      }),
+    ]);
+
+    expect(result.bars).toHaveLength(2);
+  });
+
+  // The other side of the same threshold: a spelling variation of one name -
+  // here a space one mapper wrote and the other did not - is 0.875 and is
+  // one venue. A threshold tightened to demand identity would leave these as
+  // two bars, which is the bug this whole rule exists to remove.
+  it('collapses a spelling variation of the same name', () => {
+    const result = collapseDuplicateBars([
+      importedBar({ osm_id: 'node/10', name: 'Sub Rosa', lat: 49.0045932, lon: 8.4290774 }),
+      importedBar({ osm_id: 'node/11', name: 'SubRosa', lat: 49.0046399, lon: 8.4290321 }),
+    ]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/10']);
+  });
+
+  // Section 11.3's normalisation is inherited whole, suffixes included, so a
+  // venue mapped once with its type in the name and once without is one bar.
+  it('collapses names that differ only by a suffix the rule normalises away', () => {
+    const result = collapseDuplicateBars([
+      FETTSCHMELZE_A,
+      importedBar({ ...FETTSCHMELZE_B, name: 'Fettschmelze Bar' }),
+    ]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/5075975976']);
+  });
+
+  // And so is its empty-name guard: two unrelated names that both normalise
+  // to nothing must not become one bar just because "" equals "".
+  it('never merges two names that both normalise to the empty string', () => {
+    const result = collapseDuplicateBars([
+      importedBar({ osm_id: 'node/10', name: 'The Bar', lat: 49.0, lon: 8.4 }),
+      importedBar({ osm_id: 'node/11', name: 'Die Kneipe', lat: 49.0, lon: 8.4 }),
+    ]);
+
+    expect(result.bars).toHaveLength(2);
+  });
+
+  // Determinism: the seed must be reproducible, so the survivor cannot be
+  // "whichever one Overpass listed first".
+  it('picks the same survivor whichever order the pair arrives in', () => {
+    const forwards = collapseDuplicateBars([FETTSCHMELZE_A, FETTSCHMELZE_B]);
+    const backwards = collapseDuplicateBars([FETTSCHMELZE_B, FETTSCHMELZE_A]);
+
+    expect(forwards.bars.map((entry) => entry.osm_id)).toEqual(['node/5075975976']);
+    expect(backwards.bars.map((entry) => entry.osm_id)).toEqual(['node/5075975976']);
+  });
+
+  it('keeps the record that has an address over one that has none, whatever their ids', () => {
+    const withAddress = importedBar({
+      osm_id: 'node/999',
+      name: 'Fettschmelze',
+      address: 'Alter Schlachthof 25, 76131 Karlsruhe',
+      lat: 49.0045932,
+      lon: 8.4290774,
+    });
+    const withoutAddress = importedBar({
+      osm_id: 'node/1',
+      name: 'Fettschmelze',
+      lat: 49.0046399,
+      lon: 8.4290321,
+    });
+
+    const result = collapseDuplicateBars([withoutAddress, withAddress]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/999']);
+  });
+
+  // A way is reduced to a building centroid (Section 11.1); a node is the
+  // surveyed point. The way carries the lower id here on purpose, so only the
+  // element-type rank can produce this answer.
+  it('keeps the surveyed node over a way reduced to its centroid', () => {
+    const node = importedBar({
+      osm_id: 'node/900',
+      name: 'Traube',
+      lat: TRAUBE_NODE.lat,
+      lon: TRAUBE_NODE.lon,
+    });
+    const way = importedBar({
+      osm_id: 'way/5',
+      name: 'Traube',
+      lat: TRAUBE_NODE.lat,
+      lon: TRAUBE_NODE.lon,
+    });
+
+    const result = collapseDuplicateBars([way, node]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/900']);
+  });
+
+  it('returns the survivors in the order they were given', () => {
+    const first = importedBar({ osm_id: 'node/1', name: 'Alpha', lat: 49.0, lon: 8.4 });
+    const last = importedBar({ osm_id: 'node/3', name: 'Omega', lat: 49.02, lon: 8.42 });
+
+    const result = collapseDuplicateBars([first, FETTSCHMELZE_B, last, FETTSCHMELZE_A]);
+
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual([
+      'node/1',
+      'node/3',
+      'node/5075975976',
+    ]);
+  });
+
+  it('leaves a set with no duplicates untouched', () => {
+    const bars = [
+      importedBar({ osm_id: 'node/1', name: 'Alpha', lat: 49.0, lon: 8.4 }),
+      importedBar({ osm_id: 'node/2', name: 'Beta', lat: 49.01, lon: 8.41 }),
+    ];
+
+    const result = collapseDuplicateBars(bars);
+
+    expect(result.bars).toEqual(bars);
+    expect(result.collapsed).toHaveLength(0);
   });
 });
 

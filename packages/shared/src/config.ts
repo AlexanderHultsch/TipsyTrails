@@ -68,6 +68,24 @@ export const CONFIG = {
   SUGGEST_DUPLICATE_RADIUS_M: 25,
   SUGGEST_NAME_SIMILARITY: 0.85, // normalized Levenshtein ratio, see 11.3
 
+  // Section 11.1's import-side duplicate collapse. Deliberately larger than
+  // the submission radius above, and a separate constant rather than a
+  // widening of it, because the two compare different kinds of point: a
+  // submission is two places a person tapped, while the import compares a
+  // surveyed POI node against a *building centroid*, displaced by half a
+  // building. Karlsruhe's "Traube" is exactly that - one venue mapped as
+  // both a node and the way around it, 25.34 m apart, which the 25 m
+  // submission radius misses by 34 cm.
+  //
+  // 40 m was measured, not guessed. Across the whole committed seed there
+  // are exactly two pairs that clear SUGGEST_NAME_SIMILARITY within 60 m,
+  // and both are known duplicates of one venue; nothing else becomes a
+  // candidate at any radius up to 60 m. So this value collapses the two real
+  // duplicates with 20 m of headroom before it could reach anything else,
+  // and the similarity gate - shared with 11.3 - is what actually
+  // discriminates. Re-measure before raising it for a second city.
+  IMPORT_DUPLICATE_RADIUS_M: 40,
+
   LEADERBOARD_PAGE_SIZE: 50,
   MAINTENANCE_INTERVAL_MS: 60 * 1000, // see 7.9
   // Badge evaluation catch-up interval, see 7.9. Periods only close at 04:00

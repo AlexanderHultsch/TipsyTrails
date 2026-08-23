@@ -45,6 +45,28 @@ interface ApiErrorBody {
 // Same-origin fetch with credentials so the session cookie is sent. Ordinary
 // same-origin requests from the SPA already carry an Origin header set by
 // the browser itself — it cannot and must not be set from script here.
+//
+// `Content-Type: application/json` is sent only when there actually is a
+// body, and that condition is load-bearing rather than tidy. Declaring that
+// content type on a request that then sends zero bytes is not a harmless
+// extra header: Fastify's JSON body parser rejects it outright with
+// FST_ERR_CTP_EMPTY_JSON_BODY — a 400, "Body cannot be empty when
+// content-type is set to 'application/json'" — before any route handler
+// runs. Sent unconditionally, every bodyless state-changing call in this file
+// failed on every attempt, for everyone, from the day it shipped:
+// `POST /api/visits/:id/cancel`, `POST /api/auth/logout` and
+// `DELETE /api/admin/bars/:id`. Calls that do send a body were unaffected,
+// which is why check-in worked and cancelling never did.
+//
+// The caller's own `headers` still override, so a call that wants a
+// different content type (or wants to state this one for a bodyless
+// request) can still say so explicitly.
+//
+// This is checked from both ends: `client.test.ts` pins the header, and
+// `packages/api/src/routes/visits.test.ts` puts a real Fastify instance
+// behind a bodyless cancel. The second is the one that matters — every web
+// test in this repository stubs `fetch`, so no amount of client-side testing
+// could ever have seen a body parser reject anything.
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -52,7 +74,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       credentials: 'include',
       headers: {
-        'Content-Type': 'application/json',
+        ...(init?.body == null ? {} : { 'Content-Type': 'application/json' }),
         ...init?.headers,
       },
     });
@@ -254,6 +276,10 @@ export function checkIn(input: { barId: number }): Promise<VisitSummary> {
 // is nothing here to mirror `deleteAdminBar` above. A visit the caller may
 // not act on comes back as one indistinguishable 404 (Section 9.5), which
 // this function surfaces as an ordinary ApiError like every other call.
+//
+// It carries no body, which is why it was the most visible casualty of the
+// unconditional Content-Type header `request` used to send - see the note
+// there. The id is in the path and there is nothing else to say.
 export function cancelVisit(visitId: number): Promise<VisitSummary> {
   return request<VisitSummary>(`/api/visits/${visitId}/cancel`, { method: 'POST' });
 }

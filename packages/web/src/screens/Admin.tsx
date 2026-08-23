@@ -3,14 +3,17 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   ApiError,
+  cancelVisit,
   createAdminBar,
   deleteAdminBar,
   getAdminBars,
   getAdminUsers,
+  getPendingVisits,
   updateAdminBar,
 } from '../api/client.js';
-import type { AdminBar, AdminUser } from '../api/types.js';
+import type { AdminBar, AdminUser, VisitSummary } from '../api/types.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { isVisitAlreadyGone } from '../tracking/useVisits.js';
 
 type SourceFilter = 'all' | 'osm' | 'community' | 'admin';
 
@@ -74,6 +77,10 @@ export function Admin() {
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
 
+  const [pendingVisits, setPendingVisits] = useState<VisitSummary[]>([]);
+  const [pendingVisitsError, setPendingVisitsError] = useState<string | null>(null);
+  const [cancellingVisitId, setCancellingVisitId] = useState<number | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setBarsLoading(true);
@@ -109,6 +116,54 @@ export function Admin() {
       cancelled = true;
     };
   }, []);
+
+  // SPEC.md Section 7.5's cancel endpoint, reached from a second place. This
+  // is an escape hatch, not a new admin power: GET /api/visits/pending and
+  // POST /api/visits/:id/cancel both act on the *caller's* own visits and
+  // nobody else's (packages/api/src/routes/visits.ts), so this list is the
+  // signed-in admin's own pending visits and no server route was added for
+  // it. It exists because a pending visit that the map's banner cannot get
+  // rid of leaves a player stuck with no other way out, and the admin screen
+  // is a place they can always reach - unlike the banner, which needs a map,
+  // a position and the right screen.
+  useEffect(() => {
+    let cancelled = false;
+    getPendingVisits()
+      .then((result) => {
+        if (!cancelled) setPendingVisits(result.visits);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setPendingVisitsError(genericError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleCancelVisit(visit: VisitSummary) {
+    if (
+      !window.confirm(`Cancel your pending visit to "${visit.barName}"? This cannot be undone.`)
+    ) {
+      return;
+    }
+    setPendingVisitsError(null);
+    setCancellingVisitId(visit.id);
+    try {
+      await cancelVisit(visit.id);
+      setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
+    } catch (err) {
+      // Section 9.5's identical 404 means the visit is not pending, which is
+      // what the click asked for - the same rule the banner follows, from
+      // the same helper, so the two screens cannot disagree about it.
+      if (isVisitAlreadyGone(err)) {
+        setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
+        return;
+      }
+      setPendingVisitsError(genericError(err));
+    } finally {
+      setCancellingVisitId(null);
+    }
+  }
 
   function parseLatLon(form: BarFormState): { lat: number; lon: number } | null {
     const lat = Number(form.lat);
@@ -439,6 +494,34 @@ export function Admin() {
               Create bar
             </button>
           </form>
+        </section>
+
+        <section className="admin__section">
+          <h2>Your pending visits</h2>
+          {pendingVisitsError && (
+            <p className="error-message" role="alert">
+              {pendingVisitsError}
+            </p>
+          )}
+          {pendingVisits.length === 0 ? (
+            <p>You have no pending visits.</p>
+          ) : (
+            <ul className="admin-visit-list">
+              {pendingVisits.map((visit) => (
+                <li key={visit.id} className="admin-visit-row">
+                  <span className="admin-visit-row__bar">{visit.barName}</span>
+                  <button
+                    className="button button--secondary admin-visit-row__cancel"
+                    type="button"
+                    disabled={cancellingVisitId === visit.id}
+                    onClick={() => void handleCancelVisit(visit)}
+                  >
+                    Cancel visit
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="admin__section">

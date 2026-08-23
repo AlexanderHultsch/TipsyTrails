@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
+  cancelVisit,
+  deleteAdminBar,
   getCity,
   getFogMask,
   getVapidPublicKey,
+  logout,
   subscribePush,
   unsubscribePush,
 } from './client.js';
@@ -175,5 +178,65 @@ describe('subscribePush / unsubscribePush', () => {
     expect(url).toBe('/api/push/subscribe');
     expect(init.method).toBe('DELETE');
     expect(JSON.parse(init.body as string)).toEqual({ endpoint: 'https://push.example/abc' });
+  });
+});
+
+// The client-side half of the FST_ERR_CTP_EMPTY_JSON_BODY defect that made
+// cancelling a visit fail on every attempt from the day it shipped.
+// `request()` used to set `Content-Type: application/json` on every call
+// regardless of whether it had anything to send, and Fastify's JSON body
+// parser rejects a request that declares that content type and then sends
+// zero bytes - a 400, before any route handler runs. Every bodyless
+// state-changing call in this file was therefore dead on arrival, and the
+// calls that do send a body were fine, which is why check-in worked and
+// cancel never did.
+//
+// These tests pin the header. They are deliberately not the whole defence:
+// they re-state the implementation and would pass against any parser at all.
+// The test that would actually have caught this puts a real Fastify instance
+// behind a bodyless cancel and lives in
+// packages/api/src/routes/visits.test.ts - every test in this package stubs
+// `fetch`, so no test here can ever see a body parser reject anything.
+describe('request: Content-Type is sent only when there is a body', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubOk() {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function headersOf(fetchMock: ReturnType<typeof stubOk>): Record<string, string> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return (init.headers ?? {}) as Record<string, string>;
+  }
+
+  // Named one by one rather than looped, so a failure says which call broke.
+  it('sends no Content-Type for POST /api/visits/:id/cancel', async () => {
+    const fetchMock = stubOk();
+    await cancelVisit(77);
+    expect(headersOf(fetchMock)['Content-Type']).toBeUndefined();
+  });
+
+  it('sends no Content-Type for POST /api/auth/logout', async () => {
+    const fetchMock = stubOk();
+    await logout();
+    expect(headersOf(fetchMock)['Content-Type']).toBeUndefined();
+  });
+
+  it('sends no Content-Type for DELETE /api/admin/bars/:id', async () => {
+    const fetchMock = stubOk();
+    await deleteAdminBar(10);
+    expect(headersOf(fetchMock)['Content-Type']).toBeUndefined();
+  });
+
+  // The other side of the same condition: a call that does send a body must
+  // still declare it, or every write in the app breaks instead.
+  it('still sends Content-Type when there is a body', async () => {
+    const fetchMock = stubOk();
+    await subscribePush({ endpoint: 'https://push.example/abc', keys: { p256dh: 'p', auth: 'a' } });
+    expect(headersOf(fetchMock)['Content-Type']).toBe('application/json');
   });
 });

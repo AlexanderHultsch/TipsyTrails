@@ -406,6 +406,9 @@ describe('admin bar management', () => {
       if (url === '/api/admin/users') {
         return jsonResponse(200, { users: [] });
       }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -439,6 +442,9 @@ describe('admin bar management', () => {
       if (url === '/api/admin/users') {
         return jsonResponse(200, { users: [] });
       }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -462,6 +468,129 @@ describe('admin bar management', () => {
 
     expect(deleteCalls).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.admin-bar-row')).toBeNull();
+  });
+});
+
+// SPEC.md Section 7.5's cancel endpoint, reached from the admin screen. The
+// escape hatch for the state the owner's field test ended in: pending visits
+// he could not clear from the map's banner. It is the caller's own visits and
+// nobody else's - GET /api/visits/pending and POST /api/visits/:id/cancel
+// both scope themselves to the session's user server-side - so no admin route
+// was added for it.
+describe('admin pending-visit escape hatch', () => {
+  function visitRows(): HTMLElement[] {
+    return Array.from(container.querySelectorAll('.admin-visit-row'));
+  }
+
+  function pendingVisit(overrides: Record<string, unknown> = {}) {
+    const nowS = Math.floor(Date.now() / 1000);
+    return {
+      id: 77,
+      barId: 10,
+      barName: 'The Fox',
+      startedAt: nowS,
+      lastSampleAt: nowS,
+      onsiteSamples: 1,
+      confirmedS: 0,
+      remainingS: 1200,
+      status: 'pending',
+      ...overrides,
+    };
+  }
+
+  it("lists the signed-in admin's own pending visits and cancels the one whose control was tapped", async () => {
+    let visits = [
+      pendingVisit({ id: 77, barId: 10, barName: 'The Fox' }),
+      pendingVisit({ id: 88, barId: 11, barName: 'The Hound' }),
+    ];
+    const cancelPaths: string[] = [];
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars: [] });
+      }
+      if (url === '/api/admin/users') {
+        return jsonResponse(200, { users: [] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits });
+      }
+      if (url.endsWith('/cancel') && init?.method === 'POST') {
+        cancelPaths.push(url);
+        visits = visits.filter((visit) => !url.includes(String(visit.id)));
+        return jsonResponse(200, pendingVisit({ id: 88, status: 'cancelled' }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    await renderApp('/admin');
+
+    expect(
+      visitRows().map((row) => row.querySelector('.admin-visit-row__bar')?.textContent),
+    ).toEqual(['The Fox', 'The Hound']);
+
+    // Deliberately the second row, so a control reaching for `visits[0]`
+    // would end the wrong visit and this would catch it.
+    const houndCancel = visitRows()[1].querySelector(
+      '.admin-visit-row__cancel',
+    ) as HTMLButtonElement;
+
+    confirmSpy.mockReturnValueOnce(false);
+    await click(houndCancel);
+    expect(confirmSpy).toHaveBeenCalledWith(
+      'Cancel your pending visit to "The Hound"? This cannot be undone.',
+    );
+    expect(cancelPaths).toEqual([]);
+    expect(visitRows()).toHaveLength(2);
+
+    confirmSpy.mockReturnValueOnce(true);
+    await click(houndCancel);
+
+    expect(cancelPaths).toEqual(['/api/visits/88/cancel']);
+    expect(
+      visitRows().map((row) => row.querySelector('.admin-visit-row__bar')?.textContent),
+    ).toEqual(['The Fox']);
+  });
+
+  // Sections 7.5 and 9.5: the same 404-means-gone rule the banner follows,
+  // from the same helper - a visit the server says is not pending must leave
+  // this list too, or the escape hatch has the very defect it exists for.
+  it('removes a visit that answers 404, the same way the banner does', async () => {
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars: [] });
+      }
+      if (url === '/api/admin/users') {
+        return jsonResponse(200, { users: [] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [pendingVisit({ id: 77 })] });
+      }
+      if (url === '/api/visits/77/cancel' && init?.method === 'POST') {
+        return jsonResponse(404, {
+          code: 'visit_not_found',
+          message: 'You have no pending visit with that id.',
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    await renderApp('/admin');
+
+    expect(visitRows()).toHaveLength(1);
+    await click(visitRows()[0].querySelector('.admin-visit-row__cancel') as HTMLButtonElement);
+
+    expect(visitRows()).toHaveLength(0);
+    expect(container.querySelector('.admin__section .error-message')).toBeNull();
   });
 });
 
@@ -495,6 +624,9 @@ describe('admin bar list ordering', () => {
       }
       if (url === '/api/admin/users') {
         return jsonResponse(200, { users: [] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -536,6 +668,9 @@ describe('admin bar list ordering', () => {
       }
       if (url === '/api/admin/users') {
         return jsonResponse(200, { users: [] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
       }
       throw new Error(`Unexpected request: ${url}`);
     });

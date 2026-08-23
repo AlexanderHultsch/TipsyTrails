@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { VisitSummary } from '../api/types.js';
 
 function formatDuration(totalSeconds: number): string {
@@ -59,6 +59,35 @@ export function PendingVisitBanner({
   // confirmation open on another, so two "are you sure?" prompts can never
   // be on screen at once.
   const [confirmingVisitId, setConfirmingVisitId] = useState<number | null>(null);
+  const confirmActionsRef = useRef<HTMLDivElement | null>(null);
+
+  // This banner is row 1 of the map's overlay grid (index.css,
+  // .map-overlays), a `minmax(0, auto)` track that scrolls inside itself
+  // rather than pushing the rows below it off the screen. That is the right
+  // behaviour for the layout and the wrong behaviour for this control: the
+  // confirmation is the tallest thing the banner ever renders - a question,
+  // two buttons, and above it everything belonging to any other pending
+  // visit - so on a phone-sized screen with two visits pending, or with one
+  // and the bar sheet open in row 5, opening it can put its own buttons
+  // below the row's clip. Photographed, not theorised: the owner's field
+  // test produced a screenshot of this banner filling the upper half of the
+  // screen with its own scrollbar and the second visit's cancel control cut
+  // off mid-glyph. A control that has to be found by dragging a banner
+  // nobody knows is scrollable is indistinguishable from one that does not
+  // work.
+  //
+  // So the actions are scrolled to when the confirmation opens. The actions
+  // rather than the whole confirmation block, because `block: 'nearest'`
+  // aligns the *start* of anything taller than the scroll port and the
+  // buttons are at the end - and the actions on their own always fit.
+  // Optional call: `scrollIntoView` is not implemented in jsdom, and a
+  // banner must not fail to render because a scroll hint is unavailable.
+  useEffect(() => {
+    if (confirmingVisitId === null) {
+      return;
+    }
+    confirmActionsRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [confirmingVisitId]);
 
   if (visits.length === 0) {
     return null;
@@ -107,7 +136,7 @@ export function PendingVisitBanner({
                     Cancel your visit to {visit.barName}? The {formatDuration(visit.confirmedS)}{' '}
                     confirmed so far is lost and cannot be restored.
                   </p>
-                  <div className="pending-visit-banner__confirm-actions">
+                  <div className="pending-visit-banner__confirm-actions" ref={confirmActionsRef}>
                     <button
                       type="button"
                       className="button button--primary pending-visit-banner__confirm-cancel"

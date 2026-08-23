@@ -16,57 +16,44 @@
 // GeoJSON conversion deliberately drops Point features, since those are
 // admin_centre/label nodes for its Polygon/MultiPolygon boundaries).
 //
-// This module has no relative *value* imports from `city.ts`, `grid.ts` or
-// `overpass.ts` — only type-only ones, which TypeScript erases completely.
-// `scripts/import-osm-bars.ts` (like its siblings) imports this file by its
-// literal `.ts` path and runs it as source with Node's native type
-// stripping, no build step. That only resolves a relative NodeNext ".js"
-// specifier (CLAUDE.md's required convention for `packages/shared`) back to
-// its co-located ".ts" file when the import is type-only and erased before
-// Node ever attempts to load it; a genuine *value* import written the same
-// way has no ".js" file to resolve to on this unbuilt path. `grid.ts`
-// already hit this shape of problem and reimplements rather than imports
-// (its point-in-polygon test, "so this module has no dependency on the
-// Overpass pipeline"); the query-string helpers, the Section 6.1
-// projection and the Overpass timeout default below follow the same
-// precedent. `bars.test.ts` cross-checks the projection copy against
-// `grid.ts`'s own `toCell` for the same coordinates, so the two cannot
-// silently drift apart.
+// This module used to carry no relative *value* imports at all — only
+// type-only ones, which TypeScript erases completely — because
+// `scripts/import-osm-bars.ts` imported it by its literal `.ts` path and ran
+// it as source with Node's native type stripping, and that only resolves a
+// relative NodeNext ".js" specifier (CLAUDE.md's required convention for
+// `packages/shared`) back to its co-located ".ts" file when the import is
+// type-only and erased before Node ever attempts to load it. A genuine
+// *value* import written the same way has no ".js" file to resolve to on
+// that unbuilt path, so the Section 6.1 projection was copied in here rather
+// than imported from `grid.ts`.
+//
+// That constraint is gone, and it had to go: Section 11.1's import-side
+// duplicate rule is Section 11.3's community duplicate rule (`suggest.ts`),
+// and reusing one implementation of it means importing `suggest.ts` — which
+// itself reads `CONFIG` (`config.ts`) and `haversineDistanceM` (`grid.ts`).
+// A second similarity function, or a second copy of
+// `SUGGEST_DUPLICATE_RADIUS_M`, is exactly what CLAUDE.md's config rule and
+// Section 11.3 forbid, so the loader had to move instead of the rule:
+// `scripts/import-osm-bars.ts` now imports the built
+// `packages/shared/dist/*.js` rather than this source tree, and needs
+// `pnpm --filter @tipsytrails/shared build` (or plain `pnpm install`, whose
+// `prepare` script runs it) to have run first. See that script's own header.
+//
+// With ordinary imports available, the projection copy is gone too — `toCell`
+// and `computeGridDimensions` come from `grid.ts`, so they cannot drift from
+// Section 6.1's normative definition at all any more.
+//
+// (`scripts/build-grid.ts` still imports `packages/shared/src/grid.ts` as
+// source and is therefore *already* broken by this same resolution rule, with
+// or without this change — see the report. It is outside this task's scope.)
 
 import type { CityConfig } from './city.js';
-import type { GridParams } from './grid.js';
+import { CONFIG } from './config.js';
+import { computeGridDimensions, haversineDistanceM, toCell, type GridParams } from './grid.js';
+import { findConflictingBar, type DuplicateCandidateBar } from './suggest.js';
 
 /** Mirrors `overpass.ts`'s constant of the same name and value — see the note above. */
 export const DEFAULT_OVERPASS_TIMEOUT_S = 180;
-
-// ---------------------------------------------------------------------------
-// Section 6.1 projection, verbatim (see the module note above for why this
-// is a reimplementation rather than an import of grid.ts's toCell).
-// ---------------------------------------------------------------------------
-
-const M_PER_DEG_LAT = 110574;
-
-function mPerDegLon(lat: number): number {
-  return 111320 * Math.cos((lat * Math.PI) / 180);
-}
-
-function toCell(lat: number, lon: number, grid: GridParams): number | null {
-  const x = Math.floor(((lon - grid.origin_lon) * mPerDegLon(grid.origin_lat)) / grid.cell_size_m);
-  const y = Math.floor(((lat - grid.origin_lat) * M_PER_DEG_LAT) / grid.cell_size_m);
-  if (x < 0 || y < 0 || x >= grid.grid_width || y >= grid.grid_height) return null;
-  return y * grid.grid_width + x;
-}
-
-/** Grid dimensions from a bounding box, matching `grid.ts`'s `computeGridDimensions`. */
-function computeGridDimensions(
-  box: CityConfig['bounding_box'],
-  cellSizeM: number,
-): { grid_width: number; grid_height: number } {
-  return {
-    grid_width: Math.ceil(((box.east - box.west) * mPerDegLon(box.south)) / cellSizeM),
-    grid_height: Math.ceil(((box.north - box.south) * M_PER_DEG_LAT) / cellSizeM),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Query construction — pure function of the city config, mirroring
@@ -334,6 +321,8 @@ export interface OsmToBarsResult {
   bars: Bar[];
   discardedNoName: number;
   wayOrRelationCount: number;
+  /** The duplicate pairs Section 11.1's collapse rule merged — see `collapseDuplicateBars`. */
+  collapsedDuplicates: CollapsedDuplicate[];
 }
 
 /**
@@ -377,6 +366,13 @@ function addressFromTags(tags: Record<string, string> | undefined): string | nul
  * establishments, unlike a bar with no usable position, which fails loudly
  * (a coordinate outside the configured grid means the city config or the
  * query area is wrong, not that the bar should be silently dropped).
+ *
+ * The duplicate collapse (SPEC.md Section 11.1, `collapseDuplicateBars`
+ * below) runs here rather than being left to the caller, so that every
+ * consumer of the conversion — the seed file, the diff report, the counts
+ * printed on exit — sees the same set and no caller can forget the step.
+ * It runs *after* the name discard, because the rule is a rule about names
+ * and an element without one has already left the data.
  */
 export function osmElementsToBars(
   response: OverpassBarsResponse,
@@ -432,7 +428,156 @@ export function osmElementsToBars(
     });
   }
 
-  return { bars, discardedNoName, wayOrRelationCount };
+  const collapsed = collapseDuplicateBars(bars);
+  return {
+    bars: collapsed.bars,
+    discardedNoName,
+    wayOrRelationCount,
+    collapsedDuplicates: collapsed.collapsed,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate collapse (SPEC.md Section 11.1).
+//
+// OSM maps the same physical venue twice more often than one would like: a
+// node for the venue and a way for the building it occupies, or simply two
+// nodes surveyed by two mappers years apart. Karlsruhe's seed contains both
+// shapes — "Fettschmelze" as two nodes about 7 m apart, "Traube" as a node
+// and a way about 20 m apart. Two rows means two bar ids, and every rule
+// downstream that is keyed on a bar id then treats them as two bars: the
+// partial unique index `idx_visits_one_pending` (Section 5.7) stops a second
+// pending visit at the same *id* and cannot stop one at the twin, so a player
+// standing in front of one building sees two markers an arm's length apart
+// with the same name and can check into both.
+//
+// The rule applied is not a new one. It is Section 11.3's community-
+// submission duplicate guard, `findConflictingBar` (`suggest.ts`), called
+// with the bars kept so far as the "active bars" it checks against — the same
+// `SUGGEST_DUPLICATE_RADIUS_M`, the same `SUGGEST_NAME_SIMILARITY`, the same
+// name normalisation and the same empty-name guard. One implementation, so
+// the import and the submission form can never disagree about what a
+// duplicate is.
+// ---------------------------------------------------------------------------
+
+/** One merged pair: which bar was kept, which was dropped, and how far apart they were. */
+export interface CollapsedDuplicate {
+  kept: Bar;
+  dropped: Bar;
+  distanceM: number;
+}
+
+// Which of a duplicate pair survives. A total order over the pair, so the
+// answer depends only on the two records and never on the order Overpass
+// happened to return them in — re-running the import over the same data has
+// to produce the same file.
+//
+//   1. The one with an address beats the one without. An `addr:*`-tagged
+//      element carries real information the other does not, and it is
+//      information the app uses (Section 8.3's detail view, and Section
+//      11.3's own duplicate guard when a player later submits the same
+//      venue). Dropping the tagged twin would throw it away.
+//   2. Then a node beats a way, and a way beats a relation. A node is the
+//      surveyed position of the venue itself; a way or relation is reduced to
+//      its centroid (Section 11.1), which is the middle of a *building* and
+//      need not be where the bar is — a building with three venues in it has
+//      one centroid for all three.
+//   3. Then the lower OSM id wins. Within one element type the lower id is
+//      the older object: it has been in OSM longer, so it is the one other
+//      data is more likely to already reference — including `bars.osm_id` in
+//      an already-seeded database, where keeping it means the re-import is a
+//      no-op for that venue rather than a delete plus an insert that would
+//      take its discoveries and visits with it (Section 5.6, ON DELETE
+//      CASCADE).
+//
+// Step 3 alone would already be a stable rule; steps 1 and 2 are there so the
+// stable answer is also the better record.
+const OSM_TYPE_RANK: Record<string, number> = { node: 0, way: 1, relation: 2 };
+
+function osmIdSortKey(osmId: string): { typeRank: number; id: number } {
+  const slash = osmId.indexOf('/');
+  const type = slash === -1 ? osmId : osmId.slice(0, slash);
+  const rawId = slash === -1 ? '' : osmId.slice(slash + 1);
+  const id = Number(rawId);
+  return {
+    typeRank: OSM_TYPE_RANK[type] ?? Number.MAX_SAFE_INTEGER,
+    id: Number.isFinite(id) ? id : Number.MAX_SAFE_INTEGER,
+  };
+}
+
+function compareSurvivorPriority(a: Bar, b: Bar): number {
+  const byAddress = (a.address === null ? 1 : 0) - (b.address === null ? 1 : 0);
+  if (byAddress !== 0) return byAddress;
+
+  const keyA = osmIdSortKey(a.osm_id);
+  const keyB = osmIdSortKey(b.osm_id);
+  if (keyA.typeRank !== keyB.typeRank) return keyA.typeRank - keyB.typeRank;
+  if (keyA.id !== keyB.id) return keyA.id - keyB.id;
+  // Unreachable for well-formed OSM ids (they are unique per type), and here
+  // only so the comparator is a total order for any input at all.
+  return a.osm_id < b.osm_id ? -1 : a.osm_id > b.osm_id ? 1 : 0;
+}
+
+/**
+ * Collapses near-identical venues into one bar, per SPEC.md Section 11.1.
+ *
+ * Two bars are the same venue when Section 11.3's rule says so: within
+ * `SUGGEST_DUPLICATE_RADIUS_M` of each other and with a normalized
+ * Levenshtein name ratio of at least `SUGGEST_NAME_SIMILARITY`.
+ *
+ * The scan runs over a copy sorted by `compareSurvivorPriority`, keeping the
+ * first member of each cluster and dropping every later one that conflicts
+ * with something already kept. Sorting first is what makes the survivor the
+ * pair's *best* record rather than whichever of them Overpass listed first,
+ * and it is also what makes the whole operation deterministic: the output is
+ * a function of the set of input records, not of their order.
+ *
+ * The surviving bars are returned in the caller's original order, so this
+ * changes which records are in the seed file and nothing else about it.
+ */
+export function collapseDuplicateBars(bars: readonly Bar[]): {
+  bars: Bar[];
+  collapsed: CollapsedDuplicate[];
+} {
+  const byPriority = [...bars].sort(compareSurvivorPriority);
+  const kept: Bar[] = [];
+  // `findConflictingBar` answers with the conflicting entry itself, so `id`
+  // is set to the entry's index in `kept` and the survivor of the pair is
+  // recoverable from the answer without a second search.
+  const keptCandidates: DuplicateCandidateBar[] = [];
+  const collapsed: CollapsedDuplicate[] = [];
+  const droppedOsmIds = new Set<string>();
+
+  for (const candidate of byPriority) {
+    const conflict = findConflictingBar(
+      candidate.name,
+      candidate,
+      keptCandidates,
+      CONFIG.IMPORT_DUPLICATE_RADIUS_M,
+    );
+    if (conflict) {
+      const survivor = kept[conflict.id];
+      droppedOsmIds.add(candidate.osm_id);
+      collapsed.push({
+        kept: survivor,
+        dropped: candidate,
+        distanceM: haversineDistanceM(survivor, candidate),
+      });
+      continue;
+    }
+    keptCandidates.push({
+      id: kept.length,
+      name: candidate.name,
+      lat: candidate.lat,
+      lon: candidate.lon,
+    });
+    kept.push(candidate);
+  }
+
+  return {
+    bars: bars.filter((entry) => !droppedOsmIds.has(entry.osm_id)),
+    collapsed,
+  };
 }
 
 // ---------------------------------------------------------------------------

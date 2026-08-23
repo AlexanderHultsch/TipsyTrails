@@ -875,11 +875,25 @@ button:focus-visible,
    in row 2 underneath it - so the 4rem of padding this rule used to carry to
    duck under those controls is gone with the offsets that made it necessary.
    The row is full width, so the banner is too. */
+/* The scrolling happens here rather than only on row 1, and the reason is
+   legibility, not layout. Row 1 is `minmax(0, auto)` with `overflow-y: auto`,
+   so a banner taller than the row's share of the screen - two pending visits
+   with a confirmation open, on a phone - is simply cut off at the row's edge,
+   border and all: it reads as a banner that ends mid-sentence rather than as
+   one with more inside it, and a cancel control below that cut is
+   indistinguishable from a cancel control that does not work. Capped at the
+   row's own height instead, the banner keeps its bottom border where the eye
+   can see it and scrolls its content behind it, and the row it sits in never
+   overflows, so there is one scrolling box here and not two.
+   components/PendingVisitBanner.tsx scrolls the confirmation's buttons into
+   view when it opens, so reaching them never depends on noticing this. */
 .pending-visit-banner {
   padding: 0.75rem 1rem;
   background: rgba(244, 239, 230, 0.95);
   border-bottom: 1px solid var(--color-border);
   text-align: left;
+  max-height: 100%;
+  overflow-y: auto;
 }
 
 .pending-visit-banner__list {
@@ -1638,13 +1652,33 @@ button:focus-visible,
 }
 
 .admin-bar-list,
-.admin-user-list {
+.admin-user-list,
+.admin-visit-list {
   list-style: none;
   margin: 1rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+/* Section 7.5's cancel control, reached from the admin screen as an escape
+   hatch for a pending visit the map's banner could not clear. Same row shape
+   as the user list beside it - there is nothing about this list that wants a
+   layout of its own. */
+.admin-visit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.admin-visit-row__bar {
+  font-weight: 600;
 }
 
 .admin-bar-row {

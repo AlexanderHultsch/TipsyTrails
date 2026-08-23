@@ -1177,6 +1177,266 @@ describe('check-in and mastering', () => {
     expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
   });
 
+  // SPEC.md Sections 7.5 and 9.5. POST /api/visits/:id/cancel answers one
+  // identical 404 for every case in which the caller has no pending visit
+  // with that id - another user's, already completed, already expired,
+  // already cancelled, never existed. All of those mean the visit is not
+  // pending, which is precisely what the player was asking for, so the row
+  // goes and nothing is reported.
+  //
+  // Not the fix for the reported "cancelling did not work at all" - that was
+  // a 400 from Fastify's body parser, covered by api/client.test.ts and
+  // packages/api/src/routes/visits.test.ts. This is the rule that keeps the
+  // banner from getting stuck on a visit that ended some other way.
+  it('removes the visit and reports nothing when cancel answers 404', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [pendingVisit({ id: 77 })] });
+      }
+      if (url === '/api/visits/77/cancel' && init?.method === 'POST') {
+        return jsonResponse(404, {
+          code: 'visit_not_found',
+          message: 'You have no pending visit with that id.',
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      (container.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      (
+        container.querySelector('.pending-visit-banner__confirm-cancel') as HTMLButtonElement
+      ).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('.pending-visit-banner')).toBeNull();
+  });
+
+  // The other half of the same rule, and the reason it is decided on the
+  // status code rather than on "the request failed": a 500 changed nothing
+  // on the server, so the visit really is still pending and dropping it
+  // would put the banner back to lying about the state - in the other
+  // direction this time.
+  it('keeps the visit and reports the failure when cancel answers 500', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [pendingVisit({ id: 77 })] });
+      }
+      if (url === '/api/visits/77/cancel' && init?.method === 'POST') {
+        return jsonResponse(500, { code: 'internal_error', message: 'Something went wrong.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      (container.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      (
+        container.querySelector('.pending-visit-banner__confirm-cancel') as HTMLButtonElement
+      ).click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
+    expect(container.querySelector('.pending-visit-banner__error')?.textContent).toBe(
+      'Something went wrong.',
+    );
+  });
+
+  // Open Item O14. GET /api/visits/pending expires stale visits lazily on
+  // read (Section 7.9) and returns only live ones, so it is the only thing
+  // that can tell the client a visit ended while it was not looking. Fetched
+  // once per mount it was a snapshot: an installed PWA is backgrounded
+  // rather than unmounted, so "I closed Safari, came back, and was still
+  // checked into two bars" is a screen that never asked again.
+  it('refetches the pending visits when the screen becomes visible again', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    let serverVisits = [
+      pendingVisit({ id: 77, barId: 1, barName: 'The Fox' }),
+      pendingVisit({ id: 88, barId: 2, barName: 'The Hound' }),
+    ];
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [bar({ id: 1, name: 'The Fox' }), bar({ id: 2, name: 'The Hound' })],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: serverVisits });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const pendingFetches = () =>
+      fetchMock.mock.calls.filter(([input]) => String(input) === '/api/visits/pending').length;
+
+    expect(bannerItems()).toHaveLength(2);
+    expect(pendingFetches()).toBe(1);
+
+    // The server expires one of them while the app is in the background.
+    serverVisits = [pendingVisit({ id: 88, barId: 2, barName: 'The Hound' })];
+
+    // A visibilitychange that reports the screen as still hidden must not
+    // spend a request - it is the return to the foreground that is the
+    // trigger, not the event.
+    const visibility = { state: 'hidden' as DocumentVisibilityState };
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility.state,
+    });
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(pendingFetches()).toBe(1);
+
+      visibility.state = 'visible';
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+
+    expect(pendingFetches()).toBe(2);
+    expect(bannerItems()).toHaveLength(1);
+    expect(bannerText()).toContain('The Hound');
+    expect(bannerText()).not.toContain('The Fox');
+  });
+
+  // The banner is row 1 of the map's overlay grid (index.css,
+  // .map-overlays): a track that scrolls inside itself rather than pushing
+  // the rows below it off screen. With two pending visits, the confirmation
+  // - a question plus two buttons, under everything belonging to the other
+  // visit - can open below that row's clip, and a confirm button nobody can
+  // reach is indistinguishable from a cancel that does not work. So opening
+  // it scrolls its buttons into view.
+  it('scrolls the confirmation into view when it opens', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [bar({ id: 1, name: 'The Fox' }), bar({ id: 2, name: 'The Hound' })],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, {
+          visits: [
+            pendingVisit({ id: 77, barId: 1, barName: 'The Fox' }),
+            pendingVisit({ id: 88, barId: 2, barName: 'The Hound' }),
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    // jsdom implements no layout and therefore no scrollIntoView; this is
+    // the element the browser would be asked to bring into view.
+    const scrolledInto: Element[] = [];
+    (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView = function (this: Element) {
+      scrolledInto.push(this);
+    };
+
+    try {
+      await renderMap();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(scrolledInto).toHaveLength(0);
+
+      // The second item, the one furthest down the clipped row.
+      const hound = itemFor('The Hound');
+      await act(async () => {
+        (hound.querySelector('.pending-visit-banner__cancel') as HTMLButtonElement).click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(scrolledInto).toHaveLength(1);
+      expect(scrolledInto[0].classList.contains('pending-visit-banner__confirm-actions')).toBe(
+        true,
+      );
+      expect(itemFor('The Hound').contains(scrolledInto[0])).toBe(true);
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   it('shows the explainer once, automatically, after the first check-in but not after a second', async () => {
     const geo = stubGeolocation();
     stubWakeLock();

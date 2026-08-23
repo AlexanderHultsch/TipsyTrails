@@ -449,6 +449,56 @@ describe('POST /api/visits/:id/cancel', () => {
     expect(response.statusCode).toBe(401);
   });
 
+  // This route carries no body, and that turned out to be the whole of the
+  // "cancelling did not work at all" report from the field: the web client's
+  // `request()` set `Content-Type: application/json` on every call, body or
+  // no body, and Fastify's JSON body parser rejects that combination with
+  // FST_ERR_CTP_EMPTY_JSON_BODY - a 400, "Body cannot be empty when
+  // content-type is set to 'application/json'" - before any handler runs.
+  // Cancel therefore failed on every attempt, for every user, from the day
+  // it shipped, while check-in (which sends `{barId}`) worked and hid the
+  // pattern.
+  //
+  // Nothing in the web package could see it: every test there stubs `fetch`,
+  // so no client-side test has ever had a real body parser behind it. These
+  // two tests are the ones that would have caught it, and they belong here
+  // for exactly that reason - the first pins the request shape the fixed
+  // client sends, the second pins the reason the old shape could not work,
+  // so restoring the unconditional header fails a test that names the cause.
+  it('accepts a bodyless request, the shape the client actually sends', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const created = await checkIn(cookie, barIdByName('Zum Schlossgarten'));
+
+    const response = await injectWithOrigin({
+      method: 'POST',
+      url: `/api/visits/${created.json().id as number}/cancel`,
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'cancelled' });
+  });
+
+  it('rejects a bodyless request that declares a JSON body, which is why the client must not', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const created = await checkIn(cookie, barIdByName('Zum Schlossgarten'));
+    const visitId = created.json().id as number;
+
+    const response = await injectWithOrigin({
+      method: 'POST',
+      url: `/api/visits/${visitId}/cancel`,
+      headers: { cookie, 'content-type': 'application/json' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().message).toMatch(/Body cannot be empty/i);
+    // And the visit really is untouched - this failed before the route, so
+    // the banner kept showing a visit the player had just tried to end.
+    expect(statusOfVisit(visitId)).toBe('pending');
+  });
+
   it("moves the caller's own pending visit to cancelled, keeps the row, and drops it from the banner", async () => {
     const cookie = await registerUser('walker');
     await postSamples(cookie, [sample()]);
