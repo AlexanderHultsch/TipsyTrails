@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.31
+**Version:** 1.32
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -807,13 +807,24 @@ Four constraints bound it, and each of them is the whole point of one of the dec
 
 The mark deliberately does not appear on the nearby-bars panel, which names what is in range and is a `role="status"` statement carrying no per-bar affordance (Sections 7.5, 8.3), nor on the admin bar list, which is moderation rather than play and is not scoped to one player's mastery at all.
 
+**The wordmark is on every main screen, and it is one wordmark at two sizes.** "TIPSY TRAILS" is set in the serif of Section 8.2, in capitals, with wide letter-spacing, in ink — one definition, used everywhere, so that the application reads as one product rather than as a collection of screens that happen to share a palette. It has exactly two prominences: **hero**, where the wordmark *is* what the screen is about (the start screen and the landing screen), and **chrome**, where it is the application signing a screen that is about something else (the map, the city overview, the leaderboard, a profile). Nothing else varies between them — not the family, not the case, not the weight, not the colour, not the ratio of tracking to type — because a mark that is restyled per screen is several marks.
+
+Four things bound it, and each is a decision rather than a note about taste.
+
+- **Small and quiet is the default; loud is the exception.** The owner's instruction was explicit that this must not become a large header bolted onto every screen: on the map the wordmark is a small line in the top row of the overlay grid, at the opposite end from the status icons, and it takes no space away from the map and no pointer event from a drag. Prominence is spent where the screen has nothing more important to say, which is the two entry screens and nowhere else.
+- **It goes into the layout the screen already has.** On the map it is a member of Section 8.3's overlay grid — a second child of an existing row, which is what keeps the status-icon cluster in the exact corner it has always been in — and not an absolutely positioned element on top of everything. An overlay grid that a mark is allowed to bypass is not a grid.
+- **The element it renders as is chosen per screen, and heading structure is why.** Rendered as an `<h1>` everywhere, "Tipsy Trails" would silently become the title of every page, and a reader navigating by heading would be told the name of the application instead of the name of the screen they are on. So it is the `<h1>` only where it is the subject; where it is chrome it is an inert element above the screen's own heading, and every screen keeps exactly one sensible `<h1>`.
+- **The capitals live in the stylesheet, not in the document.** The markup and the accessible name carry the ordinary name of the application, exactly as Section 7.4's stamp caption does, so what a screen reader announces is a name and not shouting.
+
+Its typography is deliberately achieved with the two families this application already has, and Section 8.2 records why there is no third.
+
 **A state may not rest on grey either.** The rule above is written about the accent colour, and v1.31 found the gap: greying something out is a difference in lightness, which survives no black-and-white print and is the weakest signal on a palette that is already near-monochrome. So the badge placeholders of Section 7.7 are greyed *and* hollow *and* dashed, and anything else that separates two states by drawing one back must likewise put the same distinction into shape, weight or label.
 
 **Restraint does not override legibility.** A near-monochrome palette makes it easy to land below WCAG AA contrast without noticing. Body text and interactive labels meet 4.5:1 against their background, large text and icons 3:1. The accent red is never the only carrier of meaning — active states also change shape, weight, or label. The status icons of Section 8.6 are the single exception to that sentence, admitted by the same decision that narrowed the palette above, and they pay for it under their own rule: their colours must separate in luminance, not only in hue (Section 8.6). This is checked in Phase 8.
 
 ### 8.2 Typography and layout
 
-- One serif family for headings and map labels, one neutral sans for UI text. Both self-hosted, subset to Latin, `font-display: swap`.
+- One serif family for headings and map labels, one neutral sans for UI text. **Both are system stacks, and no webfont is loaded at all** — `--font-serif` is a Georgia stack and `--font-sans` a `system-ui` stack, declared in `packages/web/src/index.css` and nowhere else. This section said "both self-hosted, subset to Latin, `font-display: swap`" from v1.1 until v1.32, describing a plan that was never built; the correction is recorded rather than quietly applied because the reason matters more than the fact. A downloaded face is a request on the first paint of the first screen a player ever sees, a flash of something else while it arrives, and — on a bad connection or a blocked host — a brand that never arrives; `font-display: swap` is a mitigation for that failure, not an answer to it. Two families that are already on the device cost nothing and cannot fail to load, which is why the wordmark of Section 8.1 takes its identity from case, tracking and spacing rather than from a face of its own. **Adding a third family is therefore a decision about the whole application and not a styling detail**, and this bullet is where it would have to be argued.
 - Minimum tap target 44 × 44 px. Bottom-anchored primary actions (thumb reach).
 - **The app extends under the device's safe areas, and pads around them itself.** `index.html`'s viewport meta tag carries `viewport-fit=cover`, without which `env(safe-area-inset-*)` reports `0px` in an installed iOS PWA and the bottom tab bar sits flush against the home indicator with no clearance at all. Turning that on makes the top edge-to-edge too, so both insets are read from one named token each — `--bottom-nav-inset` and `--safe-area-top` — declared once in `:root` and referenced by name everywhere else. A second raw `env()` anywhere in the stylesheet is a second element claiming the same strip of screen, and doubles the gap rather than widening it; the stylesheet's own tests enforce the single declaration and the two places that must read the top token (`.screen`, and the map's top controls row, which sits at the physical top edge because the map screen is `position: fixed`).
 - Respect `prefers-reduced-motion`: disable the fog dissolve animation and all transitions.
@@ -823,14 +834,15 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 
 | Screen | Content |
 |---|---|
-| Landing | Name, one-line pitch, Sign in / Register |
+| Landing | The wordmark at hero prominence (8.1) as the screen's own heading, one-line pitch, Sign in / Register |
 | Register | Username, password, security question, security answer, 18+ checkbox |
 | Login | Username, password, "Forgot password?" |
 | Password reset | Username → security question → answer → new password |
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
+| Start screen (`/app`) | The wordmark at hero prominence (8.1) as the screen's own heading, one line under it, one action — "Open the map" — and, quietly below that, the player's own three figures: bars discovered, bars mastered, percentage of Karlsruhe explored. Behind all of it, a heavily fogged crop of Karlsruhe's real outline. See below |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in — which opens the map framed on that district, see below |
-| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — the discovery stamp (7.4), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons |
+| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — the discovery stamp (7.4), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons, and the wordmark at chrome prominence in the same top row, opposite them (8.1) |
 | Bar detail (`/bars/:id`) | Name, address, district, mastered status — the cocktail glass of Section 8.1 with the state in words beside it — community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
 | Profile | Username, avatar, badge shelf — on the player's own profile followed by a placeholder for every badge they have never earned (7.7) — area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
@@ -838,6 +850,18 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 | Settings | Anonymous toggle, push permission, change password, how-it-works, privacy, delete account, logout |
 | Privacy | Static page at `/privacy`, see 10.3 |
 | Admin (admins only) | Bar management, community bar moderation, user list |
+
+**The start screen is arrived at, not lived on, and it is built for that.** Every authenticated entry path lands on `/app` — signing in, registering, completing a forced password change, and the route guards — so it is the first thing a player sees after signing in and the last thing they see before the map. It is deliberately *not* a tab: Section 8.4 fixes the five, and none of them is this screen, so a player passes through it rather than returning to it. That is what makes "Open the map" its one action rather than one of several.
+
+**Its backdrop is the city outline, and it is explicitly not a map.** The requirement was "ein stark vernebelter Ausschnitt der Karlsruhe-Karte", and mounting a real map to satisfy it would be wrong on this screen above all others. The map route is lazily loaded on purpose (Section 12's bundle budget: MapLibre and PMTiles are ~250 KB gzipped and must not enter the shell chunk), and the one screen whose whole job is a fast, strong first impression is the last place to undo that. Section 7.3's fog additionally needs an authenticated binary mask fetch — the heaviest request the game makes — and WebGL2, which is not guaranteed, which is why there is a canvas fallback at all. Decoration must never be the thing that fails, and the fog is a *mechanic*: a second, decorative copy of it would either duplicate the renderer or drift from it. So the backdrop is the same real city boundary the city overview draws (`GET /static/<slug>/city.geojson`, projected and rendered as inline SVG), cropped to the screen, fogged with the application's own ink at a single low alpha.
+
+Three rules bound it, and all three are about what happens when it is not there.
+
+- **It degrades to nothing, and nothing is a complete screen.** The boundary is a network fetch and it can fail or be slow. The wordmark, the line, the action and the figures are the screen; the backdrop is atmosphere. It is drawn out of the document flow, so arriving late, arriving never, or arriving with different bounds than expected cannot move a word in front of it, and there is no placeholder box to collapse and no spinner to flash. A visible error on the entry screen would be worse than never drawing it at all.
+- **The three figures are all-or-nothing, and they are silent when they fail.** Half a row — a bar count beside a blank where the percentage should be — reads as a broken screen where none of them reads as a screen that simply does not mention them. Their row is reserved before they exist, so numbers arriving a moment after the first paint cannot lift the action above them out from under a thumb already reaching for it.
+- **The text over the backdrop meets Section 8.1's contrast floor against the fogged artwork**, not against the paper colour it would have had. The backdrop is exactly one translucent layer, painted once, so its darkest possible pixel is a single computable blend rather than whatever two overlapping fills happen to produce — and that blend is what the contrast is measured against, from the stylesheet itself.
+
+The figures come from `GET /api/progress` (the same `city.percent` the city overview renders, so the two screens cannot disagree) and `GET /api/bars` (its length is what has been discovered; Section 5.7's per-user `mastered` flag is what has been mastered, the same flag the map's markers are drawn from). `GET /api/profile/:handle` was the alternative and cannot replace the second — it carries no discovered count — so it would have been two requests either way, the larger of the two, and one needing a handle to ask at all. The remaining cost is recorded honestly as O17: `GET /api/bars` ships every discovered bar to a screen that wants two integers.
 
 **Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
 
@@ -1330,7 +1354,7 @@ These are consequences to design around, not reasons to reconsider:
 | O1 | Explorer thresholds set to 0.1% / 0.3% / 2.0% as activity floors. At a 100 m reveal radius, 0.1% of Karlsruhe's playable area is roughly 900 m of previously unexplored walking (verified: ~69 cells ≈ 865 m of a 200 m-wide corridor). Lower them if real use shows active players being excluded. | Resolved |
 | O8 | Barfly thresholds set to 1 / 2 / 3 bars. Same intent: a floor, not a target. | Resolved |
 | O9 | Check-in can be satisfied by leaving and returning within the window (Section 7.5). Accepted for v1; revisit only if abuse is observed. | Resolved |
-| O2 | No logo yet. Wordmark-only placeholder in the chosen serif until one exists. | Deferred |
+| O2 | No pictorial logo yet. The wordmark is the mark: since v1.32 it is a defined component with two prominences rather than the placeholder heading this item described, set in the existing serif in capitals with wide tracking (Section 8.1), and it is on every main screen. What is still deferred is only a *drawn* mark to stand beside or instead of it. Anything that arrives has to satisfy the same four rules the wordmark does, and one of them narrows the field sharply: it may not be a downloaded font, because Section 8.2 declines to add a third family. An SVG in the ink style of the map symbols is the shape a future answer would take. | Deferred |
 | O3 | Cell size may move from 50 m to 25 m after real-world testing. At 25 m the grid is 834 × 686 = 572,124 cells: mask ~70 KiB, texture ~559 KiB, `grid.bin` ~1.1 MB — all still viable, but the fog-state migration is real work. Grid rebuild path is stubbed, not implemented. | Deferred |
 | O4 | Native iOS wrapper (Capacitor) for true background tracking — the only route to background reveal. | Out of scope for v1 |
 | O5 | Additional cities. The data model supports them; no admin flow for adding one exists. | Out of scope for v1 |
@@ -1343,11 +1367,104 @@ These are consequences to design around, not reasons to reconsider:
 | O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
 | O15 | The fog flickering the owner saw on a tilted map (v1.25) is unexplained. Pitch is now unreachable (Section 8.3), which removes the trigger he found, but not necessarily the mechanism. Two candidate causes were ruled out by inspection: the fog quad does not stop covering the screen under pitch (`getBounds`' horizon clamp in maplibre-gl 4.7.1 only engages past ~69° for the default field of view, and the camera capped at 60° before this change), and the quad's UVs — linear in latitude across vertices placed in mercator — deviate by under 0.4 m at any pitch that was reachable, against a 50 m cell. What is left is GPU-side and cannot be observed in this repository's tests (jsdom has no WebGL2): the fog texture is `LINEAR` with no mipmaps, and the fragment shader is `precision mediump float` while sampling a ±1-texel blur kernel in UV space. Both degrade wherever one screen pixel covers several cells, which a pitched view produced in its far half — and which zooming out towards `MAP_MIN_ZOOM` produces on a flat map too, where a 50 m cell is well under a pixel. **Half of this was acted on in v1.28 and half was assessed and declined.** The precision was wrong on its own terms, independently of the shimmer: one texel of the 417 × 343 grid is 0.0024 of UV, and `mediump` — fp16 on the GPUs this runs on — resolves about 0.001 near UV 1.0, so a ±1-texel blur offset was barely two representable steps and the ±1.5-texel noise warp quantised to a handful of positions, both of them moving as the camera moves. The shader is now `precision highp float` with a `highp` sampler; GLSL ES 3.00 requires `highp` in the fragment stage, so WebGL2 being available is already the guarantee it compiles, and it costs nothing on any GPU this reaches. Mipmaps were assessed and are **not** the right fix: the mask is binary and the shader already blurs it explicitly at a radius Section 7.3 fixes, so a mip chain would add a second, zoom-dependent blur that widens the edge by an amount no constant controls; `texSubImage2D` does not update mip levels, so every reveal would have to regenerate the whole chain, at frame rate through the 600 ms reveal animation, against a spec that requires reveals to touch only the changed region; and the ±1-texel offsets are in level-0 texels, which stop meaning one texel the moment a coarser level is selected. Item stays **open**: the precision fix is deliberate but unconfirmed — nothing in this repository can execute the shader, so whether the shimmer is gone still needs a real device at low zoom. | Open — narrowed |
 | O16 | `CONFIG.BADGE_THRESHOLDS` reaches the browser, so Section 7.7's promise holds in its literal wording and not in its spirit. The section says the threshold is "never shown to users and no endpoint returns it", and both remain true: nothing renders a threshold, and no route serializes one. But `CONFIG` is a single object literal and `packages/web` imports it as a *value* in eight modules (`api/types.ts`, `TrackingIndicator.tsx`, `map/ink-style.ts`, `map/bars/bar-stamps.ts`, `MapPicker.tsx`, `tracking/useSampleTracking.ts` and two under `map/fog/`), so the whole object is bundled: a production build contains `explorer:{week:.1,month:.3,year:2},barfly:{week:1,month:2,year:3}` in plain text, readable in devtools in seconds. This predates v1.31 and was found by the change that introduced badge placeholders, which deliberately did not make it worse — `packages/shared/src/badges.ts` reads only `Object.keys(CONFIG.BADGE_THRESHOLDS)`, and `api/types.ts` only `keyof typeof`, both of which erase at compile time. Closing it means splitting `CONFIG` into a client-safe half and a server-only half and changing every one of those imports, which is a cross-cutting change and was rightly not folded into a UI block. The exposure is mild — the thresholds are floors, deliberately easy, and a badge goes to the period's best rather than to everyone past the floor, so knowing the number tells a player very little — but the specification should not read as a guarantee it does not enforce. | Open |
+| O17 | The start screen (Section 8.3) reads two integers out of a list of every bar the player has discovered. `GET /api/bars` is the only route that can answer "how many bars have I found" without an API change, so `/app` fetches the whole list on every arrival and uses its length and the count of its `mastered` flags. For a heavy player that is hundreds of rows — name, address, coordinates, district, timestamp — to render two numbers, on the screen every authenticated entry path lands on. It is not a new *kind* of load: the map already fetches exactly this list on every visit, and the response is cheap to produce server-side. The honest fix is a counts endpoint, or those two counts alongside the percentages `GET /api/progress` already returns, which would make the start screen one request instead of two and a small one instead of an unbounded one. Deliberately not done here — that block did not touch the API — and recorded rather than absorbed, because the cost grows with exactly the players who play most. | Open |
 
 
 ---
 
 ## 15. Changelog
+
+### v1.32 — the application says its own name, and the screen you land on is worth landing on
+
+Two requests from the owner, and they are one request. "Egal auf welcher Seite man sich befindet, es
+soll sich immer eindeutig nach Tipsy Trails anfühlen" — so the wordmark is now on every main screen,
+in one typography, at two sizes. And "der Startscreen sollte nicht wie ein gewöhnlicher
+Login-/Dashboard-Screen wirken" — so `/app`, which was twenty lines of placeholder reading "Signed in
+as alice", is the screen every authenticated entry path actually lands on: the wordmark, one line
+under it, one way in, the player's own three figures, and a heavily fogged Karlsruhe behind all of
+it. Sections 8.1, 8.2 and 8.3 record what it is.
+
+**The instruction that shaped the whole change is the owner's own caveat, not his headline.** "Nicht
+einfach überall einen großen Tipsy-Trails-Header hinzufügen." A brand that is loud on every screen is
+not a brand, it is noise, and it would have cost the map — the screen the rest of the application
+exists for — a strip of its own height. So the wordmark has exactly two prominences and the quiet one
+is the default: hero on the two screens that are *about* the application, chrome everywhere else. On
+the map that means one small line in the top row of the overlay grid, at the opposite end from the
+status icons, as a second child of a row that already existed — which is why the icon cluster is in
+precisely the corner it has always been in, to the pixel. An overlay grid a mark is allowed to bypass
+is not a grid.
+
+**Two bare headings were the drift, and they are what this replaced.** `AppHome` and `Landing` each
+carried their own `<h1>Tipsy Trails</h1>`. That is not one mark used twice, it is two marks that
+happen to agree today, and it is how "immer dieselbe Typografie" stops being true — silently, one
+screen at a time. There is now one component, and a test scans the source for the name written out as
+an element's whole content anywhere else, so a third copy fails the suite rather than shipping.
+
+**The element it renders as is a decision per screen, and that is not pedantry.** An `<h1>` on every
+screen would make "Tipsy Trails" the title of every page in the application: a reader navigating by
+heading would be told the name of the product instead of the name of the screen they are on, on the
+city overview, on the leaderboard, on someone's profile. So it is the heading only where it is the
+subject — the start screen and the landing screen — and an inert element above the screen's own
+heading everywhere else. Every screen still has exactly one sensible `<h1>`. The map keeps the zero it
+has always had, which is a real gap and is *not* closed by promoting a decorative corner mark to a
+page title.
+
+**The backdrop is the part with a wrong answer that looks right.** "Ein stark vernebelter Ausschnitt
+der Karlsruhe-Karte" reads as "mount MapLibre", and doing that would have put ~250 KB of map library
+and tile reader on the first authenticated paint of the one screen whose whole job is to be quick and
+strong — undoing the code-splitting Section 12 requires, on the worst possible screen. Section 7.3's
+fog would additionally have needed the authenticated binary mask fetch, the heaviest request in the
+game, and WebGL2, which is not guaranteed; decoration must never be the thing that fails. And the fog
+is a mechanic: a decorative second copy of it either duplicates the renderer or drifts from it. What
+is drawn instead is what the city overview already draws — the real boundary from
+`/static/<slug>/city.geojson`, projected and rendered as inline SVG — cropped to the screen and fogged
+with the application's own ink. Real Karlsruhe, no WebGL, no tiles, no session.
+
+**"Degrade to something, never to nothing" is enforced by where the backdrop sits, not by care.** It
+is out of the document flow, so late, never, or unexpected bounds cannot move a word in front of it;
+there is no placeholder to collapse and no spinner to flash; and there is no error message, because a
+failed decoration is not something a player can act on and the entry screen is the worst place in the
+application to say so. The three figures follow the same rule and are all-or-nothing: half a row reads
+as a broken screen where none of it reads as a screen that does not mention them. Their row is
+reserved before they exist, so numbers arriving after the first paint cannot lift the action above
+them out from under a thumb already on its way.
+
+**The backdrop is one translucent layer painted once, and that is a contrast decision.** Overlapping
+translucent paint compounds — a fill under a stroke under a wash means the darkest pixel on the screen
+is nobody's decision — so every feature of the boundary goes into a single path with `evenodd`, at a
+single alpha. The darkest ground the words can sit on is then one computable blend, and the test
+computes it from the stylesheet rather than from a number written beside it: ink over it is 9.5:1,
+against Section 8.1's 4.5:1 floor. The wordmark on the map gets the translucent paper plate the OSM
+attribution and the discovery caption already use, measured the same way against the densest fog
+Section 7.3 produces — 14.3:1 — and on the screens where the ground is plain paper that same fill is
+paper over paper and simply disappears.
+
+**Section 8.2 was describing a plan that was never built, and it is corrected rather than quietly
+fixed.** It has said "both self-hosted, subset to Latin, `font-display: swap`" since v1.1. There is no
+`@font-face` in this repository and never has been: the two families are a Georgia stack and a
+`system-ui` stack. The correction is the right way round — the specification moves to the code, not
+the code to the specification — because a downloaded face is a request on the first paint of the first
+screen a player ever sees, a flash of something else while it arrives, and a brand that never arrives
+on a blocked host. That is also why the wordmark's identity is case, tracking and spacing rather than
+a face of its own, and why adding a third family is now explicitly a decision about the whole
+application rather than a styling detail.
+
+**One cost is recorded rather than absorbed.** The start screen reads two integers out of a list of
+every bar the player has discovered, because `GET /api/bars` is the only route that can answer "how
+many have I found" without an API change, and this block did not touch the API. `GET /api/profile/:handle`
+was the alternative and loses on arithmetic: it has no discovered count, so it could only have replaced
+`GET /api/progress` — two requests either way, and the larger of the two. O17 names the honest fix.
+O2 is narrowed at the same time: the wordmark it called a placeholder is now the mark, and what is
+still deferred is only a drawn one.
+
+**Nothing on this screen animates, and that is deliberate.** An entrance was considered and dropped.
+The one thing worth writing down about it is the trap that was *not* the reason: the global
+`prefers-reduced-motion` rule collapses `animation-duration`, which runs an animation instantly to its
+**last** keyframe — so it is an animation ending hidden that loses its content under that rule (Section
+7.4's stamp, which is why that one drops its animation entirely), and a fade-*in* would have survived
+it perfectly well, since its last keyframe is the visible state. The entrance was dropped because a
+screen that is passed through on the way to the map should be finished the moment it appears, not
+because it could not have been made safe.
 
 ### v1.31 — a player can see the badges they have not won, and still cannot see the number
 
@@ -2416,4 +2533,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.31*
+*End of specification v1.32*

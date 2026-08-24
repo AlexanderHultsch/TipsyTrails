@@ -1,0 +1,582 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONFIG } from '@tipsytrails/shared';
+import { App } from './App.js';
+import { ACTIVE_CITY_SLUG } from './api/city.js';
+
+// SPEC.md Sections 8.1/8.2/8.3: the wordmark on every main screen, and the
+// start screen it is most prominent on. A file of its own rather than another
+// describe block in App.test.tsx, following the precedent App.privacy.test.tsx
+// and App.a11y.test.tsx set for a block of work - and for one concrete reason
+// beyond tidiness: the contrast assertions at the bottom read index.css as
+// text, which belongs with the other stylesheet-derived checks rather than in
+// among the render tests.
+
+const here = import.meta.url;
+const CSS_PATH = fileURLToPath(new URL('./index.css', here));
+const SRC_DIR = fileURLToPath(new URL('.', here));
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+// MapLibre needs a real WebGL context, which jsdom does not provide - the same
+// stand-in App.test.tsx uses, cut down to what the map screen touches while
+// rendering its overlay rows.
+const { MockMap, addProtocolMock, removeProtocolMock } = vi.hoisted(() => {
+  class MockMap {
+    remove = vi.fn();
+    on = vi.fn();
+    off = vi.fn();
+    addLayer = vi.fn();
+    removeLayer = vi.fn();
+    getLayer = vi.fn();
+    addSource = vi.fn();
+    getSource = vi.fn();
+    removeSource = vi.fn();
+    loaded = vi.fn(() => true);
+    setMaxBounds = vi.fn();
+    project = vi.fn(() => ({ x: 0, y: 0 }));
+    getBearing = vi.fn(() => 0);
+    container = document.createElement('div');
+    getContainer = () => this.container;
+  }
+  return { MockMap, addProtocolMock: vi.fn(), removeProtocolMock: vi.fn() };
+});
+
+vi.mock('maplibre-gl', () => ({
+  default: { Map: MockMap, addProtocol: addProtocolMock, removeProtocol: removeProtocolMock },
+}));
+
+let container: HTMLDivElement;
+let root: ReturnType<typeof createRoot>;
+
+function jsonResponse(status: number, body: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
+}
+
+type FetchHandler = (url: string, init: RequestInit | undefined) => Promise<Response> | Response;
+
+function stubFetch(handler: FetchHandler) {
+  const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    return handler(url, init);
+  });
+  vi.stubGlobal('fetch', mock);
+  return mock;
+}
+
+function signedInUser(overrides: Record<string, unknown> = {}) {
+  return jsonResponse(200, {
+    id: 1,
+    username: 'alice',
+    avatarSeed: 'seed',
+    isAdmin: false,
+    isAnonymous: false,
+    mustChangePassword: false,
+    ...overrides,
+  });
+}
+
+function bar(id: number, mastered: boolean) {
+  return {
+    id,
+    districtId: null,
+    name: `Bar ${id}`,
+    address: null,
+    lat: 49,
+    lon: 8.4,
+    source: 'osm',
+    discoveredAt: 0,
+    mastered,
+  };
+}
+
+function squareAt(west: number, osmId: number) {
+  return {
+    type: 'Feature',
+    properties: { osm_id: osmId, name: `Part ${osmId}` },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [west, 48.95],
+          [west + 0.1, 48.95],
+          [west + 0.1, 49.05],
+          [west, 49.05],
+          [west, 48.95],
+        ],
+      ],
+    },
+  };
+}
+
+// A city boundary the projector can actually work on, with squares for
+// geometry so that a rendered `d` is countable and nothing about the real
+// Karlsruhe fixture can make an assertion here pass or fail by accident.
+//
+// TWO features, and that is the whole point of the fixture. A one-feature
+// collection cannot tell "one path for the whole city" apart from "one path
+// per feature", and the difference is not cosmetic: the backdrop is
+// translucent, translucent paint compounds where it overlaps, and the contrast
+// floor asserted at the bottom of this file is computed for exactly one layer
+// of it. A single-feature fixture let that mutation through on the first
+// attempt at this test.
+const SQUARE_CITY = {
+  type: 'FeatureCollection',
+  features: [squareAt(8.3, 1), squareAt(8.5, 2)],
+};
+
+async function renderApp(initialPath: string) {
+  await act(async () => {
+    root.render(
+      <MemoryRouter initialEntries={[initialPath]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+// The map route is behind React.lazy, which settles over an extra turn beyond
+// the one renderApp waits out.
+async function flushLazyMapScreen() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+beforeAll(async () => {
+  await import('./screens/Map.js');
+});
+
+beforeEach(() => {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  window.localStorage.clear();
+});
+
+afterEach(() => {
+  act(() => {
+    root.unmount();
+  });
+  container.remove();
+  vi.unstubAllGlobals();
+  window.localStorage.clear();
+});
+
+function wordmarks(): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('.wordmark'));
+}
+
+function textOf(selector: string): string | null {
+  return container.querySelector(selector)?.textContent?.trim() ?? null;
+}
+
+// The start screen every authenticated entry path lands on (Login, Register,
+// ChangePassword and the route guards all redirect to /app).
+describe('the start screen (SPEC.md Section 8.3)', () => {
+  function stubStartScreen(
+    options: {
+      bars?: ReturnType<typeof bar>[];
+      percent?: number;
+      boundaryFails?: boolean;
+      statsFail?: boolean;
+    } = {},
+  ): FetchHandler {
+    return (url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return signedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/city.geojson`) {
+        if (options.boundaryFails) {
+          throw new Error('network down');
+        }
+        return jsonResponse(200, SQUARE_CITY);
+      }
+      if (url === '/api/progress') {
+        if (options.statsFail) {
+          throw new Error('network down');
+        }
+        return jsonResponse(200, {
+          city: { revealedCells: 1, playableCells: 10, percent: options.percent ?? 18.4 },
+          districts: [],
+        });
+      }
+      if (url === '/api/bars') {
+        if (options.statsFail) {
+          throw new Error('network down');
+        }
+        return jsonResponse(200, { bars: options.bars ?? [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+  }
+
+  it('leads with the wordmark as its own heading, says the line, and opens the map', async () => {
+    stubFetch(stubStartScreen());
+    await renderApp('/app');
+
+    const headings = Array.from(container.querySelectorAll('h1'));
+    expect(headings).toHaveLength(1);
+    expect(headings[0].classList.contains('wordmark')).toBe(true);
+    expect(headings[0].classList.contains('wordmark--hero')).toBe(true);
+    expect(headings[0].textContent).toBe('Tipsy Trails');
+
+    expect(textOf('.home__tagline')).toBe('Karlsruhe is waiting.');
+
+    // The one action on this screen, and the only reason it is not a tab: it
+    // exists to be walked through. A button that led anywhere else - back to
+    // /app, to the city overview, to a route that does not exist - would still
+    // look exactly like this in every other assertion here.
+    const action = container.querySelector('.screen__actions a') as HTMLAnchorElement | null;
+    expect(action?.getAttribute('href')).toBe('/map');
+    expect(action?.textContent).toBe('Open the map');
+  });
+
+  // Section 5.7's `mastered` flag is per requesting user, and the percent is
+  // this session's own progress - so the three numbers are three statements
+  // about the signed-in player and about nobody else. A screen that showed a
+  // constant, or another player's figures, would be indistinguishable from a
+  // working one on any assertion that did not pin the actual values.
+  it('counts this player’s own bars and this player’s own progress', async () => {
+    stubFetch(
+      stubStartScreen({
+        bars: [bar(1, true), bar(2, false), bar(3, true), bar(4, false), bar(5, false)],
+        percent: 18.4,
+      }),
+    );
+    await renderApp('/app');
+
+    const stats = Array.from(container.querySelectorAll('.home__stats-list li')).map(
+      (item) => item.textContent,
+    );
+    expect(stats).toEqual(['5 bars discovered', '2 bars mastered', '18.4% of Karlsruhe explored']);
+  });
+
+  it('says "1 bar" rather than "1 bars"', async () => {
+    stubFetch(stubStartScreen({ bars: [bar(1, true)], percent: 0.5 }));
+    await renderApp('/app');
+
+    const stats = Array.from(container.querySelectorAll('.home__stats-list li')).map(
+      (item) => item.textContent,
+    );
+    expect(stats).toEqual(['1 bar discovered', '1 bar mastered', '0.5% of Karlsruhe explored']);
+  });
+
+  it('draws the real city outline behind the words, out of the flow and unannounced', async () => {
+    stubFetch(stubStartScreen());
+    await renderApp('/app');
+
+    const backdrop = container.querySelector('.home-backdrop');
+    expect(backdrop).not.toBeNull();
+    // Decoration: it must not be announced as a map, and it must not be
+    // reachable by keyboard or tap.
+    expect(backdrop?.getAttribute('aria-hidden')).toBe('true');
+    expect(backdrop?.getAttribute('role')).toBeNull();
+
+    // One path for the whole city, not one per feature: overlapping
+    // translucent paint compounds, and the contrast floor asserted further
+    // down is computed for exactly one layer of it. The fixture carries two
+    // features precisely so this can fail.
+    const paths = container.querySelectorAll('.home-backdrop path');
+    expect(paths).toHaveLength(1);
+    expect(paths[0].getAttribute('fill-rule')).toBe('evenodd');
+    // Both squares' four corners plus their closing points - proof this is the
+    // projected boundary of every feature and not an empty, truncated or
+    // hard-coded `d`.
+    expect((paths[0].getAttribute('d') ?? '').match(/[ML]/g)).toHaveLength(10);
+  });
+
+  // The brief's rule for this screen: degrade to something, never to nothing.
+  // The backdrop is a network fetch of a public static file and it can fail;
+  // when it does, what is left has to be a complete screen rather than a
+  // damaged one.
+  it('is a complete screen when the city outline never arrives', async () => {
+    stubFetch(stubStartScreen({ boundaryFails: true, bars: [bar(1, false)] }));
+    await renderApp('/app');
+
+    expect(container.querySelector('.home-backdrop')).toBeNull();
+
+    // Everything that makes this a screen is still here.
+    expect(textOf('h1.wordmark')).toBe('Tipsy Trails');
+    expect(textOf('.home__tagline')).toBe('Karlsruhe is waiting.');
+    expect(container.querySelector('.screen__actions a')?.getAttribute('href')).toBe('/map');
+    expect(Array.from(container.querySelectorAll('.home__stats-list li'))).toHaveLength(3);
+
+    // And nothing tells the player about it. A failed decoration is not an
+    // error a player can act on, and the entry screen is the worst place in
+    // the application to put one.
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('.error-message')).toBeNull();
+  });
+
+  it('drops the three numbers entirely, rather than half of them, when they cannot be fetched', async () => {
+    stubFetch(stubStartScreen({ statsFail: true }));
+    await renderApp('/app');
+
+    expect(container.querySelector('.home__stats-list')).toBeNull();
+    // The row itself stays, so the action above it does not jump when the
+    // numbers do arrive on a slower connection.
+    expect(container.querySelector('.home__stats')).not.toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(textOf('h1.wordmark')).toBe('Tipsy Trails');
+  });
+});
+
+// The owner's warning, in translation: do not simply add a big Tipsy Trails
+// header everywhere. On the map it should be small and elegant; on the start
+// screen, very prominent.
+describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
+  it('is small on the map, never the start screen’s hero, and takes no tap', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return signedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/map');
+    await flushLazyMapScreen();
+
+    const marks = wordmarks();
+    expect(marks).toHaveLength(1);
+    expect(marks[0].classList.contains('wordmark--chrome')).toBe(true);
+    expect(marks[0].classList.contains('wordmark--hero')).toBe(false);
+    // Chrome, not the subject: the map is about the map, and a screen reader
+    // navigating by heading must not be told the name of the application.
+    expect(marks[0].tagName).toBe('SPAN');
+
+    // A member of the overlay grid (Section 8.3), in the row that already
+    // exists, and second in it so the status icons keep the corner they have
+    // always been in.
+    const row = container.querySelector('.map-overlays__controls--top');
+    expect(row?.contains(marks[0])).toBe(true);
+    expect(Array.from(row?.children ?? []).indexOf(marks[0])).toBe(1);
+    expect(row?.firstElementChild?.classList.contains('tracking-indicator')).toBe(true);
+  });
+
+  it.each([
+    ['/city', 'Karlsruhe'],
+    ['/leaderboard', 'Ranks'],
+  ])('signs %s without taking its heading', async (path, heading) => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return signedInUser();
+      }
+      if (url.startsWith('/static/')) {
+        return jsonResponse(200, SQUARE_CITY);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          districts: [],
+        });
+      }
+      if (url.startsWith('/api/leaderboard')) {
+        return jsonResponse(200, {
+          metric: 'area',
+          period: 'all',
+          page: 1,
+          pageSize: 50,
+          totalUsers: 0,
+          totalPages: 1,
+          entries: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp(path);
+
+    const marks = wordmarks();
+    expect(marks).toHaveLength(1);
+    expect(marks[0].classList.contains('wordmark--chrome')).toBe(true);
+    expect(marks[0].tagName).toBe('SPAN');
+
+    // Exactly one <h1>, and it is the screen's own subject rather than the
+    // application's name. This is the assertion that stops the wordmark being
+    // promoted to a heading "for consistency" and quietly retitling every page
+    // in the app.
+    const headings = Array.from(container.querySelectorAll('h1'));
+    expect(headings).toHaveLength(1);
+    expect(headings[0].textContent).toBe(heading);
+    expect(headings[0].classList.contains('wordmark')).toBe(false);
+  });
+
+  it('is the heading on the landing screen, where it is what the screen is about', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/');
+
+    const headings = Array.from(container.querySelectorAll('h1'));
+    expect(headings).toHaveLength(1);
+    expect(headings[0].classList.contains('wordmark--hero')).toBe(true);
+    expect(headings[0].textContent).toBe('Tipsy Trails');
+  });
+
+  // The drift this component exists to stop, checked at its source. Two
+  // screens carried a bare <h1>Tipsy Trails</h1> before it existed, and two
+  // screens spelling the mark themselves is how "immer dieselbe Typografie"
+  // stops being true - silently, one screen at a time, in a way no render test
+  // that only looks at the screens it happens to know about would catch.
+  //
+  // Matched as an element's entire content (`>Tipsy Trails<`) rather than as a
+  // substring, so the several places that legitimately name the application
+  // inside a sentence - the privacy notice, the check-in guidance, the map's
+  // tracking explanation - are untouched by this rule.
+  it('is spelt in exactly one place in the source', () => {
+    const offenders: string[] = [];
+    const walk = (directory: string) => {
+      for (const entry of readdirSync(directory)) {
+        const path = `${directory}/${entry}`;
+        if (statSync(path).isDirectory()) {
+          walk(path);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry) || /\.test\.tsx?$/.test(entry)) {
+          continue;
+        }
+        if (readFileSync(path, 'utf-8').includes('>Tipsy Trails<')) {
+          offenders.push(path.slice(SRC_DIR.length));
+        }
+      }
+    };
+    walk(SRC_DIR);
+
+    expect(
+      offenders,
+      'the wordmark is one component used at two prominences (components/Wordmark.tsx). ' +
+        'A screen that writes the name out as its own element gets its own typography ' +
+        'the moment either side changes, which is exactly the drift the owner asked for ' +
+        'this block to remove.',
+    ).toEqual([]);
+  });
+});
+
+// The same relative-luminance arithmetic App.a11y.test.tsx uses, kept local
+// there and local here for the same reason: nothing outside the test suite
+// needs it, and the app's colours live only as CSS.
+function hexToRgb(hex: string): [number, number, number] {
+  const value = hex.replace('#', '');
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ];
+}
+
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const linear = (channel: number) => {
+    const c = channel / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+function contrastRatio(a: [number, number, number], b: [number, number, number]): number {
+  const [lighter, darker] =
+    relativeLuminance(a) > relativeLuminance(b)
+      ? [relativeLuminance(a), relativeLuminance(b)]
+      : [relativeLuminance(b), relativeLuminance(a)];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function blend(
+  foreground: [number, number, number],
+  alpha: number,
+  background: [number, number, number],
+): [number, number, number] {
+  return [0, 1, 2].map((index) =>
+    Math.round(foreground[index] * alpha + background[index] * (1 - alpha)),
+  ) as [number, number, number];
+}
+
+function cssRuleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.#]/g, (character) => `\\${character}`);
+  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  if (!match) {
+    throw new Error(`No CSS rule found for ${selector}`);
+  }
+  return match[1];
+}
+
+function cssToken(css: string, name: string): [number, number, number] {
+  const match = css.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+  if (!match) {
+    throw new Error(`--${name} not found in index.css`);
+  }
+  return hexToRgb(match[1]);
+}
+
+/** The single `rgba(r, g, b, a)` a rule paints with. */
+function rgbaOf(body: string, property: string): { rgb: [number, number, number]; alpha: number } {
+  const match = body.match(
+    new RegExp(`${property}:\\s*rgba\\(([\\d.]+),\\s*([\\d.]+),\\s*([\\d.]+),\\s*([\\d.]+)\\)`),
+  );
+  if (!match) {
+    throw new Error(`no rgba ${property} found in "${body.trim()}"`);
+  }
+  return {
+    rgb: [Number(match[1]), Number(match[2]), Number(match[3])],
+    alpha: Number(match[4]),
+  };
+}
+
+// SPEC.md Section 8.1: "Body text and interactive labels meet 4.5:1 against
+// their background." The wordmark and the start screen put text over two
+// grounds this application did not previously have - the fogged city backdrop,
+// and the map itself - so both are measured here, from the declarations
+// themselves rather than from numbers copied into this file. Fogging the
+// backdrop less, or thinning the plate on the map, then fails the suite rather
+// than the eye.
+describe('text over the new grounds clears 4.5:1 (SPEC.md Section 8.1)', () => {
+  const css = readFileSync(CSS_PATH, 'utf-8');
+  const paper = cssToken(css, 'color-paper');
+  const ink = cssToken(css, 'color-ink');
+  const BODY_TEXT_MIN = 4.5;
+
+  it('ink over the fogged city backdrop on the start screen', () => {
+    const fill = rgbaOf(cssRuleBody(css, '.home-backdrop__city'), 'fill');
+
+    // The backdrop is exactly one translucent layer of ink over the paper
+    // ground - one path, painted once (screens/AppHome.tsx) - so its darkest
+    // possible pixel is this single blend and there is no compounding case to
+    // measure separately.
+    const darkest = blend(fill.rgb, fill.alpha, paper);
+    expect(contrastRatio(ink, darkest)).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+  });
+
+  it('ink on the wordmark’s plate over the densest fog the map produces', () => {
+    // The same worst case App.a11y.test.tsx measures the status icons
+    // against: the fog layer's own colour at FOG_MAX_OPACITY over paper. No
+    // patch of fog is ever denser, so no ground under this corner is darker.
+    // FOG_COLOR is not exported from map/fog/webgl-fog-layer.ts, so it is
+    // mirrored here by hand exactly as it is there.
+    const FOG_COLOR: [number, number, number] = [0.78 * 255, 0.76 * 255, 0.71 * 255];
+    const foggedGround = blend(FOG_COLOR, CONFIG.FOG_MAX_OPACITY, paper);
+    const plate = rgbaOf(cssRuleBody(css, '.map-overlays .wordmark'), 'background');
+
+    expect(contrastRatio(ink, blend(plate.rgb, plate.alpha, foggedGround))).toBeGreaterThanOrEqual(
+      BODY_TEXT_MIN,
+    );
+  });
+});

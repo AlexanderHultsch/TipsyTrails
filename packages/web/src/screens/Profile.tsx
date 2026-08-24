@@ -8,6 +8,7 @@ import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { Wordmark } from '../components/Wordmark.js';
 
 const PROGRESS_PERIOD_LABEL: Record<BadgePeriod, string> = {
   week: 'This week',
@@ -78,6 +79,11 @@ export function Profile() {
     <main className="screen">
       <BottomNav />
       <div className="screen__content profile">
+        {/* Outside the `profile &&` branch below, so the application signs the
+            screen while the profile is still loading and while it is failing -
+            a main screen that is briefly nothing but a spinner is exactly the
+            "collection of separate screens" this wordmark exists against. */}
+        <Wordmark prominence="chrome" />
         {loading && <p role="status">Loading profile…</p>}
         {error && (
           <p className="error-message" role="alert">

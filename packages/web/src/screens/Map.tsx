@@ -11,6 +11,7 @@ import { LocateButton } from '../components/LocateButton.js';
 import { NearbyBarsPanel } from '../components/NearbyBarsPanel.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
+import { Wordmark } from '../components/Wordmark.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
 import { useBarStamps } from '../map/bars/useBarStamps.js';
 import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
@@ -473,10 +474,21 @@ export function MapScreen() {
           />
         </div>
         {/* The owner's specification for the tab bar, section 1: the status
-            indicator cluster stays exactly where it is. It is alone in this
-            row now that the burger menu it shared it with is gone. */}
+            indicator cluster stays exactly where it is. It has the wordmark
+            for company since Section 8.1's branding pass, and that costs it
+            nothing: this row is `justify-content: space-between`, so a second
+            child takes the opposite end and the indicator does not move a
+            pixel from the corner it has always been in. Which is also why the
+            wordmark is second in the markup and not first.
+            "Auf der Map klein und elegant" - the chrome prominence, a member
+            of the overlay grid like everything else on this screen rather than
+            something absolutely positioned on top of it (Section 8.3). It is a
+            mark and never a control: index.css gives it back the
+            pointer-events this row's children otherwise take, so it cannot eat
+            a drag in the corner it sits in. */}
         <div className="map-overlays__controls map-overlays__controls--top">
           <TrackingIndicator state={trackingState} />
+          <Wordmark prominence="chrome" />
         </div>
         <div className="map-overlays__middle">
           {tilesUnavailable && (

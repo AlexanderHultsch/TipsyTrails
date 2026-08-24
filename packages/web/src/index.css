@@ -302,6 +302,145 @@ button:focus-visible,
   height: 100%;
 }
 
+/* Section 8.1/8.2: the wordmark. One definition, two prominences, and this
+   rule is the whole of the "immer dieselbe Typografie und derselbe visuelle
+   Stil" half of the owner's requirement - the modifiers below change size and
+   nothing else, so the family, the case, the weight, the colour and the
+   proportion of tracking to type are literally the same declarations on the
+   start screen and in the corner of the map.
+
+   No webfont, and no --font-wordmark either. There are two families in this
+   stylesheet and there will not be a third: a mark that needs a download is a
+   mark that is missing on a cold first paint and absent for good on a bad
+   connection, which is a worse failure than not having a distinctive face.
+   What separates the wordmark from the ordinary serif headings around it is
+   therefore case and tracking - h1 is the same family and neither uppercases
+   nor tracks - and that separation costs nothing and cannot fail to load.
+
+   The capitals are set here rather than in the document, the same decision as
+   .bar-stamp__title below: the markup and the screen reader get the name of
+   the application, not shouting.
+
+   Ink, and Section 8.1 is why: the accent colour belongs to the player's own
+   position and to active states. The wordmark is neither, on any screen. */
+.wordmark {
+  display: block;
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  text-transform: uppercase;
+  color: var(--color-ink);
+  /* "TIPSY TRAILS" is one thing and never two lines. Both sizes below are
+     bounded so this cannot overflow: the hero scales with the viewport, and
+     the chrome size is fixed and small. */
+  white-space: nowrap;
+}
+
+/* Tracking is applied after every letter, the last one included, so centred
+   text drifts left by half of it - a few pixels at the hero size, which is
+   exactly the sort of thing that reads as "slightly wrong" without ever
+   announcing itself. Taking the trailing space back off the inline box is
+   what re-centres it. */
+.wordmark__text {
+  margin-right: -0.18em;
+}
+
+/* The wordmark as the subject of the screen: the start screen and the landing
+   screen, and nowhere else. Sized against the viewport rather than fixed, so
+   it is as large as a phone can carry it and stops growing once it is as big
+   as the content column: 7.5vw with this tracking is about ten ems of line,
+   which clears the 1.5rem gutters of .screen on the narrowest phone this
+   targets and still fills the width of a large one. */
+.wordmark--hero {
+  font-size: clamp(1.5rem, 7.5vw, 2.75rem);
+  letter-spacing: 0.18em;
+  line-height: 1.15;
+  /* .wordmark zeroes the margin an <h1> would otherwise bring, so the gap
+     under it is stated once here and both screens that carry a hero wordmark
+     get the same one. */
+  margin-bottom: 0.75rem;
+}
+
+/* The wordmark as the application's signature on a screen that is about
+   something else - "auf der Map sehr dezent im Header". Small enough that it
+   never competes with the screen's own heading, tracked exactly as widely as
+   the hero so that the two read as one mark at two sizes. */
+.wordmark--chrome {
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  line-height: 1.2;
+  margin-bottom: 0.5rem;
+}
+
+/* Section 8.3's start screen. `relative` so the backdrop below has this to be
+   absolutely positioned against; `isolation` so the backdrop's stacking stays
+   this screen's business and cannot reach the tab bar. */
+.screen--home {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Karlsruhe's real outline, fogged, behind the words (screens/AppHome.tsx
+   explains why it is this and not a MapLibre instance). Out of the flow
+   entirely: whether it arrives, arrives late, or never arrives, it cannot move
+   a word on the screen in front of it. Negative z-index rather than a plain 0
+   so every child of .screen--home is above it without any of them having to
+   say so. */
+.home-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* The fog. Section 8.1's ink at low alpha over the paper ground rather than a
+   grey of its own, so the backdrop is drawn in the same colour as everything
+   else in the application - and one flat alpha rather than a fill and a stroke
+   and a wash, because translucent paint compounds where it overlaps and three
+   values would mean the darkest pixel on this screen is nobody's decision.
+   With one alpha it is exactly this blend, everywhere, and ink text over it is
+   9.5:1 - well past Section 8.1's 4.5:1 floor for body text, which
+   App.branding.test.tsx computes from this declaration so that fogging the
+   backdrop less can never quietly cost the words their contrast. */
+.home-backdrop__city {
+  fill: rgba(28, 26, 23, 0.22);
+}
+
+/* The tagline under the wordmark, in the same capitals and tracking so the
+   two read as one masthead, at a size that leaves no doubt which of them is
+   the title. */
+.home__tagline {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* "Sehr dezent", and underneath the way in rather than above it: this is what
+   the player has done, not what they came here to do. Always in the document
+   so its row is reserved before the numbers exist - two lines' worth, which is
+   what these three items wrap to on the narrowest phone - because the button
+   directly above it must not move once a thumb is on its way to it. */
+.home__stats {
+  min-height: 2.5rem;
+  padding-top: 1rem;
+}
+
+.home__stats-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
 /* Section 8.4: the persistent bottom tab bar, on every signed-in screen.
    Fixed to the bottom edge - it is chrome, not part of any page, and it must
    not scroll away with the content it sits over. It claims the home
@@ -672,6 +811,32 @@ button:focus-visible,
   border-radius: 4px;
   font-size: 0.75rem;
   color: var(--color-ink);
+}
+
+/* Section 8.1's wordmark where the map carries it: row 2, at the opposite end
+   from the status icons. Only the two map-specific facts live here - the
+   typography is .wordmark's, once, for every screen.
+
+   The plate is the treatment .map-attribution above and Section 7.4's stamp
+   caption already use for text over the map, and it is here for the reason
+   they have it: the ground under this corner is anything from bare paper to
+   fully fogged terrain to a run of black road lines, and ink straight onto
+   that is a contrast floor nobody can state. Composited over the densest fog
+   Section 7.3 produces it is 14.3:1 for ink, which App.branding.test.tsx
+   computes from this rule rather than from a number written down beside it.
+   On the screens where .wordmark--chrome sits on the paper ground instead,
+   the same fill is paper over paper and simply disappears.
+
+   pointer-events: none, and it is the point of scoping this rule to the
+   overlay container at all. `.map-overlays > * > *` gives every child of a row
+   its pointer events back so the overlays can be used; the wordmark is not an
+   overlay a player uses, it is a mark, and a mark that swallows drags in the
+   top corner of a map is a bug in the one gesture this screen is for. */
+.map-overlays .wordmark {
+  padding: 0.25rem 0.5rem;
+  background: rgba(244, 239, 230, 0.85);
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 /* Section 8.6: the GPS/connection/foreground-tracking indicator, always

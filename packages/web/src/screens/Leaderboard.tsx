@@ -5,6 +5,7 @@ import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { Wordmark } from '../components/Wordmark.js';
 
 type Metric = 'area' | 'bars';
 type Period = 'all' | 'week' | 'month';
@@ -87,6 +88,7 @@ export function Leaderboard() {
             navigation defect rather than a difference of wording, so the two
             were renamed together. The route, the API and everything else on
             this screen keep the name they had. */}
+        <Wordmark prominence="chrome" />
         <h1>Ranks</h1>
 
         <div className="leaderboard__controls">

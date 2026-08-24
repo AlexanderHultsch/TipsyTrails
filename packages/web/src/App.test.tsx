@@ -534,6 +534,30 @@ describe('App', () => {
     );
   });
 
+  // Section 8.1's branding pass turned /app from a placeholder into the start
+  // screen, and a start screen fetches: the city outline it draws its backdrop
+  // from, and the two calls behind its three figures. They are stubbed in the
+  // two tests below - which are about the tab bar and not about that screen -
+  // purely so an unstubbed request is still the error this handler says it is.
+  // Both tests pass without them, because every one of those three degrades to
+  // silence by design (screens/AppHome.tsx), and that is exactly why leaving
+  // them unstubbed would be the wrong kind of quiet.
+  function stubStartScreenData(url: string): Response | null {
+    if (url === `/static/${ACTIVE_CITY_SLUG}/city.geojson`) {
+      return jsonResponse(200, cityFixture);
+    }
+    if (url === '/api/progress') {
+      return jsonResponse(200, {
+        city: { revealedCells: 0, playableCells: 1, percent: 0 },
+        districts: [],
+      });
+    }
+    if (url === '/api/bars') {
+      return jsonResponse(200, { bars: [] });
+    }
+    return null;
+  }
+
   it('shows exactly the five tabs of Section 8.4, with the More sheet carrying the rest and closing on Escape', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
@@ -545,6 +569,10 @@ describe('App', () => {
           isAnonymous: false,
           mustChangePassword: false,
         });
+      }
+      const startScreen = stubStartScreenData(url);
+      if (startScreen) {
+        return startScreen;
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -607,6 +635,10 @@ describe('App', () => {
           isAnonymous: false,
           mustChangePassword: false,
         });
+      }
+      const startScreen = stubStartScreenData(url);
+      if (startScreen) {
+        return startScreen;
       }
       throw new Error(`Unexpected request: ${url}`);
     });

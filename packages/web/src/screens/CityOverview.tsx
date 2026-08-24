@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, getCityBoundary, getNeighbourBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { Wordmark } from '../components/Wordmark.js';
 import { pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
 import { computeBoundingBox, createProjector } from '../geo/project.js';
 
@@ -91,6 +92,10 @@ export function CityOverview() {
     <main className="screen">
       <BottomNav />
       <div className="screen__content">
+        {/* Chrome, not the subject: this screen is about Karlsruhe, so the
+            city keeps the <h1> and the wordmark sits above it as the
+            application's signature (components/Wordmark.tsx). */}
+        <Wordmark prominence="chrome" />
         <h1>Karlsruhe</h1>
         {loading && <p role="status">Loading the city outline…</p>}
         {error && (
