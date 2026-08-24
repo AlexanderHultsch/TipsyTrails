@@ -80,6 +80,17 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
       zoom: INITIAL_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
+      // Section 8.3: the same four options screens/Map.tsx sets, and for the
+      // same reasons - see the comment there for what each one closes. This
+      // map has its own reason to want them beyond matching: the pin is a DOM
+      // element positioned from map.project (reposition below), and a tilted
+      // camera would place it correctly while the tap that set it landed on
+      // ground the player had judged by eye at a different angle. A picker is
+      // for pointing at a spot, so the camera stays overhead.
+      pitch: 0,
+      maxPitch: 0,
+      touchPitch: false,
+      pitchWithRotate: false,
       attributionControl: false,
     });
     setMapInstance(map);

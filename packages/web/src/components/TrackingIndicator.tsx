@@ -179,8 +179,10 @@ export function TrackingIndicator({ state }: { state: SampleTrackingState }) {
               <span className="tracking-indicator__current">
                 Right now: {connectionLabel(state)}
               </span>
-              Online: your position is syncing normally. Syncing: samples are queued and sending.
-              Offline: no connection right now - samples stay queued on this device until it's back.
+              Online: your position is syncing normally - samples are batched and sent every few
+              seconds, so a few waiting is what working looks like. Syncing: samples didn't get
+              through on their last try and are waiting for the next one. Offline: no connection
+              right now - samples stay queued on this device until it's back.
             </dd>
             <dt>Foreground tracking</dt>
             <dd>

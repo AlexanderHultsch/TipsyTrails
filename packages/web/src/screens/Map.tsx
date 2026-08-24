@@ -204,6 +204,30 @@ export function MapScreen() {
       zoom: CONFIG.MAP_DEFAULT_ZOOM,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
+      // Section 8.3: the map turns but never tilts. Three options, because
+      // maplibre-gl 4.7.1 has three ways into a pitched camera and closing one
+      // gesture leaves the others open:
+      //
+      // - maxPitch 0 is the camera constraint, and it is the one that matters.
+      //   Transform's pitch setter clamps into [minPitch, maxPitch], so a
+      //   tilted state is unreachable however it is asked for - the two
+      //   handlers below, the keyboard's shift+up/down, an easeTo/jumpTo with
+      //   a pitch in it, or a style that carries one. minPitch is already 0,
+      //   so this is a valid range and not a rejected one.
+      // - touchPitch false removes the two-finger vertical drag, which is the
+      //   gesture the owner found by accident on a phone.
+      // - pitchWithRotate false removes the pitch half of drag-to-rotate
+      //   (right button, or ctrl held) without removing the rotate half.
+      //
+      // Rotation stays, deliberately: the fog quad follows a rotated viewport
+      // (map/fog/grid-geometry.ts), the direction cone subtracts the bearing
+      // (map/position/own-position-marker.ts) and the canvas fallback measures
+      // a cell as a distance rather than an x offset - all three were built
+      // for a turning map, and dragRotate/touchZoomRotate are left alone.
+      pitch: 0,
+      maxPitch: 0,
+      touchPitch: false,
+      pitchWithRotate: false,
       attributionControl: false,
     });
     map.on('error', (event) => {

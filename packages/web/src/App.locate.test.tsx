@@ -26,6 +26,16 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
   interface MockMapOptions {
     center?: [number, number];
     zoom?: number;
+    // Section 8.3's camera limits. Every one of them is read individually by
+    // the pitch tests at the foot of this file, so a map that sets three of
+    // the four cannot pass on the strength of the others.
+    pitch?: number;
+    maxPitch?: number;
+    minPitch?: number;
+    touchPitch?: boolean;
+    pitchWithRotate?: boolean;
+    dragRotate?: boolean;
+    touchZoomRotate?: boolean;
   }
   const instances: {
     jumpTo: ReturnType<typeof vi.fn>;
@@ -823,5 +833,100 @@ describe("the suggest screen's map picker (SPEC.md Section 11.3)", () => {
 
     expect(map.flyTo).toHaveBeenCalledTimes(1);
     expect(map.flyTo).toHaveBeenCalledWith({ center: [INSIDE_LON, INSIDE_LAT] });
+  });
+});
+
+// Section 8.3: the map turns but never tilts. The owner reached a pitched
+// camera with two fingers dragged vertically and saw the fog misbehave; the
+// gesture was never wanted, and MapLibre's defaults were the only thing
+// offering it.
+//
+// Two rules the assertions below follow, both learned by watching a mutation
+// pass survive. Each option is read on its own rather than as one object,
+// because there are three separate routes into a pitched camera in
+// maplibre-gl 4.7.1 and a check that compared them together would pass on any
+// one of them - the point of setting all three is that no single one is
+// enough. And each test renders exactly one screen: rendering the map screen
+// and then the picker into the same root leaves `lastMap()` still pointing at
+// the first map, so a two-screen test silently asserts the same instance
+// twice and cannot see a missing option on the second.
+describe('the map cannot be tilted (SPEC.md Section 8.3)', () => {
+  async function openMap() {
+    stubGeolocation();
+    stubMapFetch(() => jsonResponse(200, cityMeta));
+    await renderAt('/map');
+    return lastMap();
+  }
+
+  async function openPicker() {
+    stubGeolocation();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, cityMeta);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    await renderAt('/suggest');
+    return lastMap();
+  }
+
+  // The camera constraint, and the one that makes a tilted state unreachable
+  // rather than merely hard to reach: MapLibre clamps every pitch it is
+  // given - by gesture, by keyboard, by easeTo, or by a style carrying one -
+  // into [minPitch, maxPitch].
+  it('caps the camera at pitch 0 on the map screen', async () => {
+    expect((await openMap()).options.maxPitch).toBe(0);
+  });
+
+  it('caps the camera at pitch 0 on the suggest picker', async () => {
+    expect((await openPicker()).options.maxPitch).toBe(0);
+  });
+
+  it('opens the map screen flat', async () => {
+    expect((await openMap()).options.pitch).toBe(0);
+  });
+
+  it('opens the suggest picker flat', async () => {
+    expect((await openPicker()).options.pitch).toBe(0);
+  });
+
+  // The two-finger vertical drag - the gesture the owner actually found.
+  it('disables the touch pitch handler on the map screen', async () => {
+    expect((await openMap()).options.touchPitch).toBe(false);
+  });
+
+  it('disables the touch pitch handler on the suggest picker', async () => {
+    expect((await openPicker()).options.touchPitch).toBe(false);
+  });
+
+  // The pitch half of drag-to-rotate (right button, or ctrl held), removed
+  // without removing the rotate half.
+  it('takes pitch out of drag-to-rotate on the map screen', async () => {
+    expect((await openMap()).options.pitchWithRotate).toBe(false);
+  });
+
+  it('takes pitch out of drag-to-rotate on the suggest picker', async () => {
+    expect((await openPicker()).options.pitchWithRotate).toBe(false);
+  });
+
+  // Rotation is not collateral damage. The fog quad follows a rotated
+  // viewport, the direction cone subtracts the bearing and the canvas
+  // fallback measures a cell as a distance rather than an x offset - all
+  // three exist because the map turns, and disabling the rotate handlers
+  // would undo them. Left at MapLibre's defaults, so the assertion is that
+  // neither map has opted out.
+  it('leaves both rotation gestures enabled on the map screen', async () => {
+    const map = await openMap();
+    expect(map.options.dragRotate).toBeUndefined();
+    expect(map.options.touchZoomRotate).toBeUndefined();
+  });
+
+  it('leaves both rotation gestures enabled on the suggest picker', async () => {
+    const picker = await openPicker();
+    expect(picker.options.dragRotate).toBeUndefined();
+    expect(picker.options.touchZoomRotate).toBeUndefined();
   });
 });

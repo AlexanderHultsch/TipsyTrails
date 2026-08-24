@@ -30,6 +30,12 @@ export interface SampleTrackingState {
   gpsStatus: GpsStatus;
   connectionStatus: ConnectionStatus;
   trackingActive: boolean;
+  // Every sample still on this device, whatever its history: the one that
+  // arrived a second ago, the batch currently in the air, and anything that
+  // has failed a send. It is what the indicator panel's "(N queued)" reports,
+  // because "how much of my walk is still on this phone" is the number a
+  // player can act on. It is deliberately *not* what decides the connection
+  // status - tracking/status.ts says why.
   queueDepth: number;
   lastNewCells: number | null;
   postError: string | null;
@@ -89,6 +95,13 @@ export function useSampleTracking(): SampleTrackingState {
   const flushingRef = useRef(false);
 
   const [queueDepth, setQueueDepth] = useState(0);
+  // How many queued samples have already survived a flush attempt - the
+  // "behind" of tracking/status.ts, and the only input to the connection
+  // status besides navigator.onLine. Distinct from queueDepth above, which
+  // counts everything unsent including the sample that arrived a moment ago
+  // and the batch currently in the air. Written only by flush() below,
+  // because only flush() knows what a send attempt found and what it left.
+  const [behindDepth, setBehindDepth] = useState(0);
   const [gpsStatus, setGpsStatus] = useState<GpsStatus>('poor');
   const [trackingActive, setTrackingActive] = useState(false);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -189,11 +202,22 @@ export function useSampleTracking(): SampleTrackingState {
         return;
       }
       flushingRef.current = true;
+      // Read before the await, and it is what makes "behind" measurable: the
+      // queue can grow while the request is in the air (watchPosition keeps
+      // firing), and those later samples have not missed a send cycle. Only
+      // the ones counted here were present when this attempt began.
+      const queuedAtAttempt = queueRef.current.length;
       const batch = queueRef.current.slice(0, CONFIG.SAMPLE_MAX_BATCH);
       try {
         const result = await postSamples(batch);
         queueRef.current = queueRef.current.slice(batch.length);
         setQueueDepth(queueRef.current.length);
+        // Whatever was queued when this attempt began and is still queued did
+        // not fit into SAMPLE_MAX_BATCH: the cycle that should have carried it
+        // went without it, so this device is behind by exactly that many
+        // samples. Nought whenever the queue fitted in one batch, which is the
+        // normal case and is what puts the icon back to `online`.
+        setBehindDepth(queuedAtAttempt - batch.length);
         setLastNewCells(result.newCells);
         if (result.newCells > 0) {
           setRevealVersion((version) => version + 1);
@@ -207,6 +231,9 @@ export function useSampleTracking(): SampleTrackingState {
         }
         setPostError(null);
       } catch (err) {
+        // The send failed and nothing left the queue, so everything that was
+        // in it when this attempt began has now failed at least one send.
+        setBehindDepth(queuedAtAttempt);
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
       } finally {
         flushingRef.current = false;
@@ -259,7 +286,7 @@ export function useSampleTracking(): SampleTrackingState {
 
   return {
     gpsStatus,
-    connectionStatus: computeConnectionStatus(isOnline, queueDepth),
+    connectionStatus: computeConnectionStatus(isOnline, behindDepth),
     trackingActive,
     queueDepth,
     lastNewCells,

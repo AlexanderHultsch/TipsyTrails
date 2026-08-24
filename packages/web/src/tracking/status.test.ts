@@ -37,16 +37,16 @@ describe('computeGpsStatus', () => {
 });
 
 describe('computeConnectionStatus', () => {
-  it('is offline when navigator.onLine is false, regardless of queue depth', () => {
+  it('is offline when navigator.onLine is false, however far behind this device is', () => {
     expect(computeConnectionStatus(false, 0)).toBe('offline');
     expect(computeConnectionStatus(false, 3)).toBe('offline');
   });
 
-  it('is online when online with nothing queued', () => {
+  it('is online when online and nothing has missed a send cycle', () => {
     expect(computeConnectionStatus(true, 0)).toBe('online');
   });
 
-  it('is syncing when online with unsent samples queued', () => {
+  it('is syncing when online with samples that have survived a send attempt', () => {
     expect(computeConnectionStatus(true, 1)).toBe('syncing');
   });
 });

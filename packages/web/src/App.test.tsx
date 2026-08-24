@@ -1683,6 +1683,97 @@ describe('App', () => {
       );
     });
 
+    // Section 8.6: `syncing` means this device is behind, not that a request
+    // is in the air. Batching (Section 7.2) means the queue holds something
+    // almost all the time on a phone with a good fix, so a status tied to the
+    // queue's depth flapped online -> syncing -> online every few seconds and
+    // reported a healthy device as a struggling one.
+    it('stays online while samples are merely waiting for their batch and sending normally', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      // Held open so the assertion below lands while the request is genuinely
+      // in flight, which is the state that used to read as a backlog.
+      let resolvePost: ((response: Response) => void) | undefined;
+      const postInFlight = new Promise<Response>((resolve) => {
+        resolvePost = resolve;
+      });
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return postInFlight;
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+        geo.triggerPosition({ accuracy: 10 });
+        geo.triggerPosition({ accuracy: 10 });
+      });
+
+      // Three samples queued, waiting for the flush tick: nothing has missed
+      // a send cycle yet.
+      expect(statusLevel('connection')).toBe('ok');
+      expect(statusLabel('connection')).toBe('Connection: online');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      // The batch is now in the air and the queue still holds it.
+      expect(fetchMock.mock.calls.filter(([input]) => input === '/api/samples')).toHaveLength(1);
+      expect(statusLevel('connection')).toBe('ok');
+      expect(statusLabel('connection')).toBe('Connection: online');
+
+      await act(async () => {
+        resolvePost?.(jsonResponse(200, { newCells: 0 }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(statusLevel('connection')).toBe('ok');
+      openStatusPanel();
+      expect(panelCurrentStates()[1]).toBe('Right now: Online');
+    });
+
+    // The other half of the same rule: a backlog that no single flush can
+    // clear is exactly what `syncing` is for, and a threshold on the queue
+    // depth would have hidden it behind the healthy case above.
+    it('reports syncing for samples a full batch left behind, and counts every unsent one', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      const fetchMock = stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 0 });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        for (let i = 0; i < CONFIG.SAMPLE_MAX_BATCH + 2; i++) {
+          geo.triggerPosition({ accuracy: 10 });
+        }
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const sampleCalls = fetchMock.mock.calls.filter(([input]) => input === '/api/samples');
+      expect(sampleCalls).toHaveLength(1);
+      const body = JSON.parse((sampleCalls[0][1] as RequestInit).body as string);
+      expect(body.samples).toHaveLength(CONFIG.SAMPLE_MAX_BATCH);
+
+      expect(statusLevel('connection')).toBe('degraded');
+      expect(statusLabel('connection')).toBe('Connection: syncing');
+      openStatusPanel();
+      expect(panelCurrentStates()[1]).toBe('Right now: Syncing (2 queued)');
+    });
+
     it('maps GPS accuracy to good, fair and poor at the configured boundaries', async () => {
       const geo = stubGeolocation();
       stubWakeLock();

@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.24
+**Version:** 1.25
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -778,6 +778,10 @@ This direction applies to the whole application, not only the map. Chrome, typog
 
 **Direction of travel.** The own-position marker carries a cone showing which way the player is heading whenever the GPS reports a course. It is the *course* — the direction of movement the Geolocation API derives from successive fixes — and not the direction the phone is pointed; no compass is read and no device-orientation permission is asked for. The Geolocation API reports no course while the device is stationary, so the cone is simply absent then: nothing is shown rather than a stale or northward guess, the same rule the marker itself follows before the first fix. The course is display-only — it never reaches the server (constraint C4, Section 10.2). The map is rotatable, so the cone is drawn at the course minus the map's bearing.
 
+**The map turns, and it does not tilt.** Its gestures are pan, zoom and rotate. Pitch is not one of them, on the map screen or on the suggest picker: the camera is capped at pitch 0, so a tilted state is unreachable by any route rather than merely awkward to reach — MapLibre clamps every pitch it is handed into the camera's own limits, which covers the two-finger vertical drag, the pitch half of drag-to-rotate, the keyboard's shift+arrow, and a programmatic move that carries a pitch. The two gesture handlers are disabled as well; the cap is what makes the rule hold, and turning the gestures off is what stops a finger from fighting a camera that will not move. Nothing on this map is drawn for a tilted view — the fog is a flat quad rebuilt from the map's bounds, which grow by several times under pitch — and no feature ever asked for one, so this closes a gesture that only ever surprised the player who found it.
+
+**Rotation stays, and that is not the same decision.** Three things were built for a turning map and are correct: the fog quad follows the rotated viewport rather than a fixed rectangle (7.3), the direction-of-travel cone is drawn at the course minus the map's bearing (above), and the canvas fallback measures a cell as a distance rather than as an offset along the screen's x axis. Disabling rotation would undo all three to solve a problem rotation does not cause. Pitch and bearing are one gesture family in MapLibre's defaults and two different questions here.
+
 **No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — tracking icons, locate button, pending-visit banner, bar sheet, nearby-bars panel, notices, toasts, attribution — with Section 8.4's tab bar fixed below them, outside the overlay layout and clearing it rather than competing with it — and a control anchored to an edge must yield to any bar occupying that same edge: the locate button clears whatever occupies the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. That phrase means the guarantee holds in both states, not that empty space is reserved: with no banner the controls sit at the edge, and they move down when one appears.
 
 This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed — which is the sentence proving its own point, since the ninth overlay is exactly what a list of hand-tuned offsets cannot survive. The requirement is therefore the rule and never the individual fixes. Nine independently positioned overlays that agree by coincidence are not a layout: what the screen needs is one container laying its edges out as bands that claim their own space, so a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
@@ -807,10 +811,12 @@ Deterministic, generated locally from `avatar_seed` (assigned at registration). 
 Three icons on the map screen, always visible: GPS, connection, and tracking. **Their shape never changes** — the GPS icon is the same mark whatever the GPS is doing — and the state is carried by colour alone, from the small named set Section 8.1 permits for this indicator and nothing else. They replace the text indicator with three labelled states this section used to specify; the states themselves are unchanged:
 
 - **GPS:** three states derived from the last accepted sample's accuracy — good (≤ `GPS_ACCURACY_GOOD_M`), fair (≤ `GPS_ACCURACY_FAIR_M`), poor (worse, or no fix for `GPS_STALE_MS`).
-- **Connection:** online / offline / syncing, based on `navigator.onLine` plus the queue depth of unsent samples.
+- **Connection:** online / offline / syncing, based on `navigator.onLine` plus how far behind this device is on sending. Offline is `!navigator.onLine` and outranks everything else — a device with no connection is not behind on sending, it is unable to send. **Syncing means samples have missed a send cycle**, not that a request is in flight: a sample counts once it was already queued when a flush attempt began and is still queued after it, which is either a POST that failed and left it for the next try or a sample that did not fit in `SAMPLE_MAX_BATCH` and was passed over by the cycle that should have carried it. Everything else is online, including a queue that is filling and draining normally.
 - **Foreground tracking:** whether position tracking is currently running, with a plain-language note that tracking pauses when the app is not in the foreground.
 
-Tapping the indicator opens the same short explanation of each state as before. That explanation is where the words live, so an icon-only indicator is still readable by someone who does not know what a colour means.
+Tapping the indicator opens the same short explanation of each state as before. That explanation is where the words live, so an icon-only indicator is still readable by someone who does not know what a colour means. It also carries the one number the player can act on: how many samples are still on this device, which is **every** unsent sample and not only the ones behind — "how much of my walk has not left this phone" is the question a player asks, and it is the same count whether the state is syncing or offline.
+
+**Why the connection state is not the queue's depth**, recorded because the obvious rule is the wrong one and was shipped once. Section 7.2 batches on purpose: a fix arrives roughly every second and the queue is emptied every `SAMPLE_MIN_INTERVAL_MS`, so on a perfectly healthy phone the queue holds something nearly all of the time. A state derived from the depth therefore reads `syncing` nearly all of the time and flaps to `online` for the instant after each flush — the indicator was accurate about a number that did not mean what the icon claimed. Raising the threshold does not fix that; it says "three requests in the air" instead of one, which is the same wrong question, and it hides a real three-sample backlog. The definition above measures the queue's *progress* rather than its depth, so it needs no threshold at all and there is no constant here to tune.
 
 **Colour-only state has an accessibility cost, and the mitigation is a requirement.** WCAG 2.1 SC 1.4.1 is about colour not being the only *visual* means of conveying information, so an `aria-label` does not discharge it: it serves a screen-reader user and does nothing whatsoever for a sighted colour-blind one. The shapes are fixed by decision, which removes the usual mitigation, so the one that remains is luminance. **The status colours must differ in luminance as well as in hue**, far enough apart that the states stay distinguishable under colour blindness and in a greyscale rendering of the screen — verified by converting the rendered icons to greyscale, not by judging the hues by eye. The specific values are a later decision and are deliberately not fixed here; the constraint on them is.
 
@@ -1266,10 +1272,60 @@ These are consequences to design around, not reasons to reconsider:
 | O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
 | O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at `1 - FOG_MAX_OPACITY`. Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
 | O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
+| O15 | The fog flickering the owner saw on a tilted map (v1.25) is unexplained. Pitch is now unreachable (Section 8.3), which removes the trigger he found, but not necessarily the mechanism. Two candidate causes were ruled out by inspection: the fog quad does not stop covering the screen under pitch (`getBounds`' horizon clamp in maplibre-gl 4.7.1 only engages past ~69° for the default field of view, and the camera capped at 60° before this change), and the quad's UVs — linear in latitude across vertices placed in mercator — deviate by under 0.4 m at any pitch that was reachable, against a 50 m cell. What is left is GPU-side and cannot be observed in this repository's tests (jsdom has no WebGL2): the fog texture is `LINEAR` with no mipmaps, and the fragment shader is `precision mediump float` while sampling a ±1-texel blur kernel in UV space. Both degrade wherever one screen pixel covers several cells, which a pitched view produced in its far half — and which zooming out towards `MAP_MIN_ZOOM` produces on a flat map too, where a 50 m cell is well under a pixel. Needs a real device and a look at the far half of the map at low zoom; the fix, if confirmed, is in `packages/web/src/map/fog/webgl-fog-layer.ts` and is deliberately not attempted blind. | Open |
 
 ---
 
 ## 15. Changelog
+
+### v1.25 — the connection icon measures being behind, and the map stops tilting
+
+Two more from the owner's walk, and they meet in the same place: something that was accurate about
+the wrong quantity.
+
+**The connection icon was almost never green, and the network was fine.** He reported two or three
+items queued and a cycle of online → syncing → online every couple of seconds, and asked whether
+the threshold should go up. Neither: the icon was correct and it was measuring the wrong thing.
+`syncing` was `queueDepth > 0`, and Section 7.2 batches on purpose — a fix a second onto a queue
+emptied every ten seconds means the queue is rarely empty, so a healthy phone reported a backlog
+almost continuously and reported *no* backlog only in the instant after each flush. A higher
+threshold would have said "three requests in the air", which is the same wrong question with a
+bigger number, and would have hidden a genuine three-sample backlog behind it.
+
+Section 8.6 now defines the state by the queue's progress instead of its depth: a sample counts as
+behind once it was already queued when a flush attempt began and is still queued when that attempt
+ends. That is one rule covering both honest cases — a POST that failed and left its batch for the
+next try, and a sample that did not fit in `SAMPLE_MAX_BATCH` and was passed over by the cycle that
+should have carried it — and it is a fact the flush observes rather than a duration or a count, so
+this change adds no constant to `config.ts` and leaves nothing to tune. A sample in the air is not
+behind, and a queue filling and draining on schedule is `online`. Offline still outranks all of it.
+The panel keeps reporting every unsent sample, not only the behind ones, because "how much of my
+walk has not left this phone" is the question the number answers; its wording changed to say that
+waiting samples are what working looks like.
+
+**The map could be tilted, and nothing had ever wanted it to be.** He found the two-finger vertical
+drag by accident and saw the fog misbehave afterwards. Neither map passed any pitch option, so
+MapLibre's defaults applied. Section 8.3 now states that the map's gestures are pan, zoom and
+rotate, and that the camera is capped at pitch 0 — a cap rather than only a disabled handler,
+because there are three routes into a pitched camera and closing one gesture leaves a camera that
+can still hold a pitch set another way; the cap makes the tilted state unreachable and the handlers
+are disabled beside it so a finger does not fight a camera that will not move.
+
+Rotation stays, and the section says why in its own paragraph: the fog quad following a rotated
+viewport, the direction cone drawn at course minus bearing, and the canvas fallback measuring a
+cell as a distance are all deliberate work for a turning map, and removing rotation would undo
+three correct things to fix a problem rotation does not cause.
+
+The fog flickering was **not** explained, and that is recorded rather than quietly closed. Two
+readings were checked and neither survives: the fog quad does not stop covering the screen under
+pitch — MapLibre's `getBounds` horizon clamp only engages past about 69°, and the default cap is
+60 — and the quad's UVs, which are linear in latitude across vertices placed in mercator, are off
+by under half a metre at any reachable pitch, against a 50 m cell. What remains are two
+GPU-side effects that a pitched view amplifies but does not own — a non-mipmapped fog texture
+sampled far into the distance, and the shader's `mediump` precision across a quad that grows with
+the camera's bounds — and either would still be reachable by zooming out to `MAP_MIN_ZOOM` on a
+flat map. Locking the pitch removes the trigger the owner found, not the mechanism, so this stays
+open in Section 14 for a device that can be looked at.
 
 ### v1.24 — cancelling works, and one venue stops being two bars
 
@@ -1895,4 +1951,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.24*
+*End of specification v1.25*
