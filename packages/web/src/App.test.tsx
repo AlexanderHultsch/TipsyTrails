@@ -89,6 +89,8 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     remove: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
     setMaxBounds: ReturnType<typeof vi.fn>;
+    addLayer: ReturnType<typeof vi.fn>;
+    addSource: ReturnType<typeof vi.fn>;
     container: HTMLDivElement;
     options: MockMapOptions;
   }[] = [];
@@ -106,6 +108,12 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
     addLayer = vi.fn();
     removeLayer = vi.fn();
     getLayer = vi.fn();
+    // Section 7.3's district borders (map/districts/) are the one layer here
+    // that brings a source of its own - a GeoJSON one, built from
+    // GET /static/<slug>/districts.geojson rather than from the vector tiles.
+    addSource = vi.fn();
+    getSource = vi.fn();
+    removeSource = vi.fn();
     loaded = vi.fn(() => true);
     setMaxBounds = vi.fn();
     // map/bars/bar-markers.ts's only other dependency on the real map
@@ -1378,6 +1386,59 @@ describe('App', () => {
       );
     });
 
+    // Section 8.3: the link's job is "show me this district", and a centre
+    // alone cannot express it - the map opened there at street level and an
+    // unexplored district arrived as a few streets of fog with none of its
+    // shape. The link therefore carries the district's bounding box, and
+    // screens/Map.tsx frames it (App.locate.test.tsx covers that half).
+    //
+    // The expected box is computed here from the fixture's raw coordinates
+    // rather than by calling the same helper the screen calls, so this
+    // asserts the district's actual extent and not that one function agrees
+    // with itself.
+    it("carries the district's bounding box, and its centre, in the link", async () => {
+      await renderDistricts();
+
+      const index = 3;
+      const feature = districtsFixture.features[index];
+      const href = container
+        .querySelectorAll('.district-list__item')
+        [index].getAttribute('href') as string;
+      const params = new URLSearchParams(href.slice(href.indexOf('?')));
+
+      const positions: [number, number][] = [];
+      const walk = (value: unknown) => {
+        if (!Array.isArray(value)) return;
+        if (typeof value[0] === 'number' && typeof value[1] === 'number') {
+          positions.push([value[0] as number, value[1] as number]);
+          return;
+        }
+        value.forEach(walk);
+      };
+      walk(feature.geometry.coordinates);
+      expect(positions.length).toBeGreaterThan(0);
+
+      const lons = positions.map(([lon]) => lon);
+      const lats = positions.map(([, lat]) => lat);
+      const expected = [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
+
+      const bbox = (params.get('bbox') as string).split(',').map(Number);
+      expect(bbox).toHaveLength(4);
+      bbox.forEach((value, position) => {
+        expect(value).toBeCloseTo(expected[position], 5);
+      });
+
+      // The centre stays beside it and is not replaced: it is what an older
+      // link carries, and what the map falls back to if it rejects the box.
+      // It has to lie inside the box it is sent with.
+      const lat = Number(params.get('lat'));
+      const lon = Number(params.get('lon'));
+      expect(lon).toBeGreaterThanOrEqual(bbox[0]);
+      expect(lon).toBeLessThanOrEqual(bbox[2]);
+      expect(lat).toBeGreaterThanOrEqual(bbox[1]);
+      expect(lat).toBeLessThanOrEqual(bbox[3]);
+    });
+
     // The panel sits directly beneath a `width: 100%` map, so its height may
     // not depend on what is in it. It used to: one wrapping flex row held
     // the name, the percentage and the link, so a long name ("Weiherfeld-
@@ -1443,6 +1504,58 @@ describe('App', () => {
         expect(item.querySelector('.district-list__percent')?.textContent).toBe(`${index}.0%`);
         expect(item.getAttribute('href')).toMatch(/^\/map\?/);
       });
+    });
+  });
+
+  // Section 7.3: the owner asked for district borders visible on the main
+  // map whether or not the ground is explored. The geometry is the boundary
+  // file the district overview already draws, so this is that file put on the
+  // map the player walks with - no new endpoint, no new seed data. Where the
+  // layer lands relative to the fog, and that the ordering does not depend on
+  // which response arrived first, is pinned in
+  // map/districts/district-borders.test.ts; what is checked here is the
+  // wiring: that the map screen fetches the boundaries at all and puts them
+  // on the map.
+  describe('district borders on the map (SPEC.md Section 7.3)', () => {
+    it('fetches the district boundaries and draws them as a layer of their own', async () => {
+      const fetchMock = stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
+          return jsonResponse(200, districtsFixture);
+        }
+        // Everything else the map screen loads in the background - the city
+        // metadata, the fog mask, the bars - is deliberately left to fail
+        // here: each is best-effort and none of them is what this test is
+        // about.
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp('/map');
+      await flushLazyMapScreen();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) => input === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`,
+        ),
+      ).toBe(true);
+
+      const map = mapInstances[mapInstances.length - 1];
+      const [sourceId, source] = map.addSource.mock.calls[0] as [string, { type: string }];
+      expect(source.type).toBe('geojson');
+
+      const borderLayer = map.addLayer.mock.calls
+        .map(([layer]) => layer as { id: string; type: string; source?: string })
+        .find((layer) => layer.source === sourceId);
+      expect(borderLayer).toBeDefined();
+      expect(borderLayer?.type).toBe('line');
     });
   });
 
@@ -1957,6 +2070,49 @@ describe('App', () => {
       });
 
       expect(container.querySelector('.map-toast--speed')).toBeNull();
+    });
+
+    // The owner walked the city and was told "Revealed 1 new area" over and
+    // over without finding a single bar, which is noise: the fog receding is
+    // its own feedback, and a count of 50 m cells is not something a player
+    // can act on. The message is gone, and this test is what makes that a
+    // decision rather than an accident - it fails if anything puts a second
+    // toast on the screen in response to a batch that cleared ground.
+    //
+    // Asserted as the whole set of toasts, not as the absence of a phrase: a
+    // reworded return of the same idea has to fail here too.
+    it('never announces revealed ground, however many cells a batch clears', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 7,
+            newBars: [],
+            visitUpdates: [],
+            tooFastToReveal: false,
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const toasts = Array.from(container.querySelectorAll('.map-toast'));
+      // The one toast this screen still shows a player who has found
+      // nothing yet - and it is about a bar, not about the fog.
+      expect(toasts.map((toast) => toast.textContent)).toEqual([
+        'No bars discovered yet - walk toward one to reveal it here.',
+      ]);
+      expect(container.textContent).not.toContain('Revealed');
     });
 
     it('stops the geolocation watch and releases the wake lock when leaving the map screen', async () => {

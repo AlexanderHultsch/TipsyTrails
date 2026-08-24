@@ -26,6 +26,15 @@ const { MockMap, addProtocolMock, removeProtocolMock, mapInstances } = vi.hoiste
   interface MockMapOptions {
     center?: [number, number];
     zoom?: number;
+    // Section 8.3's "Open on the map shows the whole district": arriving
+    // from a district link the screen frames a box instead of asking for a
+    // centre at a zoom, and it does so through the constructor rather than
+    // with a fitBounds call after mount. Both halves are recorded, because
+    // the padding is as much of the requirement as the box is.
+    bounds?: [[number, number], [number, number]];
+    fitBoundsOptions?: { padding?: number };
+    minZoom?: number;
+    maxZoom?: number;
     // Section 8.3's camera limits. Every one of them is read individually by
     // the pitch tests at the foot of this file, so a map that sets three of
     // the four cannot pass on the strength of the others.
@@ -434,6 +443,137 @@ describe('centring the map on the player (SPEC.md Section 8.3)', () => {
     });
 
     expect(map.jumpTo).toHaveBeenCalledWith({ center: [INSIDE_LON, INSIDE_LAT] });
+  });
+});
+
+// Section 8.3: "Open on the map" is the district overview's answer to "tap
+// to zoom in", and it used to land on the district's centre at
+// MAP_DEFAULT_ZOOM - street level, which is the right answer to "where am
+// I" and the wrong one to "show me this district": an unexplored district
+// arrived as a few streets of fog with none of its shape. The link now
+// carries the district's bounding box and the map frames it.
+describe('opening the map on a district (SPEC.md Section 8.3)', () => {
+  // A box around the middle of Karlsruhe, in the URL's own order:
+  // minLon,minLat,maxLon,maxLat.
+  const BBOX = '8.360000,48.990000,8.420000,49.030000';
+  const BBOX_BOUNDS: [[number, number], [number, number]] = [
+    [8.36, 48.99],
+    [8.42, 49.03],
+  ];
+  // The centre parameters the same link carries beside the box - what an
+  // older link has on its own, and what the map falls back to when it
+  // rejects a box.
+  const CENTRE_QUERY = 'lat=49.0123&lon=8.4321';
+  const CENTRE: [number, number] = [8.4321, 49.0123];
+
+  async function openMapAt(query: string) {
+    stubGeolocation();
+    stubMapFetch(() => jsonResponse(200, cityMeta));
+    await renderAt(`/map?${query}`);
+    return lastMap();
+  }
+
+  it('frames the district by its bounding box rather than opening at a zoom', async () => {
+    const map = await openMapAt(`district=Innenstadt&${CENTRE_QUERY}&bbox=${BBOX}`);
+
+    expect(map.options.bounds).toEqual(BBOX_BOUNDS);
+    // The box replaces the centre-and-zoom pair rather than being applied on
+    // top of it: a map given both would be built at street level and moved,
+    // which is the extra camera move this path exists to avoid.
+    expect(map.options.center).toBeUndefined();
+    expect(map.options.zoom).toBeUndefined();
+  });
+
+  // A box fitted edge to edge puts the district's own border exactly on the
+  // edge of the screen, which reads as a shape running off-screen rather
+  // than as one the player is being shown whole. Both assertions are needed:
+  // the first fails if the call site stops passing the constant, the second
+  // if the constant itself is set to nothing.
+  it('leaves a margin around the fitted district', async () => {
+    const map = await openMapAt(`bbox=${BBOX}`);
+
+    expect(map.options.fitBoundsOptions).toEqual({ padding: CONFIG.MAP_FIT_PADDING_PX });
+    expect(CONFIG.MAP_FIT_PADDING_PX).toBeGreaterThan(0);
+  });
+
+  // The camera's limits are not suspended for this path: a district too big
+  // to fit at MAP_MIN_ZOOM must still land inside the range the tile extract
+  // covers, which MapLibre's own clamping does provided the limits are set.
+  it('keeps the map inside its zoom limits while framing a district', async () => {
+    const map = await openMapAt(`bbox=${BBOX}`);
+
+    expect(map.options.minZoom).toBe(CONFIG.MAP_MIN_ZOOM);
+    expect(map.options.maxZoom).toBe(CONFIG.MAP_MAX_ZOOM);
+  });
+
+  // The same rule the centre already followed: an explicit request from the
+  // district screen wins over the automatic centring, and a link carrying
+  // only a box must not be undone by the first fix that arrives.
+  it('ignores the player position when the URL carried a bounding box', async () => {
+    const geo = stubGeolocation();
+    stubMapFetch(() => jsonResponse(200, cityMeta));
+
+    await renderAt(`/map?bbox=${BBOX}`);
+    act(() => {
+      geo.triggerPosition({ lat: INSIDE_LAT, lon: INSIDE_LON });
+    });
+    await flush();
+
+    const map = lastMap();
+    expect(map.options.bounds).toEqual(BBOX_BOUNDS);
+    expect(map.jumpTo).not.toHaveBeenCalled();
+  });
+
+  // Everything below is the parsing contract, and it exists because a URL is
+  // not a trusted input: `lat`/`lon` were validated exactly this defensively
+  // after a plain visit to /map put the map on Null Island, five thousand
+  // kilometres from any tile the extract holds - a failure that renders as a
+  // blank paper background and reports no error at all. A bad box has to
+  // fall back to the centre the link also carries, never be coerced into
+  // some box near it.
+  describe('rejects a bounding box it cannot trust, and falls back to the centre', () => {
+    const REJECTED: [string, string][] = [
+      ['blank', ''],
+      ['not a number', 'abc'],
+      ['three values', '8.36,48.99,8.42'],
+      ['five values', '8.36,48.99,8.42,49.03,1'],
+      ['an empty component', '8.36,,8.42,49.03'],
+      ['a non-finite component', '8.36,48.99,8.42,1e999'],
+      ['a latitude past the pole', '8.36,48.99,8.42,91'],
+      ['a longitude past the meridian', '8.36,48.99,181,49.03'],
+      ['a longitude past the meridian westward', '-181,48.99,8.42,49.03'],
+      ['corners the wrong way round', '8.42,49.03,8.36,48.99'],
+      ['a box with no area', '8.36,48.99,8.36,48.99'],
+    ];
+
+    for (const [description, bbox] of REJECTED) {
+      it(`rejects ${description}`, async () => {
+        const map = await openMapAt(`${CENTRE_QUERY}&bbox=${encodeURIComponent(bbox)}`);
+
+        expect(map.options.bounds).toBeUndefined();
+        expect(map.options.center).toEqual(CENTRE);
+        expect(map.options.zoom).toBe(CONFIG.MAP_DEFAULT_ZOOM);
+      });
+    }
+
+    // And with nothing to fall back to, the city - the same answer a plain
+    // visit to /map has always given.
+    it('falls back to the city when the link carried no usable centre either', async () => {
+      const map = await openMapAt('bbox=8.36,48.99,8.42,91');
+
+      expect(map.options.bounds).toBeUndefined();
+      expect(map.options.center).toEqual(CITY_CENTER);
+    });
+  });
+
+  // The opening view for every other arrival is untouched, which is half of
+  // what this change had to leave alone.
+  it('still opens a plain /map visit at the street-level default zoom', async () => {
+    const map = await openMapAt('');
+
+    expect(map.options.bounds).toBeUndefined();
+    expect(map.options.center).toEqual(CITY_CENTER);
+    expect(map.options.zoom).toBe(CONFIG.MAP_DEFAULT_ZOOM);
   });
 });
 

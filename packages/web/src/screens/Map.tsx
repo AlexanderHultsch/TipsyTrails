@@ -13,6 +13,7 @@ import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
 import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
+import { useDistrictBorders } from '../map/districts/useDistrictBorders.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
 import { inkStyle } from '../map/ink-style.js';
 import { useCityMaxBounds } from '../map/useCityMaxBounds.js';
@@ -29,8 +30,9 @@ const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 // Roughly the middle of Karlsruhe's bounding box (Section 6.2). There is no
 // city-metadata endpoint wired up in this phase (that is /api/city -
 // Section 9.2), so this is a fixed fallback view rather than one derived
-// from server data. Used whenever the URL doesn't carry a district centre
-// (see centerFromSearchParams below).
+// from server data. Used whenever the URL carries neither a district centre
+// nor a district bounding box (see centerFromSearchParams and
+// boundsFromSearchParams below).
 //
 // There is no INITIAL_ZOOM beside it: the opening zoom is
 // CONFIG.MAP_DEFAULT_ZOOM (Section 8.3, and Section 0 rule 3 - a zoom limit
@@ -85,6 +87,67 @@ function centerFromSearchParams(params: URLSearchParams): [number, number] | nul
   return [lon, lat];
 }
 
+/** South-west then north-east corner, each [lon, lat] - MapLibre's own order. */
+type UrlBounds = [[number, number], [number, number]];
+
+// Section 8.3: "Open on the map" frames the whole district, so the link
+// carries the district's bounding box as well as its centre
+// (screens/DistrictOverview.tsx). One `bbox` parameter holds it, as
+// "minLon,minLat,maxLon,maxLat" - the order GeoJSON and OGC both use, and
+// the same pairing as the `lon`,`lat` above, so the two parameters cannot be
+// read in opposite orders by mistake.
+//
+// The centre stays in the URL beside it and is not replaced: it is what an
+// older link carries, and it is the fallback when a box is rejected here.
+//
+// Validated exactly as strictly as centerFromSearchParams above, and for the
+// reason its comment records - a URL is not a trusted input, and a
+// wrong-but-finite value in one put the map on Null Island once. So: absent
+// and blank are rejected before conversion (`Number('')` is 0 and
+// `Number.isFinite(0)` is true), non-finite values are rejected (which
+// covers "abc" and an overflowing exponent alike), out-of-range latitudes
+// and longitudes are rejected rather than clamped, and a box whose corners
+// do not increase is rejected as well. That last check is not pedantry: an
+// inverted box is a caller bug, and a degenerate one - the two corners equal
+// - is a point rather than an area, which `fitBounds` frames at the maximum
+// zoom, i.e. exactly the too-close view this parameter exists to prevent.
+function boundsFromSearchParams(params: URLSearchParams): UrlBounds | null {
+  const raw = params.get('bbox')?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parts = raw.split(',');
+  if (parts.length !== 4) {
+    return null;
+  }
+  const values: number[] = [];
+  for (const part of parts) {
+    const text = part.trim();
+    if (!text) {
+      return null;
+    }
+    const value = Number(text);
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    values.push(value);
+  }
+  const [minLon, minLat, maxLon, maxLat] = values;
+  if (Math.abs(minLat) > 90 || Math.abs(maxLat) > 90) {
+    return null;
+  }
+  if (Math.abs(minLon) > 180 || Math.abs(maxLon) > 180) {
+    return null;
+  }
+  if (minLon >= maxLon || minLat >= maxLat) {
+    return null;
+  }
+  return [
+    [minLon, minLat],
+    [maxLon, maxLat],
+  ];
+}
+
 export function MapScreen() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [tilesUnavailable, setTilesUnavailable] = useState(false);
@@ -107,6 +170,10 @@ export function MapScreen() {
   // district centre?" long after that, without re-reading a query that may
   // have changed underneath it.
   const urlCenterRef = useRef(centerFromSearchParams(searchParams));
+  // Read once at mount for the same reason, and used at the same single
+  // moment: the map is built framed on this box (Section 8.3's "Open on the
+  // map shows the whole district") and nothing recentres it afterwards.
+  const urlBoundsRef = useRef(boundsFromSearchParams(searchParams));
   // Whether the map has already been centred on the player. A ref, not
   // state: this is a latch the effect below reads and sets, and a re-render
   // on flipping it would buy nothing.
@@ -119,6 +186,10 @@ export function MapScreen() {
   // so `user` is already resolved by the time it mounts, but the `null`
   // fallback keeps useFogLayer's own contract honest for the type.
   useFogLayer(mapInstance, trackingState.revealVersion, user?.id ?? null);
+  // Section 7.3: the district borders, above the fog so they are visible in
+  // ground the player has not explored - see map/districts/district-borders.ts
+  // for why appending the layer is what makes that ordering deterministic.
+  useDistrictBorders(mapInstance);
   const city = useCityMaxBounds(mapInstance);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
   // Section 7.5 step 1: tapping a marker leads to that bar, where the
@@ -189,19 +260,54 @@ export function MapScreen() {
     const protocol = new Protocol();
     maplibregl.addProtocol('pmtiles', protocol.tile);
 
+    // Section 8.3, and the one place the two opening views are chosen
+    // between. Arriving from a district's "Open on the map" the question is
+    // "show me this district", which is a *box* and not a point at a zoom:
+    // the district centre at street level showed a handful of streets of an
+    // unexplored district and nothing of its shape. Every other arrival -
+    // including an older link carrying only a centre - is the ordinary
+    // "where am I" view and opens at MAP_DEFAULT_ZOOM.
+    //
+    // The framing is done by the constructor's own `bounds`, not by a
+    // fitBounds call after mount, and that is deliberate: MapLibre applies
+    // it during construction with no animation, so there is exactly one
+    // camera move on this path, and nothing races the one-time centring
+    // effect below (which stands down for a URL that framed the map at all).
+    //
+    // MAP_MIN_ZOOM and MAP_MAX_ZOOM still bound the result. `fitBounds`
+    // clamps into the camera's zoom range, so a district too large to fit at
+    // MAP_MIN_ZOOM lands at MAP_MIN_ZOOM centred on its box - as much of it
+    // as the map is allowed to show - rather than zooming out past the
+    // extract's coverage.
+    const initialView: Pick<
+      maplibregl.MapOptions,
+      'bounds' | 'fitBoundsOptions' | 'center' | 'zoom'
+    > = urlBoundsRef.current
+      ? {
+          bounds: urlBoundsRef.current,
+          // Section 8.3: a box fitted edge to edge puts the district's
+          // border on the edge of the screen. The margin is a constant
+          // (Section 0, rule 3), never a number here.
+          fitBoundsOptions: { padding: CONFIG.MAP_FIT_PADDING_PX },
+        }
+      : {
+          center: urlCenterRef.current ?? INITIAL_CENTER,
+          // Section 8.3: "the map opens at street level" - a few blocks
+          // across, the scale at which a bar marker, the player's own
+          // position and the 50 m grain of the fog are all legible and a
+          // player can act on what they see. It opened at 12 before, a city
+          // overview: a whole city of fog with nothing in it to walk
+          // towards, and the city already has a screen of its own (City
+          // overview, Section 8.3). The same constant serves the "to my
+          // location" control below, because both answer the question "show
+          // me where I am, close enough to walk from".
+          zoom: CONFIG.MAP_DEFAULT_ZOOM,
+        };
+
     const map = new maplibregl.Map({
       container: containerRef.current as HTMLDivElement,
       style: inkStyle,
-      center: urlCenterRef.current ?? INITIAL_CENTER,
-      // Section 8.3: "the map opens at street level" - a few blocks across,
-      // the scale at which a bar marker, the player's own position and the
-      // 50 m grain of the fog are all legible and a player can act on what
-      // they see. It opened at 12 before, a city overview: a whole city of
-      // fog with nothing in it to walk towards, and the city already has a
-      // screen of its own (City overview, Section 8.3). The same constant
-      // serves the "to my location" control below, because both answer the
-      // question "show me where I am, close enough to walk from".
-      zoom: CONFIG.MAP_DEFAULT_ZOOM,
+      ...initialView,
       minZoom: CONFIG.MAP_MIN_ZOOM,
       maxZoom: CONFIG.MAP_MAX_ZOOM,
       // Section 8.3: the map turns but never tilts. Three options, because
@@ -275,7 +381,15 @@ export function MapScreen() {
     if (!mapInstance || !city || !position) {
       return;
     }
-    if (centredOnPlayerRef.current || urlCenterRef.current !== null) {
+    // A URL that framed the map - by centre, by bounding box, or by both -
+    // is an explicit request and wins over this automatic one. Both are
+    // checked, not only the centre: a link carrying a box alone would
+    // otherwise be undone by the first fix that arrived.
+    if (
+      centredOnPlayerRef.current ||
+      urlCenterRef.current !== null ||
+      urlBoundsRef.current !== null
+    ) {
       return;
     }
     centredOnPlayerRef.current = true;
@@ -397,14 +511,16 @@ export function MapScreen() {
               <p>No bars discovered yet - walk toward one to reveal it here.</p>
             </div>
           )}
-          {trackingState.lastNewCells !== null && trackingState.lastNewCells > 0 && (
-            <div className="map-toast" role="status">
-              <p>
-                Revealed {trackingState.lastNewCells} new area
-                {trackingState.lastNewCells === 1 ? '' : 's'}.
-              </p>
-            </div>
-          )}
+          {/* There is deliberately no "Revealed N new areas" message here,
+              and its absence is a decision rather than an omission. It fired
+              on every batch that cleared a cell, which on a walk is most of
+              them, so a player got a running commentary on the one thing the
+              map is already showing them: the fog receding is its own
+              feedback, and Section 7.3's crisp edge exists to be exactly
+              that. A count of 50 m cells is not a number anyone can act on
+              either. What the map still announces is what a player cannot
+              see happen for themselves - a bar coming into range, and the
+              hint above for someone who has yet to find one. */}
           {visits.justMastered.length > 0 && (
             <div className="map-toast map-toast--mastered" role="status">
               <p>{visits.justMastered.join(', ')} mastered.</p>

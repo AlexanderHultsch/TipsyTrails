@@ -168,6 +168,18 @@ export const CONFIG = {
   // position and the 50 m grain of the fog are all legible.
   MAP_DEFAULT_ZOOM: 16,
 
+  // SPEC.md Section 8.3: the margin left around a district's bounding box
+  // when "Open on the map" frames that district, in screen pixels on each
+  // side — pixels because that is the unit MapLibre's `fitBounds` padding is
+  // expressed in, and the quantity really is a screen margin rather than a
+  // distance on the ground. Fitted edge to edge the district's own border
+  // lands exactly on the edge of the viewport, which reads as a shape
+  // continuing off-screen rather than as one the player is being shown
+  // whole; a margin is what makes it read as "here is the district".
+  // Deliberately not MAP_BOUNDS_PADDING_RATIO, which is the pan limit's
+  // margin around the *city* and answers a different question.
+  MAP_FIT_PADDING_PX: 24,
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json', // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;

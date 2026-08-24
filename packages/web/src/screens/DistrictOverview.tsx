@@ -10,16 +10,39 @@ const VIEWPORT_WIDTH = 320;
 const VIEWPORT_HEIGHT = 320;
 const VIEWPORT_PADDING = 12;
 
+// Six decimal places is about 0.1 m at this latitude - far finer than
+// anything a district boundary is surveyed to, and the same precision the
+// centre has always been written at.
+const URL_COORDINATE_DIGITS = 6;
+
 function mapLinkFor(feature: BoundaryFeature): string {
   // Section 8.3: "tap to zoom in." There is no shared app state carrying
-  // the pick from here to the map route, so the tapped district's centre
-  // travels through the URL instead - the map route reads it back in
+  // the pick from here to the map route, so the tapped district travels
+  // through the URL instead - the map route reads it back in
   // screens/Map.tsx.
+  //
+  // The bounding box is what answers the link's own promise. The centre
+  // alone could only say "put the camera here", and the map then opened at
+  // MAP_DEFAULT_ZOOM - street level, which is right for "where am I" and
+  // wrong for "show me this district": an unexplored district arrived as a
+  // few streets of fog with none of its shape. A box says how much to show
+  // as well as where, so a large district and a small one both arrive
+  // framed.
+  //
+  // The centre is still sent beside it, and not as a redundancy: it is what
+  // an older link carries, and it is what screens/Map.tsx falls back to if
+  // it rejects the box.
   const center = centerOfGeometry(feature.geometry);
+  const bbox = computeBoundingBox(pointsOfGeometry(feature.geometry));
   const params = new URLSearchParams({
     district: feature.properties.name,
-    lat: center.lat.toFixed(6),
-    lon: center.lon.toFixed(6),
+    lat: center.lat.toFixed(URL_COORDINATE_DIGITS),
+    lon: center.lon.toFixed(URL_COORDINATE_DIGITS),
+    // "minLon,minLat,maxLon,maxLat" - GeoJSON's own bbox order, and the same
+    // lon-before-lat pairing as the two parameters above.
+    bbox: [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat]
+      .map((value) => value.toFixed(URL_COORDINATE_DIGITS))
+      .join(','),
   });
   return `/map?${params.toString()}`;
 }

@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.26
+**Version:** 1.27
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -620,6 +620,8 @@ The previous accepted position used by step 4 is held in memory only (Section 10
 
 **The message must clear itself.** Every successful `POST /api/samples` replaces the flag, including with `false`, so the message goes as soon as the player has slowed down. A message about a train that survives the player getting off it is the same class of defect as a pending-visit banner claiming time the player never spent at a bar (Section 7.5). Its wording says what will happen when they slow down rather than only what is not happening, and it does not accuse: the player is not doing anything wrong.
 
+**The map does not announce revealed ground, and that is a decision.** It did: every batch that cleared a cell put "Revealed N new areas" on the screen, which on a walk is most batches, and the owner's report was of being told it repeatedly while finding nothing. The count is not something a player can act on — the unit is a 50 m cell, not a place — and it narrates the one thing the map is already showing them, since the fog receding is its own feedback and the crisp edge above exists to be exactly that. What the map announces is what the player cannot see happen for themselves: a bar coming into range, and the speed message above, which reports a rule that is *stopping* something rather than a thing that just happened. A count of cells is neither.
+
 Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_district_progress` row if the cell belongs to a district, and the `fog_daily_progress` row for the current Europe/Berlin day. All three updates happen in one transaction with the mask write.
 
 **Rendering.** A MapLibre custom layer draws the fog as a single full-screen quad. The fog mask is uploaded to the GPU as a texture (one texel per grid cell, `R8` format, ~140 KiB for Karlsruhe) and sampled in the fragment shader. Reveals update the texture via `texSubImage2D` on the affected region only.
@@ -637,6 +639,12 @@ Visual behaviour:
 **Major roads carry no extra weight.** `road-highway` used to be drawn heavier and more opaque than `road-primary`, which was defensible while it was the only road above the fog and had to carry orientation on its own. It no longer is, and the contrast the ordinary roads already have is enough for the major ones too: both road layers take the same colour, the same opacity, and the same width ramp. The hierarchy does not disappear — it moves from stroke weight to visibility threshold. `road-highway` appears from zoom 4 and `road-primary` only from zoom 8, so a zoomed-out map still shows the trunk network alone, and the distinction between the two appears at the zoom where it is useful instead of as a permanent difference in ink.
 
 **A layer above the fog cannot tell revealed ground from unrevealed ground.** It renders identically on both, and that is the subtle cost of this ordering, worth stating plainly because it is easy to discover only on the street. The road intensity that reads well today was only ever seen on revealed ground — beneath the fog those roads were dimmed to nothing — so moving them above puts that same intensity onto unexplored ground, where it may read as too loud, and where it flattens the very distinction the fog exists to draw. The specification's answer is that roads above the fog carry a deliberately reduced opacity: enough to read through the fog without dominating it, with the revealed-versus-unrevealed contrast carried by the buildings, the green areas and the fog tone rather than by the roads. The exact value is a judgement to be made looking at the real map on a real device; this document fixes the requirement, not the number.
+
+**The district boundaries are drawn on the map, above the fog.** A player asked which district they are standing in has no way to tell from the map, and the answer is most useful in exactly the ground they have not explored — so the borders go above the fog, and they pay the price the paragraph above describes: like the roads, they render identically on explored and unexplored ground and carry none of that distinction. The geometry is the boundary file the district overview already draws (`/static/<slug>/districts.geojson`, Section 11.4), added to the map as a GeoJSON source and a line layer at runtime; nothing new is generated, served, or seeded for it.
+
+**It must read as a boundary and not as another street**, which is a stronger requirement than being quiet. A road network is continuous and connected, so an unbroken line joins it by resemblance however faint it is drawn, and a faint continuous line above the fog is precisely a road. The border is therefore **dashed** — the cartographic idiom for an administrative boundary, and a kind of line the street layers never produce — and drawn wider than the roads rather than thinner, so it reads as a deliberate heavier mark that happens to be broken. Its opacity sits below the roads', because a boundary is context and the streets are what a player navigates by, but not below the 3:1 Section 8.1 holds non-text marks to against the fogged ground it exists to be visible on. As with the roads, this document fixes the requirement and not the number.
+
+**Its position in the layer order is fixed by construction, not by timing.** The border layer and the fog are both added at runtime from two independent network responses, so an ordering that depends on which arrives first works on a desk and fails on a phone. The fog is only ever *inserted* before the first above-fog layer of the static style and never appended; the border layer is only ever appended. That makes the border above the fog in both arrival orders, without either side having to know whether the other has mounted.
 
 If one value turns out not to serve both states — quiet enough over fog, present enough on revealed ground — the named remedy is two copies of the road layers: a quiet one above the fog and a fuller one below it, so revealed ground gets both drawn over each other and fogged ground only the quiet one. That is the fallback, not the plan. It doubles the road geometry drawn per frame and gives the style two sets of paint properties to keep in step, so it is worth its cost only once a single opacity has demonstrably failed.
 
@@ -753,7 +761,7 @@ Because the tick is cheap and idempotent, a missed tick after a restart is self-
 
 ### 8.1 Visual direction
 
-A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Roads are rendered as fine black lines: the major ones everywhere, the minor streets only on ground the player has explored. Water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a crisp but irregular edge, dense enough to hide detail; the major roads and the water stay legible there, and they do so by being drawn above the fog rather than showing through it, while buildings, green areas, parks and the minor streets are hidden beneath it (Section 7.3). This section said "only major roads" until v1.16, when the minor streets were added below the fog; Section 7.3 is the later and more specific decision, and this sentence is corrected to agree with it rather than left to be read alone and acted on. One accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states, exactly as before. Beside it, and only there, a small named set of status colours is permitted — used by the three status icons of Section 8.6 and by nothing else in the application, and never as an accent. This is a deliberate narrowing of a rule this specification set, and the reason is worth recording: the status indicator's icons keep a fixed shape by decision, so colour is the only channel left to them, and one accent cannot express three states of three different things. The narrowing is bounded on purpose — one accent, one indicator, a fixed and named set of colours — so the restraint the rest of this direction rests on survives it. The overall impression is quiet, near-monochrome, and generous with empty space.
+A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if drawn with a pen or brush rather than as clean vectors — subtle weight variation and imperfect edges. Roads are rendered as fine black lines: the major ones everywhere, the minor streets only on ground the player has explored. Water and green areas are rendered as loose hatching and stipple textures rather than filled colour. Symbols are solid black pictograms with no gradients, shadows, or outlines. Unexplored terrain sits beneath a milky grey fog with a crisp but irregular edge, dense enough to hide detail; the major roads and the water stay legible there, and they do so by being drawn above the fog rather than showing through it, while buildings, green areas, parks and the minor streets are hidden beneath it (Section 7.3). This section said "only major roads" until v1.16, when the minor streets were added below the fog; Section 7.3 is the later and more specific decision, and this sentence is corrected to agree with it rather than left to be read alone and acted on. District boundaries are drawn over the whole map as broken lines in the same ink — dashed because that is what tells a boundary apart from a street on a near-monochrome map, where weight and opacity alone cannot (Section 7.3). One accent colour is permitted across the entire application: a muted red, reserved for the player's own position and for active states, exactly as before. Beside it, and only there, a small named set of status colours is permitted — used by the three status icons of Section 8.6 and by nothing else in the application, and never as an accent. This is a deliberate narrowing of a rule this specification set, and the reason is worth recording: the status indicator's icons keep a fixed shape by decision, so colour is the only channel left to them, and one accent cannot express three states of three different things. The narrowing is bounded on purpose — one accent, one indicator, a fixed and named set of colours — so the restraint the rest of this direction rests on survives it. The overall impression is quiet, near-monochrome, and generous with empty space.
 
 This direction applies to the whole application, not only the map. Chrome, typography, and controls follow the same restraint.
 
@@ -776,8 +784,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Password reset | Username → security question → answer → new password |
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
-| District overview | All districts with individual progress percentages; tap to zoom in |
-| Map (main) | Fog map, own position and direction of travel, discovered bar markers (tapping one opens that bar's sheet **on this screen**, carrying the check-in action — 7.5), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
+| District overview | All districts with individual progress percentages; tap to zoom in — which opens the map framed on that district, see below |
+| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers (tapping one opens that bar's sheet **on this screen**, carrying the check-in action — 7.5), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
 | Bar detail (`/bars/:id`) | Name, address, district, mastered status, community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
@@ -799,6 +807,10 @@ This section said "eight" until v1.19, listing the set as it stood before the ba
 Two things follow that are worth stating because they are easy to lose. The container must let pointer events through to the map and take them back only on the overlays themselves, or the map stops responding to drags. And the bottom safe-area inset belongs to the layout, applied once, rather than being repeated by every child that happens to sit at that edge.
 
 **The map opens at street level.** The opening view is zoom **16** — a few blocks across, the scale at which a bar marker, the player's own position, and the 50 m grain of the fog are all legible and a player can act on what they see. It opened at zoom 12 before, a city overview: a whole city of fog with nothing in it to walk towards. The city as a whole already has a screen of its own (City overview, above), so the map does not have to be one too. Zooming out to `MAP_MIN_ZOOM` stays available and is unchanged. Like the zoom limits it sits beside, the opening zoom is a constant in `packages/shared/src/config.ts` and never a number at the call site (Section 0, rule 3).
+
+**"Open on the map" frames the whole district, and that is a different question from "where am I".** The district overview's "tap to zoom in" used to carry the tapped district's centre and let the map open at `MAP_DEFAULT_ZOOM`, which put a player on a single street corner of a district they had come to look at; an unexplored one arrived as a few streets of fog with none of its shape. A centre can only say where to point the camera, so the link carries the district's **bounding box** as well, and the map is built framed on that box rather than moved to it afterwards — one camera move on that path, and nothing racing the one-time centring on the player, which stands down for any URL that framed the map.
+
+Three things bound that framing and none of them is suspended for it. `MAP_MIN_ZOOM` and `MAP_MAX_ZOOM` still apply, so a district too large to fit lands at the minimum zoom centred on its box rather than zooming out past the area the tile extract covers, and the city's pan limit is unchanged. The box is fitted with a **margin** — a constant in `config.ts` like every other number here, in screen pixels because that is what the quantity is — since a box fitted edge to edge puts the district's own border on the edge of the screen, which reads as a shape running off-screen rather than as one being shown whole. And the box is **validated as defensively as the centre beside it**: absent, blank, non-numeric, non-finite, out-of-range, inverted and zero-area boxes are all rejected rather than coerced, and a rejected box falls back to the centre the link also carries, or to the city. That is not caution for its own sake — the centre parameters are validated that way because a URL once put this map on Null Island, where MapLibre requested no tiles, reported no error, and drew a blank page indistinguishable from a fully fogged city. The centre stays in the link beside the box, both as that fallback and because it is what an older link carries.
 
 **"To my location" sets that same zoom, it does not merely centre.** Recentring while keeping whatever zoom the map happened to be on answers the wrong question: a player zoomed far out taps it and gets their position in the middle of a city-wide view they still cannot walk from. The control takes them to `MAP_DEFAULT_ZOOM` as well as to their position — one constant for the opening view and for this, because both answer "show me where I am, close enough to walk from", and two numbers meaning the same thing drift apart. The map picker on Suggest a bar is the deliberate exception: its identical-looking control centres without changing zoom, because a player who has zoomed in to place a pin precisely would lose exactly the precision they zoomed in for. Two controls that look the same behaving differently is a cost, taken knowingly and recorded here rather than discovered later as an inconsistency.
 
@@ -1287,6 +1299,61 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.27 — the map stops counting cells at the player, a district link shows the district, and the borders come out of the fog
+
+Three from the owner's field notes, and they are all about the map answering the question actually
+being asked.
+
+**"Revealed 1 new area", again and again, and never a bar.** The message fired on every batch that
+cleared a cell, which on a walk is nearly all of them, so a player got a running commentary on the
+one thing the map was already showing them — the fog receding is its own feedback, and the crisp
+edge of v1.14 exists to be exactly that. The unit made it worse rather than better: a 50 m cell is
+not a place, so the number was neither a destination nor a score, and there was nothing to do with
+it. Section 7.3 now states what the map announces and why the count is not in that set — what is
+announced is what the player cannot see for themselves, a bar coming into range or a rule that is
+stopping the reveal, and a count of cells is neither. The client-side field that carried it went
+with it rather than being left as state nothing reads; `revealVersion`, which is what a reveal
+actually drives, is untouched.
+
+**"Open on the map" opened on a street corner.** The district overview's link carried the tapped
+district's centre and the map opened at `MAP_DEFAULT_ZOOM` — street level, the right answer to
+"where am I" and the wrong one to "show me this district", and an unexplored district arrived as a
+handful of streets of fog with none of its shape. The link now carries the district's bounding box
+as well, and the map is built framed on it rather than moved there afterwards, so there is one
+camera move on that path and nothing races the one-time centring on the player.
+
+The three things that bound the framing are in Section 8.3 because each of them is a way this could
+have gone wrong quietly. The zoom limits still apply, so a district too large to fit lands at
+`MAP_MIN_ZOOM` on its box instead of zooming out past the extract. The fit leaves a margin, a
+constant in `config.ts` in screen pixels, because a box fitted edge to edge puts the district's own
+border on the edge of the screen. And the box is validated as defensively as the centre it travels
+with — absent, blank, non-numeric, non-finite, out-of-range, inverted and zero-area boxes are all
+rejected rather than coerced — because it was a URL that put this map on Null Island once, and a
+blank map reports no error. A rejected box falls back to the centre, which stays in the link for
+that reason and because it is what an older link carries.
+
+**The district borders are on the map, above the fog.** He asked for this as an idea to be
+cost-assessed rather than assumed, and the assessment was small: the geometry is the boundary file
+the district overview already draws, so nothing is generated, served or seeded for it — it is that
+file put on the map he actually walks with, as a GeoJSON source and a line layer added at runtime.
+
+Above the fog is the whole request, and it carries the cost Section 7.3 already records for the
+roads: a layer above the fog cannot tell explored ground from unexplored, so the border reads the
+same on both and carries none of that distinction. What the section adds is that being *quiet* is
+not enough to keep it from reading as another street. A road network is continuous, so an unbroken
+line joins it by resemblance however faint it is drawn — the border is dashed, which is the
+cartographic idiom for an administrative boundary and a line the street layers never produce, and
+it is drawn wider than the roads rather than thinner so it reads as a deliberate mark that happens
+to be broken. Its opacity sits below the roads' and above the 3:1 floor Section 8.1 holds non-text
+marks to against the fogged ground, which is the binding background.
+
+Its place in the layer order is fixed by construction rather than by timing, and that is the part
+worth recording. The border layer and the fog are both added at runtime from two independent
+responses; an order that depends on which lands first works on a desk and fails on a phone. The fog
+is only ever inserted before the first above-fog layer of the static style and never appended, and
+the border layer is only ever appended, so the border is above the fog in both arrival orders
+without either side knowing whether the other has mounted.
 
 ### v1.26 — the map says when it is too fast to clear, and the check-in radius stops being a street
 
@@ -2017,4 +2084,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.26*
+*End of specification v1.27*

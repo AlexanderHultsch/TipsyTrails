@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CONFIG } from '@tipsytrails/shared';
-import { FIRST_ABOVE_FOG_LAYER_ID, inkStyle } from './ink-style.js';
+import { DISTRICT_BORDER_PAINT, FIRST_ABOVE_FOG_LAYER_ID, inkStyle } from './ink-style.js';
 
 // Section 7.3 fixes the layer order on either side of the fog, so the test
 // states it as the whole order rather than as a handful of pairwise
@@ -56,9 +56,9 @@ function filterClassesOf(id: string): string[] {
 // [zoom, width] pairs. The two road ramps are compared by the widths they
 // actually produce rather than by their shape, so "thinner" cannot be
 // satisfied by a ramp that merely differs.
-function rampStopsOf(id: string): [number, number][] {
-  const ramp = paintOf(id)['line-width'] as unknown[];
-  expect(Array.isArray(ramp) && ramp[0], `${id} line-width is not an interpolate`).toBe(
+function stopsOfRamp(value: unknown, label: string): [number, number][] {
+  const ramp = value as unknown[];
+  expect(Array.isArray(ramp) && ramp[0], `${label} line-width is not an interpolate`).toBe(
     'interpolate',
   );
   const stops: [number, number][] = [];
@@ -66,6 +66,10 @@ function rampStopsOf(id: string): [number, number][] {
     stops.push([ramp[index] as number, ramp[index + 1] as number]);
   }
   return stops;
+}
+
+function rampStopsOf(id: string): [number, number][] {
+  return stopsOfRamp(paintOf(id)['line-width'], id);
 }
 
 // MapLibre's own clamping behaviour: outside the stop range an interpolate
@@ -214,5 +218,98 @@ describe('inkStyle', () => {
       expect(typeof opacity, `${id} line-opacity`).toBe('number');
       expect(opacity as number, `${id} line-opacity`).toBeLessThan(QUIETER_OPACITY_BEFORE_THE_MOVE);
     }
+  });
+});
+
+// Section 7.3: the district borders are drawn above the fog so they are
+// visible on unexplored ground, which is the whole of what they were asked
+// for - and puts them under the same two obligations the roads carry there.
+// They must read through the fog, and they must not read as another road.
+describe('DISTRICT_BORDER_PAINT', () => {
+  // WCAG's relative-luminance contrast, computed here rather than imported:
+  // the app has no contrast module (App.a11y.test.tsx keeps its own copy for
+  // the same reason), and the formula is four lines.
+  function relativeLuminance([r, g, b]: [number, number, number]): number {
+    const linear = (channel: number) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  }
+
+  function contrastRatio(a: [number, number, number], b: [number, number, number]): number {
+    const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  // ink-style.ts's own INK, and the ground the fog actually produces -
+  // webgl-fog-layer.ts's fog colour at CONFIG.FOG_MAX_OPACITY over PAPER,
+  // the composite the road-opacity comment in ink-style.ts states. It is the
+  // darker of the two backgrounds this line is drawn on and therefore the
+  // binding one.
+  const INK: [number, number, number] = [0x1c, 0x1a, 0x17];
+  const FOGGED_GROUND: [number, number, number] = [204, 199, 187];
+
+  function inkOver(background: [number, number, number], alpha: number): [number, number, number] {
+    return [
+      alpha * INK[0] + (1 - alpha) * background[0],
+      alpha * INK[1] + (1 - alpha) * background[1],
+      alpha * INK[2] + (1 - alpha) * background[2],
+    ];
+  }
+
+  const borderOpacity = DISTRICT_BORDER_PAINT['line-opacity'] as number;
+
+  // The one thing that stops a boundary being mistaken for a street. A road
+  // network is continuous, so an unbroken line joins it by resemblance
+  // however quiet it is made - the dash is what makes this a different kind
+  // of line rather than a quieter instance of the same kind.
+  it('draws the border as a dashed line', () => {
+    const dashes = DISTRICT_BORDER_PAINT['line-dasharray'] as number[];
+    expect(Array.isArray(dashes)).toBe(true);
+    expect(dashes.length).toBeGreaterThanOrEqual(2);
+    for (const length of dashes) {
+      expect(typeof length).toBe('number');
+      expect(length).toBeGreaterThan(0);
+    }
+  });
+
+  // Quieter than the streets, because a boundary is context and the streets
+  // are what the player navigates by.
+  it('keeps the border quieter than the roads it shares the space above the fog with', () => {
+    expect(borderOpacity).toBeLessThan(paintOf('road-primary')['line-opacity'] as number);
+  });
+
+  // ...but not so quiet that it fails the floor Section 8.1 holds non-text
+  // marks to, on the fogged ground it exists to be visible against. A border
+  // that disappears over fog answers none of the request.
+  it('still clears 3:1 against the fogged ground it is drawn over', () => {
+    const NON_TEXT_MIN = 3;
+    expect(
+      contrastRatio(inkOver(FOGGED_GROUND, borderOpacity), FOGGED_GROUND),
+    ).toBeGreaterThanOrEqual(NON_TEXT_MIN);
+  });
+
+  // The second half of "not another road": a broken line that is also
+  // thinner would read as a fainter street. Compared at every zoom the map
+  // can reach rather than at the stops, so a ramp that crosses the roads'
+  // somewhere in between fails here.
+  it('draws the border wider than the roads at every zoom the map can reach', () => {
+    const borderStops = stopsOfRamp(DISTRICT_BORDER_PAINT['line-width'], 'district border');
+    const roadStops = rampStopsOf('road-primary');
+
+    for (let zoom = CONFIG.MAP_MIN_ZOOM; zoom <= CONFIG.MAP_MAX_ZOOM; zoom += 0.5) {
+      expect(widthAtZoom(borderStops, zoom), `line-width at zoom ${zoom}`).toBeGreaterThan(
+        widthAtZoom(roadStops, zoom),
+      );
+    }
+  });
+
+  // Section 8.1: one accent colour, reserved for the player's own position
+  // and for active states, and a named set of status colours that belongs to
+  // the indicator alone. A boundary is neither, so it is drawn in the same
+  // ink as the rest of the map.
+  it('draws the border in the map ink, not in a colour of its own', () => {
+    expect(DISTRICT_BORDER_PAINT['line-color']).toBe(paintOf('road-primary')['line-color']);
   });
 });

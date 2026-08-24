@@ -84,6 +84,66 @@ const MINOR_ROAD_WIDTH_RAMP: NonNullable<LineLayer['paint']>['line-width'] = [
   0.9,
 ];
 
+// Section 7.3/8.1: the district boundaries drawn on the main map
+// (map/districts/district-borders.ts). They live here, beside the road
+// opacities, because they are paint and this file is where the map's ink is
+// decided; the layer itself is added at runtime, since its geometry arrives
+// over the network rather than with the style.
+//
+// The boundaries are drawn *above* the fog, which is the whole point of the
+// owner's request - a border is only useful if it is visible in the ground
+// he has not explored yet - and that puts them under the same rule Section
+// 7.3 records for the roads: one treatment has to serve fogged and revealed
+// ground alike, and it must not read as another street.
+//
+// Dashes are what make it a different *kind* of line. A street network is
+// continuous and connected, so an unbroken line of any weight joins that
+// network by resemblance however quiet it is made; a dashed line cannot,
+// and it is the cartographic idiom for an administrative boundary besides.
+// The dash lengths are in units of the line's own width, so the pattern
+// scales with the ramp below and stays a dash rather than becoming a dotted
+// line when the border thickens. `line-cap: butt` belongs with them
+// (district-borders.ts sets it): a round cap grows each dash by half a width
+// at both ends, which at these lengths closes the gaps up again.
+const DISTRICT_BORDER_DASHARRAY = [3, 2];
+
+// Quieter than PROVISIONAL_ROAD_OPACITY (0.6) - a boundary is context and
+// the streets are what the player navigates by, so the border must not be
+// the loudest thing above the fog - but held to the same floor the roads
+// are: INK at 0.55 over the ground the fog actually produces (rgb(204, 199,
+// 187), the darker and therefore binding case) reaches 3.30:1, past the 3:1
+// Section 8.1 asks of non-text marks, and 3.74:1 on revealed paper. 0.5 was
+// the first candidate and is rejected at 2.91:1 over fog, below that floor.
+// Provisional in the same sense the road opacities are: Section 7.3 fixes
+// the requirement and not the number.
+const DISTRICT_BORDER_OPACITY = 0.55;
+
+// Wider than ROAD_WIDTH_RAMP at every zoom the map can reach, which is the
+// second half of "not another road": the border reads as a deliberate,
+// heavier mark that happens to be broken, rather than as a faint street. The
+// stops are style stops in the same idiom as the road ramps above - literals
+// rather than the zoom limits from config.ts, exactly as those ramps use 8,
+// 14 and 18 - and they start at the map's furthest-out view, because a
+// district boundary is at its most useful when the whole city is on screen.
+const DISTRICT_BORDER_WIDTH_RAMP: NonNullable<LineLayer['paint']>['line-width'] = [
+  'interpolate',
+  ['linear'],
+  ['zoom'],
+  10,
+  1,
+  14,
+  1.4,
+  18,
+  2,
+];
+
+export const DISTRICT_BORDER_PAINT: NonNullable<LineLayer['paint']> = {
+  'line-color': INK,
+  'line-opacity': DISTRICT_BORDER_OPACITY,
+  'line-width': DISTRICT_BORDER_WIDTH_RAMP,
+  'line-dasharray': DISTRICT_BORDER_DASHARRAY,
+};
+
 // The extract's vector layers follow the standard OpenMapTiles/Planetiler
 // schema (Section 3), which is what data/tiles/<CONFIG.TILES_FILENAME> will
 // contain once the extract exists.
