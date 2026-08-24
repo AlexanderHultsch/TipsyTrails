@@ -30,6 +30,13 @@ export interface DiscoveredBarRow {
   lon: number;
   source: string;
   discovered_at: number;
+  // SPEC.md Section 5.7: 1 when the discovering user has at least one
+  // `visits` row at this bar with `status = 'completed'`, 0 otherwise —
+  // SQLite's `EXISTS` yields exactly those two values. Required rather than
+  // optional on purpose: every producer of this row is then forced by the
+  // type checker to say what the flag is, which is what keeps the three
+  // surfaces below from drifting apart.
+  mastered: number;
 }
 
 export interface BarSummary {
@@ -41,6 +48,14 @@ export interface BarSummary {
   lon: number;
   source: string;
   discoveredAt: number;
+  // SPEC.md Section 5.7: "A bar is mastered by a user if at least one
+  // `visits` row exists with `status='completed'`. Mastering is permanent
+  // and cannot be lost." Per-user, therefore, and never a property of the
+  // bar: the same bar is mastered in one caller's response and not in
+  // another's, which is why it is computed from the discovery row's own
+  // `user_id` (DISCOVERED_BAR_COLUMNS below) rather than from a parameter
+  // a caller could pass the wrong value for.
+  mastered: boolean;
 }
 
 export function toBarSummary(row: DiscoveredBarRow): BarSummary {
@@ -53,6 +68,7 @@ export function toBarSummary(row: DiscoveredBarRow): BarSummary {
     lon: row.lon,
     source: row.source,
     discoveredAt: row.discovered_at,
+    mastered: row.mastered === 1,
   };
 }
 
@@ -118,9 +134,63 @@ interface ActiveBarForDuplicateCheck {
   lon: number;
 }
 
-const DISCOVERED_BAR_COLUMNS = `bars.id AS id, bars.district_id AS district_id, bars.name AS name,
+// The column list every query that feeds `toBarSummary` selects, exported so
+// routes/fog.ts's `newBars` query uses this one rather than a second copy —
+// a `bars` row becomes client-facing JSON through one mapper and now also
+// through one SELECT list, so a field added here reaches all three surfaces
+// at once (SPEC.md Section 9.2's GET /api/bars, GET /api/bars/:id and POST
+// /api/samples).
+//
+// `mastered` is SPEC.md Section 5.7's definition verbatim — at least one
+// `visits` row for this user and bar with `status = 'completed'` — and three
+// things about how it is written here are deliberate.
+//
+//   - **It is bound by name (`@masteredUserId`), not positionally.** This
+//     list is spliced into queries whose other parameters are anonymous `?`
+//     (routes/fog.ts's `IN (...)` list), and a positional parameter inside
+//     the SELECT list would make every one of those callers depend on where
+//     the columns happen to sit in the statement. `bindMasteredUserId` below
+//     is the only way to supply it.
+//   - **The caller's own `bar_discoveries.user_id` is compared against that
+//     same parameter, as part of the flag.** A wrong user id can then only
+//     ever report `false`; it can never report another user's mastery, which
+//     is the failure a single-user test suite cannot see. Every query here
+//     already scopes itself to one user's discoveries, so the comparison is
+//     true for every row that is returned at all and costs one integer
+//     compare.
+//   - **`IN (subquery)` rather than a correlated `EXISTS`.** They mean the
+//     same thing and cost wildly different amounts. `EXISTS` correlated on
+//     `bars.id` runs once per discovered bar, and `idx_visits_user_status`
+//     (Section 5.7) is on `(user_id, status)` — it has no `bar_id`, so each
+//     run walks every completed visit the user has: O(bars × completed
+//     visits), measured at 15 ms for a player with 500 discovered bars and
+//     600 completed visits against 0.4 ms without the flag. As an `IN` list
+//     the same index answers the subquery once, per query rather than per
+//     row, and SQLite probes the materialised result: 0.6 ms for that same
+//     player, 0.16 ms for a typical one. No new index is needed, and none is
+//     added — the existing one covers this shape exactly.
+export const DISCOVERED_BAR_COLUMNS = `bars.id AS id, bars.district_id AS district_id, bars.name AS name,
   bars.address AS address, bars.lat AS lat, bars.lon AS lon, bars.source AS source,
-  bar_discoveries.discovered_at AS discovered_at`;
+  bar_discoveries.discovered_at AS discovered_at,
+  (bar_discoveries.user_id = @masteredUserId
+   AND bars.id IN (
+     SELECT bar_id FROM visits
+     WHERE user_id = @masteredUserId AND status = 'completed'
+   )) AS mastered`;
+
+export interface MasteredUserIdBinding {
+  masteredUserId: number;
+}
+
+/**
+ * The named binding `DISCOVERED_BAR_COLUMNS` needs, for the user whose
+ * discoveries the query is scoped to. Pass it alongside the statement's
+ * anonymous parameters — better-sqlite3 takes both, e.g.
+ * `stmt.all(userId, bindMasteredUserId(userId))`.
+ */
+export function bindMasteredUserId(userId: number): MasteredUserIdBinding {
+  return { masteredUserId: userId };
+}
 
 export async function barsRoutes(app: FastifyInstance): Promise<void> {
   const suggestRateLimit = createRateLimiter('suggest');
@@ -132,14 +202,14 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const rows = request.server.db
-      .prepare<[number], DiscoveredBarRow>(
+      .prepare<[number, MasteredUserIdBinding], DiscoveredBarRow>(
         `SELECT ${DISCOVERED_BAR_COLUMNS}
          FROM bar_discoveries
          JOIN bars ON bars.id = bar_discoveries.bar_id
          WHERE bar_discoveries.user_id = ? AND bars.status = 'active'
          ORDER BY bar_discoveries.discovered_at, bars.id`,
       )
-      .all(request.userId);
+      .all(request.userId, bindMasteredUserId(request.userId));
 
     return { bars: rows.map(toBarSummary) };
   });
@@ -158,13 +228,13 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const row = request.server.db
-      .prepare<[number, number], DiscoveredBarRow>(
+      .prepare<[number, number, MasteredUserIdBinding], DiscoveredBarRow>(
         `SELECT ${DISCOVERED_BAR_COLUMNS}
          FROM bar_discoveries
          JOIN bars ON bars.id = bar_discoveries.bar_id
          WHERE bar_discoveries.user_id = ? AND bars.id = ? AND bars.status = 'active'`,
       )
-      .get(request.userId, barId);
+      .get(request.userId, barId, bindMasteredUserId(request.userId));
 
     if (!row) {
       sendBarNotFound(reply);
@@ -264,6 +334,12 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
           lon,
           source: 'community',
           discovered_at: nowS,
+          // The bar was created by the INSERT two statements up, so no
+          // `visits` row can reference it yet and SPEC.md Section 5.7's
+          // condition cannot hold. This is the one producer of a
+          // DiscoveredBarRow that states the flag instead of selecting it,
+          // and it can only because it also created the bar.
+          mastered: 0,
         };
       })();
 

@@ -1014,6 +1014,18 @@ button:focus-visible,
   margin: 0.25rem 0 0;
 }
 
+/* Sections 5.7 and 8.1: the mastered state, as the same glass the bar's
+   marker draws plus the words that carry it for anyone who cannot see the
+   glass. Ink, never the accent - Section 8.1 keeps that for the player's own
+   position and for active states, and a mastered bar is neither. */
+.bar-sheet__mastered {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.9375rem;
+  margin: 0.375rem 0 0;
+}
+
 .bar-sheet__check-in {
   width: 100%;
   margin-top: 0.75rem;
@@ -1102,6 +1114,20 @@ button:focus-visible,
   fill: currentColor;
 }
 
+/* Sections 8.1/8.3: the cocktail glass, the mark for a bar everywhere a bar
+   is drawn (components/cocktail-glass.ts). Solid ink in `currentColor` and
+   nothing else - the two states differ in the shape of the path, never in
+   colour or in fill, so there is deliberately no `.cocktail-glass--mastered`
+   rule to go with the marker's modifier class. Sized in `em` so it rides
+   with whatever text it sits beside; the marker's own rule above is more
+   specific and keeps it at 22px there. */
+.cocktail-glass {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  fill: currentColor;
+}
+
 .bar-marker:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -1139,6 +1165,17 @@ button:focus-visible,
 .bar-detail__district {
   font-size: 1rem;
   margin: 0.5rem 0 0;
+}
+
+/* Section 8.3 lists "mastered status" among this screen's content, and
+   Sections 5.7/8.1 decide how it is shown: the same two-state cocktail glass
+   as the map marker and the bar sheet, with the state also in words. */
+.bar-detail__mastered {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  margin: 0.75rem 0 0;
 }
 
 .bar-detail__tag {

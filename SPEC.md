@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.28
+**Version:** 1.29
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -428,6 +428,12 @@ The partial unique index makes a second pending visit at the same bar impossible
 
 A bar is **mastered** by a user if at least one `visits` row exists with `status='completed'`. Mastering is permanent and cannot be lost.
 
+**Every bar the API hands a client carries that answer, for the caller and for nobody else.** `GET /api/bars`, `GET /api/bars/:id` and `POST /api/samples`'s `newBars` all return the same bar shape (Section 9.2), and it has a `mastered` boolean on it — because the client draws the state (Section 8.1's cocktail glass) and cannot derive it: nothing else the client holds says anything about visits. The flag is per user and never a property of the bar, so the same bar is `true` in one caller's response and `false` in another's at the same instant.
+
+Two things about how it is computed are decisions rather than implementation detail, and they are here because getting either wrong produces a bug no single-user test can see. It is computed from **the `bar_discoveries` row's own `user_id`** — the same row that makes an undiscovered bar unreachable at all — rather than from a user identity supplied separately, so a query cannot come to report one user's bars with another user's mastery. And it is expressed so that the existing `idx_visits_user_status` index answers it **once per request rather than once per bar**: that index is on `(user_id, status)` and carries no `bar_id`, so a per-bar existence check walks every completed visit the caller has, and the cost of the whole request becomes discovered bars × completed visits. Measured on a player with 500 discovered bars and 600 completed visits that is 15 ms against 0.4 ms without the flag; asked once per request it is 0.6 ms. No index is added for this — the one Section 5.7 already defines covers the shape that asks the question once.
+
+The three surfaces are required to agree field for field. They do so by construction — one row-to-JSON mapper and one SELECT list between them — and not by three implementations that happen to match today.
+
 ### 5.8 Badges
 
 ```sql
@@ -775,6 +781,17 @@ A hand-drawn ink map. Desaturated, slightly warm paper ground. Lines read as if 
 
 This direction applies to the whole application, not only the map. Chrome, typography, and controls follow the same restraint.
 
+**The cocktail glass is the application's central mark, and it says whether a bar is mastered.** A martini glass in ink stands for a bar everywhere a bar is drawn, and it has exactly two states: **full** for a bar the player has not mastered, **nearly empty** for one they have (Section 5.7). It is one definition — the same paths, used by the map marker, by the bar sheet and by the bar detail screen — rather than a shape redrawn in each place, because three copies of a mark are three marks that drift, and the two states are precisely what must not.
+
+Four constraints bound it, and each of them is the whole point of one of the decisions above rather than a note about taste.
+
+- **The states differ in shape, not in fill or colour.** A full glass is a solid bowl of ink; a mastered one is the same bowl as a wall of ink around an empty middle, with the last of the drink left at the bottom. That is most of the mark's area appearing or disappearing, which reads at a glance, reads for a player who perceives no colour at all, and survives at the size the mark is actually drawn at — 22 px on a map marker, where a difference visible only at 3× zoom is not a difference.
+- **It stays a silhouette in ink.** The accent colour is reserved for the player's own position and for active states, and a mastered bar is neither. Both states are `currentColor` and nothing else.
+- **The state is also in words.** A screen reader user gets nothing from a fuller or emptier glass, so the mastered state joins the accessible name of anything whose whole content is the mark (the map marker), and stands as visible text beside it everywhere else. This is the same rule the paragraph below states generally; it is repeated here because this mark carries a state whose only other channel is a shape.
+- **It is a statement and never a control.** Mastering is earned by a check-in (Section 7.5) and by nothing a player can tap on the mark itself. It does change the moment it is earned: a sample response that reports a visit reaching `completed` refreshes the bar list behind the markers, so the glass on the map empties then rather than the next time the screen is opened.
+
+The mark deliberately does not appear on the nearby-bars panel, which names what is in range and is a `role="status"` statement carrying no per-bar affordance (Sections 7.5, 8.3), nor on the admin bar list, which is moderation rather than play and is not scoped to one player's mastery at all.
+
 **Restraint does not override legibility.** A near-monochrome palette makes it easy to land below WCAG AA contrast without noticing. Body text and interactive labels meet 4.5:1 against their background, large text and icons 3:1. The accent red is never the only carrier of meaning — active states also change shape, weight, or label. The status icons of Section 8.6 are the single exception to that sentence, admitted by the same decision that narrowed the palette above, and they pay for it under their own rule: their colours must separate in luminance, not only in hue (Section 8.6). This is checked in Phase 8.
 
 ### 8.2 Typography and layout
@@ -795,8 +812,8 @@ This direction applies to the whole application, not only the map. Chrome, typog
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in — which opens the map framed on that district, see below |
-| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers (tapping one opens that bar's sheet **on this screen**, carrying the check-in action — 7.5), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in — 7.5), GPS/connection/tracking icons |
-| Bar detail (`/bars/:id`) | Name, address, district, mastered status, community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
+| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons |
+| Bar detail (`/bars/:id`) | Name, address, district, mastered status — the cocktail glass of Section 8.1 with the state in words beside it — community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
 | Suggest a bar | Map picker + name + address |
@@ -884,9 +901,9 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/health` | `{"status":"ok"}` — unauthenticated, used by Phase 0 and by Docker's healthcheck |
 | GET | `/api/city` | Active city metadata + grid parameters |
 | GET | `/api/fog` | Raw fog mask (`application/octet-stream`) + per-district revealed counts; Caddy applies the transport encoding |
-| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates, tooFastToReveal }`. `tooFastToReveal` is a boolean and reports the *last accepted sample* of the batch (Section 7.3) |
-| GET | `/api/bars` | Discovered bars only |
-| GET | `/api/bars/:id` | Bar detail — see 9.5 |
+| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates, tooFastToReveal }`. `tooFastToReveal` is a boolean and reports the *last accepted sample* of the batch (Section 7.3). `newBars` carries the same bar shape the two routes below do, `mastered` included (Section 5.7) |
+| GET | `/api/bars` | Discovered bars only. Each carries `mastered` for the calling user (Section 5.7) |
+| GET | `/api/bars/:id` | Bar detail, `mastered` included (Section 5.7) — see 9.5 |
 | POST | `/api/bars/suggest` | `{ name, address, lat, lon }` |
 | GET | `/api/visits/pending` | Active pending visits |
 | POST | `/api/visits` | `{ barId }` → creates or returns the pending visit |
@@ -1306,9 +1323,75 @@ These are consequences to design around, not reasons to reconsider:
 | O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
 | O15 | The fog flickering the owner saw on a tilted map (v1.25) is unexplained. Pitch is now unreachable (Section 8.3), which removes the trigger he found, but not necessarily the mechanism. Two candidate causes were ruled out by inspection: the fog quad does not stop covering the screen under pitch (`getBounds`' horizon clamp in maplibre-gl 4.7.1 only engages past ~69° for the default field of view, and the camera capped at 60° before this change), and the quad's UVs — linear in latitude across vertices placed in mercator — deviate by under 0.4 m at any pitch that was reachable, against a 50 m cell. What is left is GPU-side and cannot be observed in this repository's tests (jsdom has no WebGL2): the fog texture is `LINEAR` with no mipmaps, and the fragment shader is `precision mediump float` while sampling a ±1-texel blur kernel in UV space. Both degrade wherever one screen pixel covers several cells, which a pitched view produced in its far half — and which zooming out towards `MAP_MIN_ZOOM` produces on a flat map too, where a 50 m cell is well under a pixel. **Half of this was acted on in v1.28 and half was assessed and declined.** The precision was wrong on its own terms, independently of the shimmer: one texel of the 417 × 343 grid is 0.0024 of UV, and `mediump` — fp16 on the GPUs this runs on — resolves about 0.001 near UV 1.0, so a ±1-texel blur offset was barely two representable steps and the ±1.5-texel noise warp quantised to a handful of positions, both of them moving as the camera moves. The shader is now `precision highp float` with a `highp` sampler; GLSL ES 3.00 requires `highp` in the fragment stage, so WebGL2 being available is already the guarantee it compiles, and it costs nothing on any GPU this reaches. Mipmaps were assessed and are **not** the right fix: the mask is binary and the shader already blurs it explicitly at a radius Section 7.3 fixes, so a mip chain would add a second, zoom-dependent blur that widens the edge by an amount no constant controls; `texSubImage2D` does not update mip levels, so every reveal would have to regenerate the whole chain, at frame rate through the 600 ms reveal animation, against a spec that requires reveals to touch only the changed region; and the ±1-texel offsets are in level-0 texels, which stop meaning one texel the moment a coarser level is selected. Item stays **open**: the precision fix is deliberate but unconfirmed — nothing in this repository can execute the shader, so whether the shimmer is gone still needs a real device at low zoom. | Open — narrowed |
 
+
 ---
 
 ## 15. Changelog
+
+### v1.29 — the cocktail glass becomes the mark for a bar, and it says whether that bar is mastered
+
+One request from the owner, about a symbol: the cocktail glass becomes the app's central visual
+system, a full martini glass for a new bar and a nearly empty one for a mastered bar. Two thirds of
+it turned out to be server work, and that is the part worth recording first.
+
+**The client did not know which bars were mastered, and could not have worked it out.** Every bar
+the API hands a client came back with id, district, name, address, position, source and discovery
+time, and nothing about visits — a client holding that list has no way to derive mastering, because
+nothing in it is about visits at all. The bar detail screen's own comment said so outright and
+simply showed no mastered status, which Section 8.3 has required of it since the beginning. So the
+flag was added where the answer lives: Section 5.7 now says that the bar shape the API returns
+carries a `mastered` boolean, computed per calling user, and that the three surfaces returning that
+shape — `GET /api/bars`, `GET /api/bars/:id` and `POST /api/samples`'s `newBars` — all carry it.
+They already shared one row-to-JSON mapper for exactly this reason; they now share the SELECT list
+under it too, so the next field cannot reach two of them and miss the third.
+
+**Per-user is the whole difficulty, and it is invisible to a single-user test.** A flag computed
+per *bar* rather than per *user* passes every test a one-account suite can write, and ships a map
+that tells a player they have mastered bars they have never been to. Two things guard it. The flag
+is computed from the discovery row's own `user_id` — the same row that makes an undiscovered bar
+unreachable — rather than from a user identity handed in separately, and the query compares that
+`user_id` against the parameter as part of the flag itself, so a wrong identity can only ever
+report `false` and can never report somebody else's mastery. And there is now a test with two
+users, different mastery, one bar.
+
+**Cost, which was not free and is now.** `GET /api/bars` returns every discovered bar, so a
+per-bar existence check runs once per row, and `idx_visits_user_status` is on `(user_id, status)`
+with no `bar_id` in it: each check walks every completed visit the caller has and the request
+becomes discovered bars × completed visits. For a player with 500 discovered bars and 600 completed
+visits that is 15 ms against 0.4 ms without the flag — on a Raspberry Pi, several times that. Asked
+once per request as a list the same index answers it in one seek and the request costs 0.6 ms. No
+index was added: the one Section 5.7 already defines covers the shape that asks the question once,
+and adding a second to rescue the shape that asks it five hundred times is paying for the wrong
+query.
+
+**The glass itself is one definition, in three places, differing in shape and never in colour.**
+Section 8.1 records the mark and the four constraints on it. The two states differ by most of the
+bowl's ink — solid for a full glass, a wall around an empty middle with the last of the drink at
+the bottom for a mastered one — because the marker is 22 px and a difference visible only at 3×
+zoom is not a difference, and because Section 8.1 forbids a state that colour alone carries and
+this mark has no colour to spend anyway. It is drawn on the map marker, on the bar sheet the marker
+opens, and on the `/bars/:id` screen, from one set of paths shared between the marker's hand-built
+DOM and the two React surfaces. It is deliberately absent from the nearby-bars panel, which names
+what is in range and carries no per-bar affordance by decision (Section 7.5), and from the admin
+bar list, which is moderation and is not scoped to one player's mastery at all.
+
+**And the marker says it in words.** Its accessible name was the bar's name alone, which is fine
+for a mark that only identifies a place and useless for one whose entire content is a state. It is
+now "*bar* - mastered" or "*bar* - not mastered yet". The community distinction stays where it was,
+as a description rather than part of the name: where a bar came from is supplementary information
+about it, and whether the player has mastered it is what the control is showing.
+
+**And it empties at the moment the visit completes, which it did not at first.** The map's bar
+list refetched on mount and when a bar was discovered, which is what it was built for — and
+mastering a bar changes a bar the player discovered long before, so nothing refetched for it and
+the glass stayed full until the next discovery or the next time the map was opened. That is the
+mark being inert at the one moment it means anything, so it was fixed here rather than filed:
+`discoveryVersion` now also advances when a sample response reports a visit reaching `completed`.
+The signal's name is older than its second reason; what it has always meant is "refetch
+`GET /api/bars`", and both reasons are that. It is deliberately not folded into `visitVersion`,
+which advances on every accepted on-site sample: refetching every bar at sample rate to catch the
+one sample in forty that completes a visit is the trade the wrong way round, and `completed` is
+terminal, so this fires once per bar in a player's whole history.
 
 ### v1.28 — the fog stops being a sheet of tracing paper
 
@@ -2166,4 +2249,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.28*
+*End of specification v1.29*

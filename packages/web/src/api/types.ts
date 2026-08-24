@@ -49,6 +49,17 @@ export interface Bar {
   lon: number;
   source: string;
   discoveredAt: number;
+  // Section 5.7: whether *the requesting user* has at least one completed
+  // visit at this bar. Not a property of the bar - the same bar comes back
+  // mastered for one player and not for another - so it is only ever read
+  // from a response the caller's own session produced, and never cached
+  // across users. Mastering is permanent (Section 5.7), so this only ever
+  // goes from false to true.
+  //
+  // It is what decides which of the two cocktail glasses is drawn
+  // (components/cocktail-glass.ts), which is the app's central mark for a
+  // bar (Section 8.1/8.3).
+  mastered: boolean;
 }
 
 export interface BarsResponse {

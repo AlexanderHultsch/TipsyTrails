@@ -3,7 +3,10 @@
 // reserved for the player's own position and active states, so it never
 // appears on a marker itself; the only place it shows up here is the
 // focus-visible ring, the same treatment .field input already gets in
-// index.css.
+// index.css. A mastered bar is neither the player's position nor an active
+// state, so it is not an exception to that: both states of the mark are ink,
+// and what separates them is the shape of the glass
+// (components/cocktail-glass.ts, which owns both).
 //
 // Positioned as absolutely-placed DOM buttons re-projected via
 // `map.project` on every 'move', the same approach
@@ -13,12 +16,7 @@
 // with no extra library surface to stand in for.
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { Bar } from '../../api/types.js';
-
-// A simple martini-glass silhouette: solid fill, no stroke, no gradient.
-const BAR_MARKER_SVG =
-  '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
-  '<path d="M4 4h16a1 1 0 0 1 .8 1.6l-6.8 8.7v4.7h3a1 1 0 0 1 0 2H7a1 1 0 0 1 0-2h3v-4.7L3.2 5.6A1 1 0 0 1 4 4z"/>' +
-  '</svg>';
+import { barAccessibleName, cocktailGlassSvgMarkup } from '../../components/cocktail-glass.js';
 
 // Section 11.3, a Definition-of-Done item: community bars carry a visible
 // distinguishing marker. A small solid dot in the corner - a shape
@@ -35,6 +33,16 @@ const COMMUNITY_MARK_SVG =
 export interface BarMarkersOptions {
   map: MaplibreMap;
   onSelect: (bar: Bar) => void;
+}
+
+/**
+ * Everything about a bar that the marker actually draws, as one comparable
+ * value — the mastered glass (Section 5.7) and the community dot (Section
+ * 11.3). A marker is repainted when this changes and left alone otherwise,
+ * so a repeated `GET /api/bars` answering the same thing costs nothing.
+ */
+function markerStateOf(bar: Bar): string {
+  return `${bar.mastered ? 'mastered' : 'not-mastered'}:${bar.source}:${bar.name}`;
 }
 
 interface MarkerEntry {
@@ -65,7 +73,17 @@ export class BarMarkers {
       seen.add(bar.id);
       const existing = this.markers.get(bar.id);
       if (existing) {
+        // Section 5.7: mastering a bar changes which glass its marker draws,
+        // and the marker for a bar the player has *already* discovered is
+        // exactly the one that changes - so the element is repainted rather
+        // than only the record behind it being replaced. Keeping the element
+        // (rather than recreating it) is what stops a bar list arriving
+        // mid-tap from destroying the button under the finger.
+        const changed = markerStateOf(existing.bar) !== markerStateOf(bar);
         existing.bar = bar;
+        if (changed) {
+          this.paintElement(existing.element, bar);
+        }
         continue;
       }
       const element = this.createElement(bar);
@@ -82,17 +100,44 @@ export class BarMarkers {
   }
 
   private createElement(bar: Bar): HTMLButtonElement {
-    const isCommunity = bar.source === 'community';
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = isCommunity ? 'bar-marker bar-marker--community' : 'bar-marker';
-    // aria-label stays exactly the bar's name for every source, unchanged
-    // from before this marker existed - the community distinction is
-    // carried as a description, not folded into the name (aria-describedby
-    // below), so it reads as supplementary information to assistive tech
-    // rather than part of what the bar is called.
-    button.setAttribute('aria-label', bar.name);
-    button.innerHTML = isCommunity ? BAR_MARKER_SVG + COMMUNITY_MARK_SVG : BAR_MARKER_SVG;
+    this.paintElement(button, bar);
+    button.addEventListener('click', () => {
+      const entry = this.markers.get(bar.id);
+      if (entry) {
+        this.onSelect(entry.bar);
+      }
+    });
+    return button;
+  }
+
+  /**
+   * Writes everything about a marker that depends on the bar's own state -
+   * its classes, its accessible name and its contents - so that a marker
+   * created now and a marker repainted after a change go through one piece
+   * of code and cannot end up saying different things.
+   */
+  private paintElement(button: HTMLButtonElement, bar: Bar): void {
+    const isCommunity = bar.source === 'community';
+    button.className = [
+      'bar-marker',
+      bar.mastered ? 'bar-marker--mastered' : null,
+      isCommunity ? 'bar-marker--community' : null,
+    ]
+      .filter((name) => name !== null)
+      .join(' ');
+    // Section 5.7 / Section 8.1: the mastered state goes into the accessible
+    // *name*, because the glass is the marker's entire content and a screen
+    // reader user gets nothing at all from a fuller or emptier one. The
+    // community distinction stays a description (aria-describedby below)
+    // rather than joining it: that one is supplementary information about
+    // where the bar came from, while whether the player has mastered it is
+    // what this control is showing.
+    button.setAttribute('aria-label', barAccessibleName(bar.name, bar.mastered));
+    button.innerHTML = isCommunity
+      ? cocktailGlassSvgMarkup(bar.mastered) + COMMUNITY_MARK_SVG
+      : cocktailGlassSvgMarkup(bar.mastered);
     if (isCommunity) {
       const descriptionId = `bar-marker-community-desc-${bar.id}`;
       const description = document.createElement('span');
@@ -101,14 +146,9 @@ export class BarMarkers {
       description.textContent = 'Added by the community';
       button.appendChild(description);
       button.setAttribute('aria-describedby', descriptionId);
+    } else {
+      button.removeAttribute('aria-describedby');
     }
-    button.addEventListener('click', () => {
-      const entry = this.markers.get(bar.id);
-      if (entry) {
-        this.onSelect(entry.bar);
-      }
-    });
-    return button;
   }
 
   private reposition(): void {

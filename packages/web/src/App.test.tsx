@@ -10,6 +10,7 @@ import { App } from './App.js';
 import { ACTIVE_CITY_SLUG } from './api/city.js';
 import type { BoundaryFeatureCollection } from './api/geo-types.js';
 import { Avatar } from './components/Avatar.js';
+import { cocktailGlassPathData } from './components/cocktail-glass.js';
 
 // The real committed seed data (data/seed/karlsruhe), three levels up from
 // this file's own directory to the repository root - the same style
@@ -2227,6 +2228,7 @@ describe('App', () => {
         lon: 8.404,
         source: 'osm',
         discoveredAt: 1_700_000_000,
+        mastered: false,
         ...overrides,
       };
     }
@@ -2270,10 +2272,14 @@ describe('App', () => {
       const markers = markerContainer().querySelectorAll('button.bar-marker');
       expect(markers).toHaveLength(2);
       expect(
-        markerContainer().querySelector('button.bar-marker[aria-label="The Fox"]'),
+        markerContainer().querySelector(
+          'button.bar-marker[aria-label="The Fox - not mastered yet"]',
+        ),
       ).not.toBeNull();
       expect(
-        markerContainer().querySelector('button.bar-marker[aria-label="Anchor Bar"]'),
+        markerContainer().querySelector(
+          'button.bar-marker[aria-label="Anchor Bar - not mastered yet"]',
+        ),
       ).not.toBeNull();
     });
 
@@ -2339,7 +2345,9 @@ describe('App', () => {
 
       expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(1);
       expect(
-        markerContainer().querySelector('button.bar-marker[aria-label="New Find"]'),
+        markerContainer().querySelector(
+          'button.bar-marker[aria-label="New Find - not mastered yet"]',
+        ),
       ).not.toBeNull();
     });
 
@@ -2393,7 +2401,9 @@ describe('App', () => {
 
       expect(markerContainer().querySelectorAll('button.bar-marker')).toHaveLength(1);
       expect(
-        markerContainer().querySelector('button.bar-marker[aria-label="New Find"]'),
+        markerContainer().querySelector(
+          'button.bar-marker[aria-label="New Find - not mastered yet"]',
+        ),
       ).not.toBeNull();
     });
 
@@ -2598,6 +2608,114 @@ describe('App', () => {
       expect(container.textContent).not.toMatch(/\d+\s*(of|\/)\s*\d+/i);
       expect(container.querySelector('.bar-count')).toBeNull();
     });
+
+    // SPEC.md Sections 5.7, 8.1, 8.3: the cocktail glass is the app's mark
+    // for a bar, and which of its two states is drawn comes from the
+    // server's own per-user `mastered` field. These are end-to-end: a
+    // response goes in and a shape comes out, so a flag that is computed
+    // correctly but never reaches the mark - or a mark that ignores it -
+    // fails here rather than passing two unit tests in isolation.
+    describe('the mastered mark (SPEC.md Sections 5.7, 8.1, 8.3)', () => {
+      function glassPathsOf(element: Element): string[] {
+        return Array.from(element.querySelectorAll('svg.cocktail-glass path')).map(
+          (path) => path.getAttribute('d') ?? '',
+        );
+      }
+
+      it("draws each marker from its own bar's mastered flag", async () => {
+        stubMapFetchWithBars([
+          bar({ id: 1, name: 'The Fox', mastered: true }),
+          bar({ id: 2, name: 'Anchor Bar', mastered: false }),
+        ]);
+
+        await renderApp('/map');
+        await flushLazyMapScreen();
+        await flushLazyMapScreen();
+
+        const fox = markerContainer().querySelector(
+          'button.bar-marker[aria-label="The Fox - mastered"]',
+        ) as HTMLButtonElement;
+        const anchor = markerContainer().querySelector(
+          'button.bar-marker[aria-label="Anchor Bar - not mastered yet"]',
+        ) as HTMLButtonElement;
+
+        expect(fox).not.toBeNull();
+        expect(anchor).not.toBeNull();
+        expect(glassPathsOf(fox)).toEqual(cocktailGlassPathData(true));
+        expect(glassPathsOf(anchor)).toEqual(cocktailGlassPathData(false));
+        // The whole point of the mark: two bars on one map, told apart.
+        expect(glassPathsOf(fox)).not.toEqual(glassPathsOf(anchor));
+      });
+
+      it('shows the mastered status on the bar detail screen, in words and in the glass', async () => {
+        stubFetch((url) => {
+          if (url.startsWith('/api/auth/me')) {
+            return stubSignedInUser();
+          }
+          if (url === '/api/bars/7') {
+            return jsonResponse(200, bar({ id: 7, name: 'The Fox', mastered: true }));
+          }
+          if (url === '/api/city') {
+            return jsonResponse(200, {
+              slug: 'karlsruhe',
+              name: 'Karlsruhe',
+              originLat: 48.94,
+              originLon: 8.275,
+              gridWidth: 3,
+              gridHeight: 3,
+              cellSizeM: 50,
+              playableCells: 9,
+              districts: [],
+            });
+          }
+          throw new Error(`Unexpected request: ${url}`);
+        });
+
+        await renderApp('/bars/7');
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        const status = container.querySelector('.bar-detail__mastered') as HTMLElement;
+        expect(status).not.toBeNull();
+        expect(status.textContent).toContain('Mastered');
+        expect(glassPathsOf(status)).toEqual(cocktailGlassPathData(true));
+      });
+
+      it('says so in words when the bar detail screen shows an unmastered bar', async () => {
+        stubFetch((url) => {
+          if (url.startsWith('/api/auth/me')) {
+            return stubSignedInUser();
+          }
+          if (url === '/api/bars/7') {
+            return jsonResponse(200, bar({ id: 7, name: 'The Fox', mastered: false }));
+          }
+          if (url === '/api/city') {
+            return jsonResponse(200, {
+              slug: 'karlsruhe',
+              name: 'Karlsruhe',
+              originLat: 48.94,
+              originLon: 8.275,
+              gridWidth: 3,
+              gridHeight: 3,
+              cellSizeM: 50,
+              playableCells: 9,
+              districts: [],
+            });
+          }
+          throw new Error(`Unexpected request: ${url}`);
+        });
+
+        await renderApp('/bars/7');
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        const status = container.querySelector('.bar-detail__mastered') as HTMLElement;
+        expect(status.textContent).toContain('Not mastered yet');
+        expect(glassPathsOf(status)).toEqual(cocktailGlassPathData(false));
+      });
+    });
   });
 
   // The fog layer and the bar markers each refetch on their own signal now
@@ -2725,6 +2843,192 @@ describe('App', () => {
       });
 
       expect(fogCallCount).toBe(1);
+      expect(barsCallCount).toBe(1);
+    });
+
+    // SPEC.md Sections 5.7, 8.1: mastering a bar changes the glass its
+    // marker draws, and the bar in question was discovered long before — so
+    // `newBars` is empty and nothing else in the response would refetch the
+    // list. Without this signal the marker keeps drawing the full glass
+    // until the next discovery or the next time the map is opened, which is
+    // the whole of the mark being inert at the one moment it means
+    // something. End-to-end on purpose: the assertion is the drawn shape,
+    // not the call count, because a refetch that does not reach the marker
+    // is the same bug.
+    it('refetches the bar markers when a post completes a visit, and the glass empties', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let barsCallCount = 0;
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/city') {
+          return cityFixtureResponse();
+        }
+        if (url === '/api/fog') {
+          return fogResponse(new Uint8Array(2), {
+            revealedCells: 0,
+            playableCells: 9,
+            districts: [],
+          });
+        }
+        if (url === '/api/bars') {
+          barsCallCount++;
+          // The server's answer changes between the two calls, because the
+          // visit completing is what mastered it (Section 5.7).
+          return jsonResponse(200, {
+            bars: [
+              {
+                id: 1,
+                districtId: null,
+                name: 'The Fox',
+                address: null,
+                lat: 48.9405,
+                lon: 8.2755,
+                source: 'osm',
+                discoveredAt: 1,
+                mastered: barsCallCount > 1,
+              },
+            ],
+          });
+        }
+        if (url === '/api/visits/pending') {
+          return jsonResponse(200, { visits: [] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 0,
+            newBars: [],
+            visitUpdates: [
+              {
+                id: 5,
+                barId: 1,
+                barName: 'The Fox',
+                startedAt: 0,
+                lastSampleAt: 0,
+                onsiteSamples: 2,
+                confirmedS: CONFIG.VISIT_REQUIRED_MS / 1000,
+                remainingS: 0,
+                status: 'completed',
+              },
+            ],
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(barsCallCount).toBe(1);
+      const markers = () => mapInstances[0].container;
+      const before = markers().querySelector(
+        'button.bar-marker[aria-label="The Fox - not mastered yet"]',
+      );
+      expect(before).not.toBeNull();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(barsCallCount).toBe(2);
+      const after = markers().querySelector(
+        'button.bar-marker[aria-label="The Fox - mastered"]',
+      ) as HTMLButtonElement;
+      expect(after).not.toBeNull();
+      expect(
+        Array.from(after.querySelectorAll('svg.cocktail-glass path')).map((path) =>
+          path.getAttribute('d'),
+        ),
+      ).toEqual(cocktailGlassPathData(true));
+    });
+
+    // The other side of that trade: `visitVersion` advances on every
+    // accepted on-site sample, and refetching every bar at sample rate to
+    // catch the one sample that completes a visit is the wrong way round.
+    // Only `completed` masters a bar (Section 5.7), so only `completed`
+    // refetches.
+    it('does not refetch the bar markers for a visit update that is still pending', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let barsCallCount = 0;
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/city') {
+          return cityFixtureResponse();
+        }
+        if (url === '/api/fog') {
+          return fogResponse(new Uint8Array(2), {
+            revealedCells: 0,
+            playableCells: 9,
+            districts: [],
+          });
+        }
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, { bars: [] });
+        }
+        if (url === '/api/visits/pending') {
+          return jsonResponse(200, { visits: [] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 0,
+            newBars: [],
+            visitUpdates: [
+              {
+                id: 5,
+                barId: 1,
+                barName: 'The Fox',
+                startedAt: 0,
+                lastSampleAt: 0,
+                onsiteSamples: 1,
+                confirmedS: 60,
+                remainingS: 1140,
+                status: 'pending',
+              },
+            ],
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(barsCallCount).toBe(1);
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
       expect(barsCallCount).toBe(1);
     });
   });

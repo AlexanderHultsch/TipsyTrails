@@ -154,6 +154,7 @@ function communityBar(overrides: Record<string, unknown> = {}) {
     lon: 8.4045,
     source: 'community',
     discoveredAt: 1_700_000_000,
+    mastered: false,
     ...overrides,
   };
 }
@@ -306,6 +307,7 @@ describe('community marker', () => {
               lon: 8.4,
               source: 'osm',
               discoveredAt: 1,
+              mastered: false,
             },
             communityBar({ id: 2, name: 'Community Bar' }),
           ],
@@ -330,7 +332,10 @@ describe('community marker', () => {
       'button.bar-marker--community',
     ) as HTMLButtonElement;
     expect(communityMarker).not.toBeNull();
-    expect(communityMarker.getAttribute('aria-label')).toBe('Community Bar');
+    // Section 11.3's community distinction stays a *description*; Section
+    // 5.7's mastered state is what joins the accessible name
+    // (map/bars/bar-markers.ts).
+    expect(communityMarker.getAttribute('aria-label')).toBe('Community Bar - not mastered yet');
     const describedById = communityMarker.getAttribute('aria-describedby');
     expect(describedById).not.toBeNull();
     expect(communityMarker.querySelector(`#${describedById}`)?.textContent).toBe(
@@ -338,7 +343,7 @@ describe('community marker', () => {
     );
 
     const osmMarker = Array.from(markers.querySelectorAll('button.bar-marker')).find(
-      (button) => button.getAttribute('aria-label') === 'OSM Bar',
+      (button) => button.getAttribute('aria-label') === 'OSM Bar - not mastered yet',
     );
     expect(osmMarker).not.toBeUndefined();
     expect(osmMarker?.classList.contains('bar-marker--community')).toBe(false);

@@ -64,11 +64,20 @@ export interface SampleTrackingState {
   // file's own comment on why GET /api/fog is refetched rather than diffed
   // some cleverer way).
   revealVersion: number;
-  // Increments once per successful POST /api/samples that reported a newly
-  // discovered bar (result.newBars.length > 0). Kept separate from
-  // revealVersion: a bar found inside fog the player has already revealed
-  // produces newBars with newCells: 0, so a signal tied to revealed cells
-  // would never fire for it. map/bars/useBarMarkers.ts is the consumer.
+  // Increments once per successful POST /api/samples that changed *what the
+  // bar list would say* — a newly discovered bar (result.newBars.length > 0)
+  // or a visit reaching `completed`, which masters its bar (Section 5.7) and
+  // so changes the glass that bar's marker draws (Section 8.1). Both are
+  // "refetch GET /api/bars", which is all this signal means; the name is
+  // older than the second reason.
+  //
+  // Kept separate from revealVersion: a bar found inside fog the player has
+  // already revealed produces newBars with newCells: 0, so a signal tied to
+  // revealed cells would never fire for it. Kept separate from visitVersion
+  // in the other direction: that one advances on every accepted on-site
+  // sample, and refetching every bar at sample rate to catch the one sample
+  // in ~40 that completes a visit is the trade the wrong way round.
+  // map/bars/useDiscoveredBars.ts is the consumer.
   discoveryVersion: number;
   // The visitUpdates array of the latest successful POST /api/samples
   // (Section 7.5 steps 3-4), replaced on every successful post - including
@@ -244,7 +253,17 @@ export function useSampleTracking(): SampleTrackingState {
         if (result.newCells > 0) {
           setRevealVersion((version) => version + 1);
         }
-        if ((result.newBars?.length ?? 0) > 0) {
+        // Section 5.7 / 8.1: mastering a bar changes the glass its marker
+        // draws, and a bar reaching `completed` is one the player discovered
+        // long before — so nothing else in this response refetches the bar
+        // list for it, and the marker would keep drawing the full glass
+        // until the next discovery or the next time the map is opened.
+        // `completed` is terminal and permanent, so this fires once per bar
+        // in a player's whole history, not once per sample.
+        const masteredABar = (result.visitUpdates ?? []).some(
+          (visit) => visit.status === 'completed',
+        );
+        if ((result.newBars?.length ?? 0) > 0 || masteredABar) {
           setDiscoveryVersion((version) => version + 1);
         }
         setVisitUpdates(result.visitUpdates ?? []);

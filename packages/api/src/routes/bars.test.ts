@@ -13,6 +13,12 @@ import { runMigrations } from '../db/migrate.js';
 import { seedBars } from '../db/seed-bars.js';
 import { seedCity } from '../db/seed-city.js';
 import { loadEnv } from '../env.js';
+import {
+  bindMasteredUserId,
+  DISCOVERED_BAR_COLUMNS,
+  type DiscoveredBarRow,
+  type MasteredUserIdBinding,
+} from './bars.js';
 
 const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url));
 
@@ -390,6 +396,258 @@ describe('GET /api/bars/:id', () => {
     expect(nonexistent.statusCode).toBe(404);
     expect(undiscovered.body).toBe(nonexistent.body);
     expect(undiscovered.json()).toEqual(nonexistent.json());
+  });
+});
+
+// SPEC.md Section 5.7: "A bar is mastered by a user if at least one `visits`
+// row exists with `status='completed'`. Mastering is permanent and cannot be
+// lost." Section 9.2's three bar-shaped surfaces — GET /api/bars, GET
+// /api/bars/:id and POST /api/samples's `newBars` — all answer through
+// `toBarSummary`, so all three have to carry it and carry it identically.
+describe('the mastered flag (SPEC.md Sections 5.7, 9.2)', () => {
+  function userIdOf(username: string): number {
+    return db
+      .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+      .get(username)!.id;
+  }
+
+  function schlossgartenId(): number {
+    return db
+      .prepare<[], { id: number }>("SELECT id FROM bars WHERE name = 'Zum Schlossgarten'")
+      .get()!.id;
+  }
+
+  // Written straight into `visits` rather than driven through a real
+  // check-in: this suite is about how the flag is *read*, and Section 7.5's
+  // path to a completed visit (two accepted on-site samples 20 minutes
+  // apart) is routes/visits.test.ts's subject. Writing the row is also the
+  // only way to produce the terminal states below at all.
+  function insertVisit(username: string, barId: number, status: string): void {
+    const nowS = Math.floor(Date.now() / 1000);
+    db.prepare(
+      `INSERT INTO visits (user_id, bar_id, started_at, last_sample_at, onsite_samples, confirmed_s, status, completed_at)
+       VALUES (?, ?, ?, ?, 2, ?, ?, ?)`,
+    ).run(
+      userIdOf(username),
+      barId,
+      nowS - CONFIG.VISIT_REQUIRED_MS / 1000,
+      nowS,
+      CONFIG.VISIT_REQUIRED_MS / 1000,
+      status,
+      status === 'completed' ? nowS : null,
+    );
+  }
+
+  function getBars(cookie: string): Promise<LightMyRequestResponse> {
+    return injectWithOrigin({ method: 'GET', url: '/api/bars', headers: { cookie } });
+  }
+
+  it('is false for a discovered bar with no completed visit, and true once there is one', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = schlossgartenId();
+
+    const before = await getBars(cookie);
+    expect(before.json().bars[0]).toMatchObject({ id: barId, mastered: false });
+
+    insertVisit('walker', barId, 'completed');
+
+    const after = await getBars(cookie);
+    expect(after.json().bars[0]).toMatchObject({ id: barId, mastered: true });
+  });
+
+  // The one this suite exists for. A flag that is computed per *bar* rather
+  // than per *user* passes every single-user test there is: it needs two
+  // users with different mastery of the same bar to fail.
+  it('answers per user: one user’s completed visit never masters the bar for another', async () => {
+    const aliceCookie = await registerUser('alice');
+    const bobCookie = await registerUser('bob');
+    await postSamples(aliceCookie, [sample()]);
+    await postSamples(bobCookie, [sample()]);
+    const barId = schlossgartenId();
+
+    insertVisit('alice', barId, 'completed');
+
+    const alice = await getBars(aliceCookie);
+    const bob = await getBars(bobCookie);
+
+    expect(alice.json().bars).toHaveLength(1);
+    expect(bob.json().bars).toHaveLength(1);
+    expect(alice.json().bars[0]).toMatchObject({ id: barId, mastered: true });
+    expect(bob.json().bars[0]).toMatchObject({ id: barId, mastered: false });
+
+    // And the same answer from the detail route, which is a different query
+    // over the same shared column list.
+    const aliceDetail = await injectWithOrigin({
+      method: 'GET',
+      url: `/api/bars/${barId}`,
+      headers: { cookie: aliceCookie },
+    });
+    const bobDetail = await injectWithOrigin({
+      method: 'GET',
+      url: `/api/bars/${barId}`,
+      headers: { cookie: bobCookie },
+    });
+    expect(aliceDetail.json().mastered).toBe(true);
+    expect(bobDetail.json().mastered).toBe(false);
+  });
+
+  // Section 5.7: 'pending', 'expired' and 'cancelled' master nothing —
+  // 'completed' is the only status that does.
+  it.each(['pending', 'expired', 'cancelled'])(
+    'does not treat a %s visit as mastering',
+    async (status) => {
+      const cookie = await registerUser('walker');
+      await postSamples(cookie, [sample()]);
+      const barId = schlossgartenId();
+
+      insertVisit('walker', barId, status);
+
+      const response = await getBars(cookie);
+      expect(response.json().bars[0]).toMatchObject({ id: barId, mastered: false });
+    },
+  );
+
+  // Section 5.7: "Mastering is permanent and cannot be lost." A later visit
+  // that expires or is cancelled is a new row beside the completed one, and
+  // the completed one is still there.
+  it('stays mastered after a later visit expires or is cancelled', async () => {
+    const cookie = await registerUser('walker');
+    await postSamples(cookie, [sample()]);
+    const barId = schlossgartenId();
+
+    insertVisit('walker', barId, 'completed');
+    insertVisit('walker', barId, 'expired');
+    insertVisit('walker', barId, 'cancelled');
+
+    const response = await getBars(cookie);
+    expect(response.json().bars[0]).toMatchObject({ id: barId, mastered: true });
+  });
+
+  // Section 9.2: `newBars` is the third surface, and it goes through the
+  // same mapper and now the same SELECT list — so it carries the field
+  // rather than being the one place a client finds it missing.
+  it('carries the field on POST /api/samples’s newBars', async () => {
+    const cookie = await registerUser('walker');
+
+    const response = await postSamples(cookie, [sample()]);
+
+    expect(response.json().newBars).toHaveLength(1);
+    expect(response.json().newBars[0]).toMatchObject({
+      name: 'Zum Schlossgarten',
+      mastered: false,
+    });
+    expect(response.json().newBars[0]).toHaveProperty('mastered');
+  });
+
+  it('carries the field on POST /api/bars/suggest’s created bar', async () => {
+    const cookie = await registerUser('submitter');
+    const spot = diagonalOffset(SCHLOSS, 200);
+
+    const response = await injectWithOrigin({
+      method: 'POST',
+      url: '/api/bars/suggest',
+      headers: { cookie },
+      payload: { name: 'Neue Bar', address: null, lat: spot.lat, lon: spot.lon },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ source: 'community', mastered: false });
+  });
+
+  // The three surfaces have to agree field for field, which is the property
+  // `toBarSummary` and the shared column list exist to guarantee — a
+  // `mastered` that reached two of them and not the third is exactly the
+  // drift they are there to prevent.
+  it('returns the same field set from all three surfaces', async () => {
+    const cookie = await registerUser('walker');
+
+    const samplesResponse = await postSamples(cookie, [sample()]);
+    const fromNewBars = samplesResponse.json().newBars[0];
+    const barId = fromNewBars.id;
+
+    const listResponse = await getBars(cookie);
+    const fromList = listResponse.json().bars[0];
+    const detailResponse = await injectWithOrigin({
+      method: 'GET',
+      url: `/api/bars/${barId}`,
+      headers: { cookie },
+    });
+    const fromDetail = detailResponse.json();
+
+    expect(Object.keys(fromList).sort()).toEqual(Object.keys(fromNewBars).sort());
+    expect(Object.keys(fromDetail).sort()).toEqual(Object.keys(fromNewBars).sort());
+    expect(fromList).toEqual(fromNewBars);
+    expect(fromDetail).toEqual(fromNewBars);
+    expect(fromList).toHaveProperty('mastered');
+  });
+
+  // SQLite answers an EXISTS/comparison with an integer, and a `mastered: 1`
+  // on the wire is a value `types.ts` declares as a boolean and a client
+  // would branch on by accident rather than by contract.
+  it('is a JSON boolean, not SQLite’s 0/1', async () => {
+    const masteredCookie = await registerUser('walker');
+    const plainCookie = await registerUser('other');
+    await postSamples(masteredCookie, [sample()]);
+    await postSamples(plainCookie, [sample()]);
+    insertVisit('walker', schlossgartenId(), 'completed');
+
+    const masteredBody = (await getBars(masteredCookie)).body;
+    expect(masteredBody).toContain('"mastered":true');
+    expect(masteredBody).not.toContain('"mastered":1');
+
+    const plainBody = (await getBars(plainCookie)).body;
+    expect(plainBody).toContain('"mastered":false');
+    expect(plainBody).not.toContain('"mastered":0');
+  });
+
+  // DISCOVERED_BAR_COLUMNS states a guarantee about itself that no route can
+  // exercise: because every query in routes/bars.ts and routes/fog.ts already
+  // scopes its discoveries to one user, `bar_discoveries.user_id =
+  // @masteredUserId` is true for every row those routes return, and deleting
+  // that conjunct leaves the whole suite green. The conjunct is not there for
+  // today's callers, though — it is there so that a future one binding the
+  // wrong id degrades to `false` rather than reporting a stranger's mastery.
+  //
+  // So the column list is exercised directly, with the binding deliberately
+  // mismatched: discoveries scoped to Alice, `@masteredUserId` bound to Bob,
+  // and Bob the one who has mastered the bar. Without the conjunct the
+  // subquery answers about Bob and Alice's row comes back mastered — which is
+  // the leak, and it is only visible from here.
+  it('reports false, never a stranger’s mastery, when the binding does not match the discoveries', async () => {
+    const aliceCookie = await registerUser('alice');
+    const bobCookie = await registerUser('bob');
+    await postSamples(aliceCookie, [sample()]);
+    await postSamples(bobCookie, [sample()]);
+    const barId = schlossgartenId();
+
+    // Bob has mastered it; Alice has not.
+    insertVisit('bob', barId, 'completed');
+
+    const selectForUser = (
+      discoveriesOf: number,
+      masteredBinding: number,
+    ): DiscoveredBarRow | undefined =>
+      db
+        .prepare<[number, MasteredUserIdBinding], DiscoveredBarRow>(
+          `SELECT ${DISCOVERED_BAR_COLUMNS}
+           FROM bar_discoveries
+           JOIN bars ON bars.id = bar_discoveries.bar_id
+           WHERE bar_discoveries.user_id = ?`,
+        )
+        .get(discoveriesOf, bindMasteredUserId(masteredBinding));
+
+    const alice = userIdOf('alice');
+    const bob = userIdOf('bob');
+
+    // The correct binding: each user's own answer, as the routes get it.
+    expect(selectForUser(alice, alice)?.mastered).toBe(0);
+    expect(selectForUser(bob, bob)?.mastered).toBe(1);
+
+    // The mismatched binding: Alice's discovery row, Bob's id. Bob's mastery
+    // must not appear here.
+    expect(selectForUser(alice, bob)?.id).toBe(barId);
+    expect(selectForUser(alice, bob)?.mastered).toBe(0);
   });
 });
 

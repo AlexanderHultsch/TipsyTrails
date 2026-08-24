@@ -17,7 +17,13 @@ import { requireAuth } from '../auth/cookie.js';
 import { cellsWithinRevealRadius } from '../fog/reveal.js';
 import { isBitSet, maskByteLength, setBit } from '../fog/mask.js';
 import { createRateLimiter } from '../http/rate-limit.js';
-import { toBarSummary, type BarSummary, type DiscoveredBarRow } from './bars.js';
+import {
+  bindMasteredUserId,
+  DISCOVERED_BAR_COLUMNS,
+  toBarSummary,
+  type BarSummary,
+  type DiscoveredBarRow,
+} from './bars.js';
 import { toVisitSummary, type VisitSummary } from './visits.js';
 
 // SPEC.md Section 5.5/7.3/7.6/9.2: fog-of-war state (GET /api/fog,
@@ -510,16 +516,30 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
             return [];
           }
           const placeholders = newlyDiscoveredIds.map(() => '?').join(', ');
+          // routes/bars.ts's own column list, not a second copy of it — the
+          // same reason `toBarSummary` is shared: `newBars` is one of the
+          // three surfaces a `bars` row reaches the client through (SPEC.md
+          // Section 9.2), and a field selected in two of them and forgotten
+          // in the third is exactly the drift that sharing prevents.
+          // Section 5.7's `mastered` rides along with it. It binds by name,
+          // so the anonymous parameters below are unaffected by it and stay
+          // the id list followed by the user id.
+          //
+          // A bar in this list was discovered by the INSERT a few lines up,
+          // so in practice it cannot be mastered yet — a completed visit
+          // needs a check-in, and a check-in needs the bar to be discovered.
+          // The flag is still selected rather than assumed: `newBars` is a
+          // `Bar` like the other two surfaces' and has to answer the same
+          // way they would, and an assumption here is one more thing that
+          // could come to disagree with them.
           const rows = db
             .prepare<unknown[], DiscoveredBarRow>(
-              `SELECT bars.id AS id, bars.district_id AS district_id, bars.name AS name,
-                    bars.address AS address, bars.lat AS lat, bars.lon AS lon, bars.source AS source,
-                    bar_discoveries.discovered_at AS discovered_at
+              `SELECT ${DISCOVERED_BAR_COLUMNS}
              FROM bars
              JOIN bar_discoveries ON bar_discoveries.bar_id = bars.id
              WHERE bars.id IN (${placeholders}) AND bar_discoveries.user_id = ?`,
             )
-            .all(...newlyDiscoveredIds, userId);
+            .all(...newlyDiscoveredIds, userId, bindMasteredUserId(userId));
           return rows.map(toBarSummary);
         });
         const newBars = discoveryCandidateIds.size > 0 ? applyDiscoveries() : [];

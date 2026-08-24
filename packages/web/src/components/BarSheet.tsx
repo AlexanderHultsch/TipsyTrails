@@ -1,4 +1,6 @@
 import type { Bar } from '../api/types.js';
+import { CocktailGlass } from './CocktailGlass.js';
+import { masteredStatusText } from './cocktail-glass.js';
 
 // Section 7.5 step 1: "a check-in starts at the bar's marker on the map, and
 // nowhere else". Tapping a discovered bar's marker opens this sheet on the
@@ -55,6 +57,18 @@ export function BarSheet({
         </button>
       </div>
       {bar.address !== null && <p className="bar-sheet__address">{bar.address}</p>}
+      {/* Sections 5.7 and 8.1/8.3: the same cocktail glass the bar's marker
+          on the map draws, in the same two states, so tapping a marker opens
+          a sheet showing the mark the player just tapped rather than a
+          second, unrelated presentation of the same bar. The words beside it
+          are what carry the state for anyone who cannot see the glass, and
+          they are the reason the glass itself is aria-hidden. This is a
+          statement and not a control: mastering is earned by the check-in
+          below, never by anything on this line. */}
+      <p className="bar-sheet__mastered">
+        <CocktailGlass mastered={bar.mastered} />
+        {masteredStatusText(bar.mastered)}
+      </p>
       <button
         type="button"
         className="button button--primary bar-sheet__check-in"

@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG, DERIVED } from '@tipsytrails/shared';
 import { App } from './App.js';
+import { cocktailGlassPathData } from './components/cocktail-glass.js';
 import { markMasteringExplainerSeen } from './tracking/masteringExplainer.js';
 
 // Section 7.5 / Phase 5 step 4: the check-in affordance, the pending-visit
@@ -116,6 +117,7 @@ function bar(overrides: Record<string, unknown> = {}) {
     lon: FIXED_LON,
     source: 'osm',
     discoveredAt: 1_700_000_000,
+    mastered: false,
     ...overrides,
   };
 }
@@ -220,8 +222,12 @@ function markerContainer(): HTMLElement {
   return mapInstances[mapInstances.length - 1].container;
 }
 
+// The marker's accessible name is "<bar> - <mastered state>" since Section
+// 5.7's flag reached the client (map/bars/bar-markers.ts); the exact wording
+// is pinned in components/cocktail-glass.test.ts and bar-markers.test.ts, so
+// this helper matches on the bar's name and leaves the state to them.
 function markerFor(name: string): HTMLButtonElement {
-  const element = markerContainer().querySelector(`button.bar-marker[aria-label="${name}"]`);
+  const element = markerContainer().querySelector(`button.bar-marker[aria-label^="${name} - "]`);
   if (!element) {
     throw new Error(`No marker rendered for ${name}`);
   }
@@ -431,6 +437,66 @@ describe('check-in and mastering', () => {
 
     const controls = Array.from(panel?.querySelectorAll('button, a, input') ?? []);
     expect(controls).toHaveLength(0);
+  });
+
+  // SPEC.md Sections 5.7 and 8.1/8.3: the sheet a marker opens shows the same
+  // mark the marker just showed, in the same two states, with the state also
+  // in words. Two bars in one render, so a sheet that ignored its own bar and
+  // showed a fixed state would still fail.
+  it('shows the tapped bar’s mastered state on the sheet, in the glass and in words', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'The Fox', mastered: true }),
+            bar({
+              id: 2,
+              name: 'Anchor Bar',
+              lat: FIXED_LAT,
+              lon: FIXED_LON + 0.00034,
+              mastered: false,
+            }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    function sheetGlassPaths(): string[] {
+      const status = container.querySelector('.bar-sheet__mastered') as HTMLElement;
+      return Array.from(status.querySelectorAll('svg.cocktail-glass path')).map(
+        (path) => path.getAttribute('d') ?? '',
+      );
+    }
+
+    await tapMarker('The Fox');
+    expect(container.querySelector('.bar-sheet__mastered')?.textContent).toContain('Mastered');
+    expect(sheetGlassPaths()).toEqual(cocktailGlassPathData(true));
+
+    await tapMarker('Anchor Bar');
+    expect(container.querySelector('.bar-sheet__mastered')?.textContent).toContain(
+      'Not mastered yet',
+    );
+    expect(sheetGlassPaths()).toEqual(cocktailGlassPathData(false));
   });
 
   it('opens a sheet for the tapped bar without leaving the map, and closes it again', async () => {
