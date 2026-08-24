@@ -44,8 +44,26 @@ export const CONFIG = {
   FOG_EDGE_ALPHA_HALF_WIDTH: 0.1,
 
   BAR_DISCOVERY_RADIUS_M: 100,
-  BAR_ONSITE_RADIUS_M: 50,
-  BAR_ACCURACY_TOLERANCE_M: 50, // added to on-site radius, capped by accuracy
+  // SPEC.md Section 7.5 step 1. These two are added together (`onsiteRadiusM`,
+  // packages/shared/src/visits.ts), so the pair is what matters and not
+  // either number alone: 30 m with a good fix, 50 m at worst. They were 50
+  // and 50, which reached 100 m — a whole street of bars, and the owner
+  // could check into a bar he was nowhere near.
+  //
+  // The tolerance stays, and is not folded into the base radius. Removing it
+  // would make check-in *impossible* on a poor fix rather than merely
+  // harder, which is a worse failure than a generous one: the player is
+  // standing in the bar and the app refuses. 20 m covers ordinary
+  // city-centre GPS, and it is capped by the accuracy actually reported, so
+  // a good fix never buys the full allowance.
+  //
+  // Deliberately smaller than BAR_DISCOVERY_RADIUS_M above and not tied to
+  // it: discovery (Section 7.4) asks "have you been near this place", which
+  // is a question about a walk, while check-in asks "are you at this bar",
+  // which has to separate neighbours. A bar discovered at 100 m that needs
+  // 30 m to check into is the intended shape, not a gap.
+  BAR_ONSITE_RADIUS_M: 30,
+  BAR_ACCURACY_TOLERANCE_M: 20, // added to on-site radius, capped by accuracy
 
   VISIT_REQUIRED_MS: 20 * 60 * 1000,
   VISIT_EXPIRY_MS: 6 * 60 * 60 * 1000,

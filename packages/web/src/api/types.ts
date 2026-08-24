@@ -20,11 +20,20 @@ export interface Sample {
 }
 
 // POST /api/samples response shape (packages/api/src/routes/fog.ts). Section
-// 9.2 defines the full { newCells, newBars, visitUpdates } shape.
+// 9.2 defines the full { newCells, newBars, visitUpdates, tooFastToReveal }
+// shape.
 export interface SamplesResponse {
   newCells: number;
   newBars: Bar[];
   visitUpdates: VisitSummary[];
+  // Section 7.3: whether the last accepted sample of this batch was refused
+  // a reveal because it was travelling at or above FOG_MAX_SPEED_KMH. The
+  // server is the only honest source for it - it applies the rule, and it is
+  // the only side that can derive a speed for a sample the Geolocation API
+  // reported none for. Reading `position.speed` here instead would be a
+  // second implementation of the same rule, free to disagree with the one
+  // that actually decides.
+  tooFastToReveal: boolean;
 }
 
 // GET /api/bars, GET /api/bars/:id, and the `newBars` field above all share

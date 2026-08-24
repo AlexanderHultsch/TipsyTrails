@@ -54,6 +54,16 @@ const SCHLOSS = { lat: 49.0135, lon: 8.4044 };
 // (48.9400–49.0950 N, 8.2750–8.5600 E — SPEC.md Section 6.2).
 const OUTSIDE_BBOX = { lat: 0, lon: 0 };
 
+// Local reimplementation of SPEC.md Section 6.1's projection constants
+// (mirrored, with the same values, in packages/shared/src/grid.ts — not
+// exported from the package's public entry point, so a fixture-only offset
+// helper reimplements it here rather than reaching past that boundary; the
+// same choice routes/bars.test.ts and routes/visits.test.ts make).
+const M_PER_DEG_LAT = 110574;
+function offsetMeters(base: { lat: number; lon: number }, northM: number): { lat: number } {
+  return { lat: base.lat + northM / M_PER_DEG_LAT };
+}
+
 let dbPath: string;
 let db: Database.Database;
 let app: FastifyInstance;
@@ -144,12 +154,20 @@ describe('POST /api/samples', () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body).toEqual({ newCells: expect.any(Number), newBars: [], visitUpdates: [] });
+    expect(body).toEqual({
+      newCells: expect.any(Number),
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
     expect(body.newCells).toBeGreaterThanOrEqual(9);
     expect(body.newCells).toBeLessThanOrEqual(17);
   });
 
-  it('reveals nothing for a sample above FOG_MAX_SPEED_KMH', async () => {
+  // SPEC.md Section 7.3: the reveal is skipped, and — since v1.26 — the
+  // response says so, because a map that does not clear is otherwise
+  // indistinguishable from a broken one.
+  it('reveals nothing for a sample above FOG_MAX_SPEED_KMH, and says that is why', async () => {
     const cookie = await registerUser();
     // 10 m/s = 36 km/h, above CONFIG.FOG_MAX_SPEED_KMH (30).
     expect(10 * 3.6).toBeGreaterThan(CONFIG.FOG_MAX_SPEED_KMH);
@@ -157,7 +175,114 @@ describe('POST /api/samples', () => {
     const response = await postSamples(cookie, [goodSample({ speed: 10 })]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    expect(response.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: true,
+    });
+  });
+
+  // The boundary itself, both sides of it, because "above" is `>=` in the
+  // code and a `>` there would be invisible to the test above.
+  // What this pins, and what it deliberately does not.
+  //
+  // The threshold itself - exactly FOG_MAX_SPEED_KMH - is not reachable
+  // through this path at all. The server reads metres per second and
+  // multiplies by 3.6, and no double `s` satisfies `s * 3.6 === 30`: the
+  // nearest candidate, 30 / 3.6, comes back as 30.000000000000004, and
+  // walking either neighbouring representable value steps over the line
+  // rather than onto it. So `>=` and `>` cannot be told apart from outside,
+  // and this test does not claim to - an earlier version's name promised
+  // "from FOG_MAX_SPEED_KMH upwards" while its fixture sat four
+  // quadrillionths above the line and passed under either operator.
+  //
+  // What is worth pinning is the pair either operator must agree on: the
+  // closest speed above the threshold refuses, the closest below reveals,
+  // and both sides are asserted against CONFIG rather than against a
+  // hard-coded 30, so moving the constant moves the test with it.
+  it('refuses just above FOG_MAX_SPEED_KMH and reveals just below it', async () => {
+    const cookie = await registerUser();
+    const atThresholdMs = CONFIG.FOG_MAX_SPEED_KMH / 3.6;
+
+    // The fixture is above the line, not on it - assert that rather than
+    // assume it, since it is a float round-trip and not a chosen value.
+    expect(atThresholdMs * 3.6).toBeGreaterThan(CONFIG.FOG_MAX_SPEED_KMH);
+    const above = await postSamples(cookie, [goodSample({ speed: atThresholdMs })]);
+    expect(above.json().tooFastToReveal).toBe(true);
+    expect(above.json().newCells).toBe(0);
+
+    const belowMs = atThresholdMs * 0.99;
+    expect(belowMs * 3.6).toBeLessThan(CONFIG.FOG_MAX_SPEED_KMH);
+    const below = await postSamples(cookie, [
+      goodSample({ speed: belowMs, timestamp: Date.now() }),
+    ]);
+    expect(below.json().tooFastToReveal).toBe(false);
+    expect(below.json().newCells).toBeGreaterThan(0);
+  });
+
+  // The case the client could not report on its own, and the reason this
+  // verdict lives in the response at all (SPEC.md Section 7.3): the fix
+  // carries no speed, so the server derives one from the previous accepted
+  // sample — a position the browser does not keep.
+  it('reports a speed it derived itself for a sample the device gave no speed for', async () => {
+    const cookie = await registerUser();
+    const startedAt = Date.now();
+    const first = await postSamples(cookie, [
+      goodSample({ speed: null, timestamp: startedAt - 10_000 }),
+    ]);
+    // Nothing to derive from and no speed on the sample: it reveals, and no
+    // refusal is reported.
+    expect(first.json()).toMatchObject({ tooFastToReveal: false });
+    expect(first.json().newCells).toBeGreaterThan(0);
+
+    // 200 m in 10 s is 72 km/h: above FOG_MAX_SPEED_KMH and well below
+    // SAMPLE_TELEPORT_SPEED_KMH, so the sample is accepted and then refused
+    // a reveal.
+    const impliedKmh = (200 / 10) * 3.6;
+    expect(impliedKmh).toBeGreaterThan(CONFIG.FOG_MAX_SPEED_KMH);
+    expect(impliedKmh).toBeLessThan(CONFIG.SAMPLE_TELEPORT_SPEED_KMH);
+
+    const moved = offsetMeters(SCHLOSS, 200);
+    const second = await postSamples(cookie, [
+      goodSample({ ...moved, speed: null, timestamp: startedAt }),
+    ]);
+
+    expect(second.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: true,
+    });
+  });
+
+  // SPEC.md Section 7.3's mixed-batch rule: the last accepted sample decides,
+  // because the message it feeds is present tense. Both directions, since a
+  // rule of "any sample in the batch" passes the first half and fails here.
+  it('lets the last accepted sample of a mixed batch decide the speed verdict', async () => {
+    const arrivingCookie = await registerUser('arriving');
+    const startedAt = Date.now();
+
+    // Fast, then slow: the player got off the train, and by the end of the
+    // batch was walking. Nothing should be said about the train.
+    const arriving = await postSamples(arrivingCookie, [
+      goodSample({ speed: 10, timestamp: startedAt - 20_000 }),
+      goodSample({ speed: 0, timestamp: startedAt - 10_000 }),
+    ]);
+    expect(arriving.json().tooFastToReveal).toBe(false);
+    expect(arriving.json().newCells).toBeGreaterThan(0);
+
+    // Slow, then fast: the same two samples the other way round. The player
+    // is moving now, so the message is owed to them now.
+    const leavingCookie = await registerUser('leaving');
+    const leaving = await postSamples(leavingCookie, [
+      goodSample({ speed: 0, timestamp: startedAt - 20_000 }),
+      goodSample({ speed: 10, timestamp: startedAt - 10_000 }),
+    ]);
+    expect(leaving.json().tooFastToReveal).toBe(true);
+    // The slow sample still revealed: the verdict reports the batch's last
+    // accepted sample, it does not undo what an earlier one did.
+    expect(leaving.json().newCells).toBeGreaterThan(0);
   });
 
   it('discards a sample with accuracy worse than FOG_MAX_ACCURACY_M entirely', async () => {
@@ -167,7 +292,14 @@ describe('POST /api/samples', () => {
     const response = await postSamples(cookie, [goodSample({ accuracy: badAccuracy })]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    // No sample was accepted, so nothing was refused for speed either: the
+    // verdict is not entitled to assert a speed no sample established.
+    expect(response.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
   });
 
   it('discards a sample outside the active city bounding box', async () => {
@@ -178,7 +310,12 @@ describe('POST /api/samples', () => {
     ]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    expect(response.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
   });
 
   it('rejects a teleport between two accepted samples', async () => {
@@ -193,7 +330,12 @@ describe('POST /api/samples', () => {
     const secondResponse = await postSamples(cookie, [teleported]);
 
     expect(secondResponse.statusCode).toBe(200);
-    expect(secondResponse.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    expect(secondResponse.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
   });
 
   it('does not double-count revealing the same cell twice', async () => {
@@ -204,7 +346,12 @@ describe('POST /api/samples', () => {
     expect(firstNewCells).toBeGreaterThan(0);
 
     const second = await postSamples(cookie, [goodSample({ timestamp: Date.now() })]);
-    expect(second.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    expect(second.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
 
     const fogResponse = await injectWithOrigin({
       method: 'GET',

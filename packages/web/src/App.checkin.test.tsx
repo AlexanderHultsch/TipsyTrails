@@ -98,6 +98,14 @@ function stubSignedInUser() {
 const FIXED_LAT = 49.0069;
 const FIXED_LON = 8.4037;
 
+// A longitude that many metres due east of the stubbed fix - the same local
+// equirectangular approximation the API's own fixtures use (SPEC.md Section
+// 6.1's projection constants), adequate at this scale and independent of
+// haversineDistanceM's implementation.
+function lonEastOfFix(distanceM: number): number {
+  return FIXED_LON + distanceM / (111320 * Math.cos((FIXED_LAT * Math.PI) / 180));
+}
+
 function bar(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -533,6 +541,90 @@ describe('check-in and mastering', () => {
 
     expect(sheetCheckInButton().disabled).toBe(false);
     expect(container.querySelector('.bar-sheet__reason')).toBeNull();
+  });
+
+  // Section 7.5 step 1 as tightened in v1.26. The owner could check in from
+  // ~100 m away, which in Karlsruhe's centre is a street of other bars; the
+  // radius is now BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)
+  // = 40 m on a 10 m fix and 50 m on the worst fix there is.
+  //
+  // The two distances below are stated rather than derived from the constants
+  // they are about - this is the test *of* those constants, and a fixture
+  // computed from onsiteRadiusM would pass whatever they held. Each is
+  // asserted against the rule so the intent survives the next change to it,
+  // which is the same shape routes/bars.test.ts uses for the discovery
+  // radius.
+  it('holds the check-in to the tightened radius, and caps what a poor fix buys', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, {
+          bars: [
+            bar({ id: 1, name: 'Right Here', lat: FIXED_LAT, lon: FIXED_LON }),
+            bar({ id: 2, name: 'Down The Road', lat: FIXED_LAT, lon: lonEastOfFix(45) }),
+            bar({ id: 3, name: 'Round The Corner', lat: FIXED_LAT, lon: lonEastOfFix(60) }),
+          ],
+        });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderMap();
+
+    // A good fix: 30 + 10 = 40 m. 45 m is outside it, and was inside the
+    // 50 + 10 = 60 m this radius used to be.
+    expect(45).toBeGreaterThan(CONFIG.BAR_ONSITE_RADIUS_M + 10);
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await tapMarker('Down The Road');
+    expect(sheetCheckInButton().disabled).toBe(true);
+    expect(container.querySelector('.bar-sheet__reason')?.textContent).toContain(
+      "You're too far away from Down The Road to check in",
+    );
+
+    // The bar the player is standing at is still reachable - this test is
+    // about the radius being tighter, not about the action being off.
+    await tapMarker('Right Here');
+    expect(sheetCheckInButton().disabled).toBe(false);
+
+    // A poor fix buys the tolerance and no more: 30 + min(100, 20) = 50 m,
+    // not 30 + 100. The bar 60 m away stays out of reach.
+    expect(60).toBeGreaterThan(CONFIG.BAR_ONSITE_RADIUS_M + CONFIG.BAR_ACCURACY_TOLERANCE_M);
+    expect(60).toBeLessThan(CONFIG.BAR_ONSITE_RADIUS_M + 100);
+    act(() => {
+      geo.triggerPosition({ accuracy: 100 });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await tapMarker('Round The Corner');
+    expect(sheetCheckInButton().disabled).toBe(true);
+    expect(container.querySelector('.bar-sheet__reason')?.textContent).toContain(
+      "You're too far away from Round The Corner to check in",
+    );
+
+    // ...and the tolerance is still doing its job: 45 m was out of reach on
+    // the good fix above and is inside the 50 m a poor one earns, which is
+    // why the tolerance is not simply removed.
+    expect(45).toBeLessThan(CONFIG.BAR_ONSITE_RADIUS_M + CONFIG.BAR_ACCURACY_TOLERANCE_M);
+    await tapMarker('Down The Road');
+    expect(sheetCheckInButton().disabled).toBe(false);
   });
 
   // Section 5.7: at most one pending visit per bar - POST /api/visits would

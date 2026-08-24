@@ -342,7 +342,12 @@ describe('POST /api/samples visitUpdates', () => {
     const response = await postSamples(cookie, [sample({ timestamp: staleTimestamp })]);
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ newCells: 0, newBars: [], visitUpdates: [] });
+    expect(response.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
 
     const row = getVisit(visitId);
     expect(row.status).toBe('pending');

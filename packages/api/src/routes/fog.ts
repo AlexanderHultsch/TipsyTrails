@@ -340,6 +340,25 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         let previous = lastAccepted.get(userId) ?? null;
         const revealCandidates = new Set<number>();
 
+        // SPEC.md Section 7.3, "what the player is told": whether the sample
+        // that ends this batch was refused a reveal because of its speed.
+        //
+        // The last accepted sample decides, and that is the whole rule for a
+        // mixed batch. The client renders this as a present-tense banner, and
+        // the last accepted sample is the most recent thing known about where
+        // the player is now — a batch that starts on a moving train and ends
+        // on the platform reports `false`, because by the end of it the
+        // player was walking. `false` for a batch with no accepted samples at
+        // all, for the same reason: nothing in it was refused for speed, and
+        // a banner is not entitled to assert a speed no sample established.
+        //
+        // Deliberately server-side and not derived from `position.speed` in
+        // the browser: the rule that decides is this one, including the case
+        // the client cannot reproduce — a sample carrying no speed, where the
+        // server derives it from the previous accepted sample, which the
+        // client does not keep.
+        let tooFastToReveal = false;
+
         // SPEC.md Section 7.4: discovery is checked against every accepted
         // sample, independent of the reveal-speed gate below — a sample too
         // fast to reveal fog still discovers a bar it passes. Loaded once per
@@ -454,8 +473,14 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           // Reveal speed: from the sample where present (Geolocation API
           // speed is m/s), otherwise derived from the previous accepted
           // sample; neither available -> the sample reveals (Section 7.3).
+          //
+          // One expression drives both the reveal and what the client is
+          // told, so the banner cannot come to disagree with the rule it is
+          // reporting on — that disagreement is exactly what a second,
+          // client-side copy of this test would have introduced.
           const revealSpeedKmh = sample.speed != null ? sample.speed * 3.6 : derivedSpeedKmh;
-          if (revealSpeedKmh === null || revealSpeedKmh < CONFIG.FOG_MAX_SPEED_KMH) {
+          tooFastToReveal = revealSpeedKmh !== null && revealSpeedKmh >= CONFIG.FOG_MAX_SPEED_KMH;
+          if (!tooFastToReveal) {
             for (const index of cellsWithinRevealRadius(sample, grid)) {
               revealCandidates.add(index);
             }
@@ -544,7 +569,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         const visitUpdates = anyVisitTouched ? applyVisitUpdates() : [];
 
         if (revealCandidates.size === 0) {
-          return { newCells: 0, newBars, visitUpdates };
+          return { newCells: 0, newBars, visitUpdates, tooFastToReveal };
         }
 
         const applyReveal = db.transaction((): number => {
@@ -613,7 +638,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         });
 
         const newCells = applyReveal();
-        return { newCells, newBars, visitUpdates };
+        return { newCells, newBars, visitUpdates, tooFastToReveal };
       },
     );
 

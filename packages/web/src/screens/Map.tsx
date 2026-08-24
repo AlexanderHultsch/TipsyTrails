@@ -368,6 +368,26 @@ export function MapScreen() {
               <p className="map-notice__detail">{mapError}</p>
             </div>
           )}
+          {/* Section 7.3: the reveal rule skips a sample taken at or above
+              FOG_MAX_SPEED_KMH, and until now it did so in silence - the
+              owner sat on a train watching a map that never cleared and was
+              told nothing. The verdict comes from the server's own response
+              (tooFastToReveal, packages/api/src/routes/fog.ts) rather than
+              from position.speed here, because the server is what applies
+              the rule and the only side that can derive a speed for a fix
+              that carries none.
+
+              First among the toasts, so the transient ones below can come
+              and go beneath a message that stays for as long as its
+              condition does. It clears itself: every successful post
+              replaces the flag, so this disappears on the first batch the
+              player is slow enough for. */}
+          {trackingState.tooFastToReveal && (
+            <div className="map-toast map-toast--speed" role="status">
+              <p>You&apos;re moving too fast to reveal new ground.</p>
+              <p>Slow down and the map starts clearing again.</p>
+            </div>
+          )}
           {/* Phase 8 task brief, part C: a new account's first view of the
               map is otherwise just fog and no markers, with nothing telling
               them what to do next. Gone for good once the first bar is

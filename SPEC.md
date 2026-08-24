@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.25
+**Version:** 1.26
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -525,8 +525,8 @@ export const CONFIG = {
   FOG_MAX_ACCURACY_M: 200,        // samples worse than this are discarded entirely
 
   BAR_DISCOVERY_RADIUS_M: 100,
-  BAR_ONSITE_RADIUS_M: 50,
-  BAR_ACCURACY_TOLERANCE_M: 50,   // added to on-site radius, capped by accuracy
+  BAR_ONSITE_RADIUS_M: 30,
+  BAR_ACCURACY_TOLERANCE_M: 20,   // added to on-site radius, capped by accuracy
 
   VISIT_REQUIRED_MS: 20 * 60 * 1000,
   VISIT_EXPIRY_MS: 6 * 60 * 60 * 1000,
@@ -612,6 +612,14 @@ The previous accepted position used by step 4 is held in memory only (Section 10
 
 **Reveal rule.** For each accepted sample where speed < `FOG_MAX_SPEED_KMH`, reveal every cell whose centre lies within `FOG_REVEAL_RADIUS_M` of the position (~13 cells at 50 m). Revealed cells are permanent. Speed is taken from the Geolocation API where available, otherwise derived from the previous accepted sample; if neither is available (first sample after restart), the sample reveals.
 
+**The player is told when that rule is what is stopping them.** A map that does not clear looks exactly like a map that is broken, and the owner's own report was a train journey during which nothing revealed and nothing said why. So `POST /api/samples` answers with `tooFastToReveal` (Section 9.2) and the map screen renders it as a message in the notices row of its overlay layout (Section 8.3) — never as an overlay positioned against the map.
+
+**The server is the only honest source for it, and that is the whole point of putting it in the response.** The client holds `position.speed` and could test the threshold itself, but that would be a second implementation of a rule the server has already applied, free to disagree with the one that actually decides — including in the case the client cannot reproduce at all, where the fix carries no speed and the server derives one from the previous accepted sample, which lives in the server's memory (Section 7.2) and nowhere else.
+
+**A batch is several samples, so the field needs a defined meaning for a mixed one: the last accepted sample decides.** The message is present tense — it tells the player what is happening now — and the last accepted sample is the most recent thing anyone knows about where they are. A batch that begins on a moving train and ends on the platform reports `false`, because by the end of it the player was walking; a batch of samples none of which was accepted reports `false` too, since nothing in it was refused for speed and the message is not entitled to assert a speed no sample established. The consequence worth stating plainly is that a batch can have had cells refused mid-way and still report `false`, which is correct for a present-tense message and would be wrong for a count of what was skipped. This is not a count.
+
+**The message must clear itself.** Every successful `POST /api/samples` replaces the flag, including with `false`, so the message goes as soon as the player has slowed down. A message about a train that survives the player getting off it is the same class of defect as a pending-visit banner claiming time the player never spent at a bar (Section 7.5). Its wording says what will happen when they slow down rather than only what is not happening, and it does not accuse: the player is not doing anything wrong.
+
 Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_district_progress` row if the cell belongs to a district, and the `fog_daily_progress` row for the current Europe/Berlin day. All three updates happen in one transaction with the mask write.
 
 **Rendering.** A MapLibre custom layer draws the fog as a single full-screen quad. The fog mask is uploaded to the GPU as a texture (one texel per grid cell, `R8` format, ~140 KiB for Karlsruhe) and sampled in the fragment shader. Reveals update the texture via `texSubImage2D` on the affected region only.
@@ -648,7 +656,9 @@ Bars sit close together in Karlsruhe's centre and GPS alone cannot distinguish n
 
 **Flow:**
 
-1. **A check-in starts at the bar's marker on the map, and nowhere else.** Tapping a discovered bar's marker leads to that bar, where a check-in action is offered and is enabled only while the player is within `BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)` of it. This is what makes two bars next door to each other separable: the player names the one they mean by pointing at it, instead of accepting a suggestion the app derived from a position that cannot tell the two apart. The nearby panel on the map screen stays and stops being a control — it names the bars currently in range, sorted by distance, and tells the player to tap one on the map. It carries no button and performs no check-in.
+1. **A check-in starts at the bar's marker on the map, and nowhere else.** Tapping a discovered bar's marker leads to that bar, where a check-in action is offered and is enabled only while the player is within `BAR_ONSITE_RADIUS_M + min(accuracy, BAR_ACCURACY_TOLERANCE_M)` of it — 30 m with a good fix and 50 m at worst, and there is exactly one implementation of that sum (`onsiteRadiusM`, `packages/shared/src/visits.ts`) shared by the client's candidate list, the sheet's enablement and the server's re-validation in step 2. The pair is what matters, not either number alone: they used to be 50 and 50, which reached 100 m — a whole street of bars in Karlsruhe's centre, and a radius a player could satisfy from a bar he was nowhere near. The tolerance is not folded into the base radius, because removing it would make check-in *impossible* on a poor fix rather than merely harder, and a player standing inside the bar being refused is a worse failure than a generous radius.
+
+  **This radius is deliberately far smaller than `BAR_DISCOVERY_RADIUS_M`, and a bar discovered at 100 m that then needs 30 m to check into is the intended shape rather than a gap between two rules.** The two answer different questions. Discovery (Section 7.4) asks "have you been near this place" — a question about a walk, permanent once answered, and generous on purpose so the map fills in as the player moves. Check-in asks "are you at *this* bar", which is the question that has to separate two neighbours a few metres apart, and it is the whole reason this step is an explicit user action. A discovery radius narrowed to match would hide bars the player walked past; a check-in radius widened to match would put the bar next door inside it. This is what makes two bars next door to each other separable: the player names the one they mean by pointing at it, instead of accepting a suggestion the app derived from a position that cannot tell the two apart. The nearby panel on the map screen stays and stops being a control — it names the bars currently in range, sorted by distance, and tells the player to tap one on the map. It carries no button and performs no check-in.
 
   **"Leads to that bar" means a sheet on the map screen, not the `/bars/:id` route**, and the reason is worth recording because the wording invites the opposite reading. Position tracking runs in exactly one place — the map screen — so navigating away to a separate route unmounts it: fog reveal and sample posting stop, and the screen that is supposed to judge on-site eligibility has no live position to judge it against. Powering a check-in there would mean lifting tracking into a shared provider, a real change to the sample pipeline, bought for nothing the player can see. A sheet on the map keeps tracking alive and still has the player name the bar they mean by pointing at it, which is the whole property this step exists for. `/bars/:id` keeps its job as the linkable detail page and deliberately carries no check-in action.
 
@@ -852,7 +862,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/health` | `{"status":"ok"}` — unauthenticated, used by Phase 0 and by Docker's healthcheck |
 | GET | `/api/city` | Active city metadata + grid parameters |
 | GET | `/api/fog` | Raw fog mask (`application/octet-stream`) + per-district revealed counts; Caddy applies the transport encoding |
-| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates }` |
+| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates, tooFastToReveal }`. `tooFastToReveal` is a boolean and reports the *last accepted sample* of the batch (Section 7.3) |
 | GET | `/api/bars` | Discovered bars only |
 | GET | `/api/bars/:id` | Bar detail — see 9.5 |
 | POST | `/api/bars/suggest` | `{ name, address, lat, lon }` |
@@ -1277,6 +1287,62 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.26 — the map says when it is too fast to clear, and the check-in radius stops being a street
+
+Two more from the owner, and they are one report told from two ends: *why is nothing happening?*
+One of them makes a control switch off sooner, and the other explains why the map is not clearing.
+Shipping the first alone would have used a fix to manufacture the next confusion, so they ship
+together and their two sentences are written as neighbours.
+
+**The map revealed nothing on a train, and said nothing about it.** Section 7.3's speed rule was
+working exactly as specified — a sample at or above `FOG_MAX_SPEED_KMH` reveals no cells — and the
+client was simply never told, so the mechanic's own rule was indistinguishable from a broken app.
+`POST /api/samples` now answers with `tooFastToReveal` and the map renders it in the notices row of
+its overlay layout (Section 8.3), never as an overlay positioned against the map.
+
+The field is on the response and not computed in the browser, and Section 7.3 records why at
+length: the client holds `position.speed` and could test the threshold itself, which would be a
+second implementation of a rule the server has already applied and free to disagree with the one
+that actually decides. It could not reproduce the case that matters most, either — a fix carrying
+no speed, where the server derives one from the previous accepted sample, a value that lives in the
+server's memory (Section 7.2) and nowhere else. A boolean was chosen over the speed itself: the
+banner has nothing useful to do with a figure, and a derived speed is an estimate over whatever
+interval separated two samples, which a number on screen would overstate.
+
+A batch is several samples and they disagree, so the field needed a defined meaning for a mixed
+one, and it is the **last accepted sample** that decides. The message is present tense, and the
+last accepted sample is the most recent thing known about where the player is; a batch that starts
+on a moving train and ends on the platform reports `false`. That it is not a count of what was
+skipped is stated in Section 7.3 rather than left to be inferred. And every successful post
+replaces the flag, `false` included, so the message clears itself the moment the player slows down
+— a message about a train that outlives the train is the same class of lie as the confirmed-time
+bug of v1.18.
+
+**"Der Check in Radius ist zu groß."** `BAR_ONSITE_RADIUS_M` and `BAR_ACCURACY_TOLERANCE_M` were
+both 50, and since the rule adds them the effective radius reached 100 m — in Karlsruhe's centre
+that is a street of bars, and the player could check into one he was nowhere near. They are now 30
+and 20: 30 m with a good fix, 50 m at worst. The tolerance stays and is not folded into the base
+radius, because removing it makes check-in *impossible* on a poor fix rather than merely harder,
+and a player standing inside the bar being refused is a worse failure than a generous radius.
+
+`BAR_DISCOVERY_RADIUS_M` is untouched at 100 m, and Section 7.5 step 1 now says why the gap is the
+intended shape rather than an inconsistency to be tidied away. Discovery asks "have you been near
+this place", a question about a walk, permanent once answered and generous so that the map fills in
+as the player moves. Check-in asks "are you at *this* bar", which is the question that has to
+separate two neighbours and the whole reason the step is an explicit user action. Narrowing
+discovery to match would hide bars the player walked past; widening check-in to match would put
+the bar next door inside it.
+
+One consequence of the new tolerance is worth recording because it looks like a collision and is
+not. `BAR_ACCURACY_TOLERANCE_M` is now 20, the same number as `GPS_ACCURACY_GOOD_M` (Section 8.6),
+and the coincidence is not new — the old tolerance of 50 sat exactly on `GPS_ACCURACY_FAIR_M`. What
+moved is the point at which the radius stops growing: it now saturates at the top of the *good*
+band instead of the top of the *fair* one, so every fix the indicator does not call good buys the
+same full 20 m. The two scales still tell one story rather than two — the app extends its allowance
+in step with a fix it trusts and refuses to extend further for one it does not — and Section 8.6 is
+left alone, which is the decision rather than an omission. The two constants mean different things
+and must not be unified because they happen to share a value.
 
 ### v1.25 — the connection icon measures being behind, and the map stops tilting
 
@@ -1951,4 +2017,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.25*
+*End of specification v1.26*

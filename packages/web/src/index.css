@@ -869,6 +869,16 @@ button:focus-visible,
   font-weight: 400;
 }
 
+/* Section 7.3's "too fast to reveal" message. Two sentences - what is
+   happening, then what makes it stop - and .map-toast p zeroes their margins,
+   so the gap between them is set here exactly as it is for the mastered
+   toast above. No other treatment: it is one of the toasts, placed by row 3
+   like the rest of them, and Section 8.1's restraint gives it no colour of
+   its own. */
+.map-toast--speed p + p {
+  margin-top: 0.25rem;
+}
+
 /* Section 7.5's transparency requirements: the pending-visit banner, shown
    persistently at the top of the screen. It occupies row 1, the full-width
    bar along the top edge, and the top corner controls (Section 8.4/8.6) sit

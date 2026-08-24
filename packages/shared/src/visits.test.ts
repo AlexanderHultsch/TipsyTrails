@@ -23,8 +23,23 @@ function eastOf(base: LatLon, distanceM: number): LatLon {
 }
 
 describe('onsiteRadiusM', () => {
+  // 5 m, not 20: the tolerance is 20 since v1.26, so an accuracy of 20 is
+  // the cap this asserts is *not* being applied and the case below already
+  // covers it. The number has to stay strictly under BAR_ACCURACY_TOLERANCE_M
+  // for this test to be about the uncapped branch at all.
   it('adds the accuracy in full when it is under the tolerance', () => {
-    expect(onsiteRadiusM(20)).toBe(CONFIG.BAR_ONSITE_RADIUS_M + 20);
+    expect(5).toBeLessThan(CONFIG.BAR_ACCURACY_TOLERANCE_M);
+    expect(onsiteRadiusM(5)).toBe(CONFIG.BAR_ONSITE_RADIUS_M + 5);
+  });
+
+  // SPEC.md Section 7.5 step 1: the tolerance keeps a poor fix from making
+  // check-in impossible; it does not let one grow the radius without bound.
+  // Section 7.4's discovery radius is the ceiling, so a bar close enough to
+  // check into is always one the player could have discovered.
+  it('never reaches the discovery radius, however bad the fix', () => {
+    expect(onsiteRadiusM(Number.MAX_SAFE_INTEGER)).toBeLessThanOrEqual(
+      CONFIG.BAR_DISCOVERY_RADIUS_M,
+    );
   });
 
   it('caps the addition at BAR_ACCURACY_TOLERANCE_M for an accuracy above it', () => {
@@ -55,7 +70,12 @@ describe('isOnSite', () => {
 describe('onsiteCandidates', () => {
   it('returns candidates within the accuracy-derived radius, sorted by ascending distance', () => {
     const near = eastOf(SCHLOSS, 10);
-    const far = eastOf(SCHLOSS, 40);
+    // 30 m, not the 40 this used to be: with the radii of v1.26 a 10 m fix
+    // gives a 40 m radius, so the old fixture sat exactly on the boundary and
+    // this test — which is about ordering, not about the boundary — would
+    // have become hostage to whether `isOnSite` compares with `<=` or `<`.
+    // The boundary has its own test above.
+    const far = eastOf(SCHLOSS, 30);
     const outOfRange = eastOf(SCHLOSS, 200);
 
     const result = onsiteCandidates(SCHLOSS, 10, [

@@ -52,6 +52,25 @@ describe('CONFIG radii', () => {
   it('keeps the on-site radius within the discovery radius', () => {
     expect(CONFIG.BAR_ONSITE_RADIUS_M).toBeLessThanOrEqual(CONFIG.BAR_DISCOVERY_RADIUS_M);
   });
+
+  // SPEC.md Section 7.5 step 1. Pinned to the values the spec states, the
+  // same way BADGE_THRESHOLDS above is: the pair is the product decision —
+  // 30 m with a good fix, 50 m at worst — and it was 50 and 50, reaching
+  // 100 m, which is a street of bars in Karlsruhe's centre.
+  it('matches the spec values for the check-in radius and its accuracy tolerance', () => {
+    expect(CONFIG.BAR_ONSITE_RADIUS_M).toBe(30);
+    expect(CONFIG.BAR_ACCURACY_TOLERANCE_M).toBe(20);
+  });
+
+  // The tolerance exists so that a poor fix does not make check-in
+  // impossible, not so that a poor fix buys a bigger bar. Section 7.5's
+  // separability property is what this protects: two neighbours a few metres
+  // apart stay separable however bad the fix is.
+  it('cannot let the tolerance grow the radius past the discovery radius', () => {
+    expect(CONFIG.BAR_ONSITE_RADIUS_M + CONFIG.BAR_ACCURACY_TOLERANCE_M).toBeLessThanOrEqual(
+      CONFIG.BAR_DISCOVERY_RADIUS_M,
+    );
+  });
 });
 
 describe('CONFIG.FOG_REVEAL_ANIMATION_MS', () => {

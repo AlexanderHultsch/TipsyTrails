@@ -1873,6 +1873,92 @@ describe('App', () => {
       expect(panelCurrentStates()[0]).toBe('Right now: Poor');
     });
 
+    // SPEC.md Section 7.3: the reveal is skipped above FOG_MAX_SPEED_KMH, and
+    // until v1.26 it was skipped in silence - a map that does not clear looks
+    // exactly like a map that is broken. The verdict is the server's
+    // (`tooFastToReveal`), never derived from position.speed here, so these
+    // tests drive it through the response and never through the fix.
+    it('says why nothing is revealing while the server reports the batch was too fast', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 0,
+            newBars: [],
+            visitUpdates: [],
+            tooFastToReveal: true,
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      // Nothing is claimed before a batch has been answered.
+      expect(container.querySelector('.map-toast--speed')).toBeNull();
+
+      act(() => {
+        // A fix reporting no speed at all: the client has nothing to judge
+        // this on, which is exactly why the server is asked.
+        geo.triggerPosition({ accuracy: 10, speed: null });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      const notice = container.querySelector('.map-toast--speed');
+      expect(notice).not.toBeNull();
+      expect(notice?.textContent).toContain("You're moving too fast to reveal new ground.");
+      // Section 7.3: it says what will happen when they slow down, not only
+      // what is not happening.
+      expect(notice?.textContent).toContain('Slow down and the map starts clearing again.');
+      // Section 8.3: placed by the overlay layout, like every other overlay
+      // on this screen.
+      expect(notice?.closest('.map-overlays')).not.toBeNull();
+    });
+
+    it('takes the message away again on the first batch the player is slow enough for', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let tooFast = true;
+      stubMapFetch((url) => {
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 0,
+            newBars: [],
+            visitUpdates: [],
+            tooFastToReveal: tooFast,
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      expect(container.querySelector('.map-toast--speed')).not.toBeNull();
+
+      // The player got off the train. A message about it that outlives it is
+      // the same class of lie as a banner claiming time never spent at a bar.
+      tooFast = false;
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+
+      expect(container.querySelector('.map-toast--speed')).toBeNull();
+    });
+
     it('stops the geolocation watch and releases the wake lock when leaving the map screen', async () => {
       const geo = stubGeolocation();
       const wakeLock = stubWakeLock();

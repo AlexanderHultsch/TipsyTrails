@@ -38,6 +38,18 @@ export interface SampleTrackingState {
   // status - tracking/status.ts says why.
   queueDepth: number;
   lastNewCells: number | null;
+  // Section 7.3: what the latest successful POST /api/samples said about the
+  // reveal being refused for speed. Replaced by every successful post,
+  // including one that says `false` - that is what makes the message clear
+  // itself once the player slows down, rather than being a flag that only
+  // ever gets set. A failed post leaves it alone, the same as lastNewCells
+  // above: the last thing the server actually said stands until the server
+  // says something else.
+  //
+  // Never computed here from `position.speed`. The server applies the rule
+  // (packages/api/src/routes/fog.ts) and is the only side that can derive a
+  // speed for a fix that carries none.
+  tooFastToReveal: boolean;
   postError: string | null;
   // Increments once per successful POST /api/samples that actually revealed
   // a cell (result.newCells > 0). Unlike lastNewCells - a count that can
@@ -106,6 +118,7 @@ export function useSampleTracking(): SampleTrackingState {
   const [trackingActive, setTrackingActive] = useState(false);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [lastNewCells, setLastNewCells] = useState<number | null>(null);
+  const [tooFastToReveal, setTooFastToReveal] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
   const [revealVersion, setRevealVersion] = useState(0);
   const [discoveryVersion, setDiscoveryVersion] = useState(0);
@@ -219,6 +232,11 @@ export function useSampleTracking(): SampleTrackingState {
         // normal case and is what puts the icon back to `online`.
         setBehindDepth(queuedAtAttempt - batch.length);
         setLastNewCells(result.newCells);
+        // Set from the answer either way round, never only when it is true:
+        // a message about a train that survives the player getting off it is
+        // the same kind of lie as a banner claiming time the player never
+        // spent at a bar.
+        setTooFastToReveal(result.tooFastToReveal === true);
         if (result.newCells > 0) {
           setRevealVersion((version) => version + 1);
         }
@@ -290,6 +308,7 @@ export function useSampleTracking(): SampleTrackingState {
     trackingActive,
     queueDepth,
     lastNewCells,
+    tooFastToReveal,
     postError,
     revealVersion,
     discoveryVersion,
