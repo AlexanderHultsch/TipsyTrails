@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { BADGE_PERIODS } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import { ApiError, getProfile } from '../api/client.js';
 import type { BadgeKind, ProfileResponse } from '../api/types.js';
+import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
 import { BottomNav } from '../components/BottomNav.js';
-
-const PROGRESS_PERIODS: readonly BadgePeriod[] = ['week', 'month', 'year'];
 
 const PROGRESS_PERIOD_LABEL: Record<BadgePeriod, string> = {
   week: 'This week',
@@ -31,8 +31,19 @@ function formatMetric(kind: BadgeKind, value: number): string {
 // response — do not make a second request"). Values are never recomputed
 // here, only formatted. Section 7.7 publishes no threshold and no rank, so
 // there is nothing here to render a value against.
+//
+// The shelf shows placeholders for the badges the player has never held, and
+// only on the player's *own* profile. The question they exist to raise -
+// "what do I have to do to get that?" - is one only the player themselves can
+// act on, and six grey glyphs on someone else's profile would instead read as
+// an inventory of what that player has failed to win, with "three of six" a
+// completion score comparable across players. That is a standing by another
+// name, and Section 7.7 declines to publish standings. Nothing is concealed by
+// the choice - the badges another player holds are public, and so therefore is
+// what is missing from them - it is simply not a thing to draw.
 export function Profile() {
   const { handle } = useParams<{ handle: string }>();
+  const { user } = useCurrentUser();
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,13 +102,16 @@ export function Profile() {
 
             <section className="profile__section">
               <h2>Badges</h2>
-              <BadgeShelf badges={profile.badges} />
+              {/* Compared on the numeric user id rather than on the handle:
+                  the same player resolves under two handles (their username
+                  and `player-{id}`, Section 9.5) and under only one id. */}
+              <BadgeShelf badges={profile.badges} showPlaceholders={user?.id === profile.userId} />
             </section>
 
             <section className="profile__section">
               <h2>Current progress</h2>
               <ul className="profile__progress-list">
-                {PROGRESS_PERIODS.flatMap((period) =>
+                {BADGE_PERIODS.flatMap((period) =>
                   profile.badgeProgress[period].map((entry) => (
                     <li key={`${period}-${entry.kind}`} className="profile__progress-item">
                       <span className="profile__progress-label">

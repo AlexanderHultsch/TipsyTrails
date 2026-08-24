@@ -1,3 +1,4 @@
+import { unearnedBadgeTypes } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type { BadgeKind, BadgeSummary } from '../api/types.js';
 
@@ -25,6 +26,43 @@ const BADGE_PERIOD_RINGS: Record<BadgePeriod, number> = {
   year: 3,
 };
 
+// One definition of each pictogram, drawn by both states. Section 8.1 makes
+// the argument for the cocktail glass and it is the same one here: a mark
+// redrawn per state is two marks that drift, and the two states are precisely
+// what must stay the same shape. The earned/unearned difference is entirely in
+// how these paths are painted (index.css), never in which paths they are.
+//
+// `fillRule` is only load-bearing for the barfly mug, whose handle is a second
+// subpath punched out of the first; on the explorer's single-subpath diamond it
+// is a no-op, and it is set unconditionally rather than branching for one of
+// two shapes.
+const BADGE_MARK_PATH: Record<BadgeKind, string> = {
+  explorer: 'M16 7 L20.5 16 L16 25 L11.5 16 Z',
+  barfly:
+    'M10 9h9v10a4.5 4.5 0 0 1-9 0zm11 2h1.5a3.5 3.5 0 0 1 0 7H21v-2h1.5a1.5 1.5 0 0 0 0-3H21z',
+};
+
+function BadgeGlyph({
+  kind,
+  period,
+  block,
+}: {
+  kind: BadgeKind;
+  period: BadgePeriod;
+  block: 'badge' | 'badge-placeholder';
+}) {
+  const rings = BADGE_PERIOD_RINGS[period];
+
+  return (
+    <svg viewBox="0 0 32 32" className={`${block}__icon`} aria-hidden="true" focusable="false">
+      {Array.from({ length: rings }, (_, i) => (
+        <circle key={i} cx="16" cy="16" r={13 - i * 3} className={`${block}__ring`} />
+      ))}
+      <path className={`${block}__mark`} fillRule="evenodd" d={BADGE_MARK_PATH[kind]} />
+    </svg>
+  );
+}
+
 export function Badge({
   kind,
   period,
@@ -35,24 +73,58 @@ export function Badge({
   className?: string;
 }) {
   const label = `${BADGE_KIND_LABEL[kind]} badge, ${BADGE_PERIOD_LABEL[period]}`;
-  const rings = BADGE_PERIOD_RINGS[period];
 
   return (
     <span className={className ? `badge ${className}` : 'badge'} role="img" aria-label={label}>
-      <svg viewBox="0 0 32 32" className="badge__icon" aria-hidden="true" focusable="false">
-        {Array.from({ length: rings }, (_, i) => (
-          <circle key={i} cx="16" cy="16" r={13 - i * 3} className="badge__ring" />
-        ))}
-        {kind === 'explorer' ? (
-          <path className="badge__mark" d="M16 7 L20.5 16 L16 25 L11.5 16 Z" />
-        ) : (
-          <path
-            className="badge__mark"
-            fillRule="evenodd"
-            d="M10 9h9v10a4.5 4.5 0 0 1-9 0zm11 2h1.5a3.5 3.5 0 0 1 0 7H21v-2h1.5a1.5 1.5 0 0 0 0-3H21z"
-          />
-        )}
-      </svg>
+      <BadgeGlyph kind={kind} period={period} block="badge" />
+    </span>
+  );
+}
+
+// Section 7.7: a badge the player has *not* got, drawn so they can want it.
+// The same pictogram and the same ring count as the real thing - a placeholder
+// that did not say which badge it stands for could not raise the question it
+// exists to raise - and three differences from it, none of which is a number.
+//
+// The state is never colour alone, which Section 8.1 forbids and a
+// near-monochrome palette makes easy to fall into by accident. Two of the
+// three differences are shape and survive greyscale, print and a reader who
+// perceives no colour at all: the mark is hollow rather than solid ink (the
+// same grammar as the mastered cocktail glass in Section 8.1 - a wall of ink
+// around an empty middle, which is most of the mark's area appearing or
+// disappearing), and the rings are broken rather than continuous (the same
+// grammar as Section 8.1's district boundaries, dashed for exactly the reason
+// that weight and opacity alone cannot carry a distinction on this palette).
+// The third is the greying the owner asked for, and it is the one that makes
+// an earned badge stay the louder thing on the shelf.
+//
+// What it never carries: the threshold, the player's distance from one, a
+// rank, a standing, a share of a target, or any mark that moves as the
+// player's own value moves. See `unearnedBadgeTypes` for why that last one is
+// a rule about the data and not about this component.
+export function BadgePlaceholder({
+  kind,
+  period,
+  className,
+}: {
+  kind: BadgeKind;
+  period: BadgePeriod;
+  className?: string;
+}) {
+  // The state leads rather than trails. A screen reader user hearing
+  // "Explorer badge, week" from a placeholder would be told they hold a badge
+  // they do not, which is the worst failure available here, and a listener who
+  // stops after the first words is exactly who that failure lands on - so the
+  // first words are the ones that settle it.
+  const label = `Not yet earned: ${BADGE_KIND_LABEL[kind]} badge, ${BADGE_PERIOD_LABEL[period]}`;
+
+  return (
+    <span
+      className={className ? `badge-placeholder ${className}` : 'badge-placeholder'}
+      role="img"
+      aria-label={label}
+    >
+      <BadgeGlyph kind={kind} period={period} block="badge-placeholder" />
     </span>
   );
 }
@@ -63,16 +135,29 @@ export function Badge({
 // without breaking the layout" - the non-compact empty state says so in
 // text; the compact one (inline in a leaderboard row) stays silent rather
 // than adding a caption to every unbadged row.
+//
+// `showPlaceholders` is opt-in and defaults to off, which is a decision and
+// not caution. The shelf has two call sites and only one of them wants
+// placeholders: the leaderboard draws a shelf per row, and six grey glyphs on
+// every row of a ranked list would bury the badges people actually won. A
+// default of `true` would have given it them by inheritance.
 export function BadgeShelf({
   badges,
   compact = false,
+  showPlaceholders = false,
 }: {
   badges: BadgeSummary[];
   compact?: boolean;
+  showPlaceholders?: boolean;
 }) {
   const className = compact ? 'badge-shelf badge-shelf--compact' : 'badge-shelf';
 
-  if (badges.length === 0) {
+  // Awards in, badge *types* out. `unearnedBadgeTypes` cannot see a
+  // `value` even though every award carries one - see its signature - so
+  // nothing on this shelf can come to depend on how far along the player is.
+  const placeholders = showPlaceholders ? unearnedBadgeTypes(badges) : [];
+
+  if (badges.length === 0 && placeholders.length === 0) {
     if (compact) {
       return <ul className={className} />;
     }
@@ -80,12 +165,45 @@ export function BadgeShelf({
   }
 
   return (
-    <ul className={className}>
-      {badges.map((badge) => (
-        <li key={`${badge.kind}-${badge.period}-${badge.periodKey}`}>
-          <Badge kind={badge.kind} period={badge.period} />
-        </li>
-      ))}
-    </ul>
+    <>
+      {badges.length > 0 && (
+        <ul className={className}>
+          {badges.map((badge) => (
+            <li key={`${badge.kind}-${badge.period}-${badge.periodKey}`}>
+              <Badge kind={badge.kind} period={badge.period} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {placeholders.length > 0 && (
+        <>
+          {/* A heading rather than a caption, so the six placeholders are
+              announced under their own label instead of extending the list of
+              badges the player holds. Level 3 because the only screen that
+              asks for placeholders puts this shelf under its own <h2>. */}
+          <h3 className="badge-shelf__heading">Not yet earned</h3>
+          <ul className="badge-shelf badge-shelf--placeholders">
+            {placeholders.map((type) => (
+              <li key={`${type.kind}-${type.period}`}>
+                <BadgePlaceholder kind={type.kind} period={type.period} />
+              </li>
+            ))}
+          </ul>
+          {/* The answer to "what do I have to do to get that?", given once for
+              the whole group rather than six times, and given in words because
+              the honest answer is not a number. A badge is a competition
+              decided at the end of its period (Section 7.7), so no score
+              secures one; the last clause says that outright, because a player
+              left to assume there is a hidden number would simply invent one.
+              Naming the two activities is as specific as this may get: the
+              threshold, the player's distance from it and their standing are
+              all things Section 7.7 keeps off the screen. */}
+          <p className="badge-shelf__note">
+            Explore new ground, master new bars. Each badge goes to whoever does the most of it in
+            its week, month or year; no fixed score wins one.
+          </p>
+        </>
+      )}
+    </>
   );
 }

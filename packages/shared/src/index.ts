@@ -12,6 +12,7 @@ export {
 } from './grid.js';
 export type { GridParams, LatLon } from './grid.js';
 export {
+  BADGE_PERIODS,
   badgePeriodBoundaries,
   badgePeriodDays,
   badgePeriodKey,
@@ -19,6 +20,8 @@ export {
   mostRecentlyClosedBadgePeriodKey,
 } from './berlin-time.js';
 export type { BadgePeriod, BadgePeriodBoundaries } from './berlin-time.js';
+export { BADGE_CATALOGUE, unearnedBadgeTypes } from './badges.js';
+export type { BadgeType } from './badges.js';
 export {
   isOnSite,
   isVisitComplete,

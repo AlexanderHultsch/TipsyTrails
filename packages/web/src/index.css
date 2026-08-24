@@ -1590,6 +1590,81 @@ button:focus-visible,
   font-size: 0.9375rem;
 }
 
+/* Section 7.7's placeholders: the badges a player has not earned, drawn so
+   they can be wanted. Same box, same paths, same ring count as the real thing
+   (components/Badge.tsx draws both from one definition) - everything that
+   separates the two states is here.
+
+   Three channels, and only one of them is colour. Section 8.1 forbids leaning
+   on colour alone and this palette makes it a weak signal anyway: grey ink on
+   warm paper is the same ink at lower contrast, which is nothing at all in
+   greyscale, in print, or to a player who perceives no colour. So the mark is
+   hollow rather than solid - a wall of ink around an empty middle, the state
+   grammar Section 8.1 already sets for the cocktail glass, and most of the
+   glyph's area disappearing - and the rings are broken rather than continuous,
+   which is the same reason Section 8.1 gives for drawing district boundaries
+   dashed. Either one alone survives being printed in black and white.
+
+   The opacity is what the owner asked for by "ausgegraut" and what keeps this
+   "sehr dezent": it is the channel that makes an earned badge unmistakably the
+   louder thing on a shelf holding both. Style values, not constants of the
+   specification - they belong here beside the ink they are drawn in, the same
+   way the palette and --bottom-nav-height do, and not in
+   packages/shared/src/config.ts. */
+.badge-placeholder {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+}
+
+.badge-placeholder__icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--color-ink);
+  opacity: 0.4;
+}
+
+.badge-placeholder__ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-dasharray: 2 2.5;
+}
+
+.badge-placeholder__mark {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.badge-shelf__heading {
+  margin: 1.5rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.badge-shelf--placeholders {
+  margin-top: 0.5rem;
+}
+
+/* The one line of copy that answers "what must I do to get that?". It sits
+   below the placeholders and stays quieter than they are, because the glyphs
+   are what raise the question and this only settles that the answer is not a
+   number. */
+.badge-shelf__note {
+  margin: 0.625rem auto 0;
+  max-width: 30rem;
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
 /* Leaderboard screen (Section 8.3/7.8): ranked list, metric/period toggles,
    pager. */
 .leaderboard__controls {

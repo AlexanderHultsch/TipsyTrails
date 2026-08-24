@@ -828,3 +828,59 @@ describe('index.css: scrollbar gutter', () => {
     ).toBe(true);
   });
 });
+
+// SPEC.md Section 8.1: the accent colour "is never the only carrier of
+// meaning - active states also change shape, weight, or label", and on a
+// near-monochrome palette that goes double for grey. A badge placeholder
+// (Section 7.7) is greyed because the owner asked for it to be, but greying
+// is a difference in lightness and nothing else: it is gone in a black-and-
+// white print, and it is the weakest of signals for anyone reading the shelf
+// at a glance. The earned/unearned distinction therefore also lives in the
+// shape of the glyph - the mark hollow rather than solid ink, the rings
+// broken rather than continuous - and both of those are declarations in this
+// file that no render test can see, because nothing in this repository
+// renders a component with this stylesheet applied.
+//
+// What this cannot prove is that the result reads well; that still needs
+// eyes. What it does prove is that removing either shape channel, and
+// leaving the difference to opacity or colour alone, fails the suite.
+describe('index.css: an unearned badge differs from an earned one in shape, not only in grey', () => {
+  function bodyFor(selector: string): string {
+    const matching = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim() === selector),
+    );
+    expect(matching.length, `no rule targets ${selector}`).toBeGreaterThan(0);
+    return matching.map((rule) => rule.body).join(' ');
+  }
+
+  it('fills the earned mark with ink and leaves the unearned one hollow', () => {
+    expect(bodyFor('.badge__mark')).toMatch(/fill\s*:\s*currentColor/);
+
+    const placeholderMark = bodyFor('.badge-placeholder__mark');
+    expect(
+      /fill\s*:\s*none/.test(placeholderMark) && /stroke\s*:\s*currentColor/.test(placeholderMark),
+      'a placeholder mark must be a wall of ink around an empty middle - most of ' +
+        'the glyph appearing or disappearing is what survives greyscale and print',
+    ).toBe(true);
+  });
+
+  it('breaks the unearned rings and leaves the earned ones continuous', () => {
+    expect(bodyFor('.badge__ring')).not.toMatch(/stroke-dasharray/);
+    expect(
+      bodyFor('.badge-placeholder__ring'),
+      'a placeholder ring must be dashed - the same channel Section 8.1 gives ' +
+        'district boundaries, and for the same reason: weight and opacity alone ' +
+        'cannot carry a distinction on this palette',
+    ).toMatch(/stroke-dasharray\s*:\s*\S/);
+  });
+
+  it('keeps the placeholder quieter than an earned badge as well', () => {
+    // The third channel, and the one the owner asked for by name
+    // ("ausgegraut", "sehr dezent"): an earned badge stays the louder thing
+    // on a shelf holding both.
+    expect(bodyFor('.badge__icon')).not.toMatch(/opacity/);
+    const opacity = /opacity\s*:\s*(0?\.\d+)/.exec(bodyFor('.badge-placeholder__icon'));
+    expect(opacity, '.badge-placeholder__icon must be drawn back from full ink').not.toBeNull();
+    expect(Number(opacity?.[1])).toBeLessThan(1);
+  });
+});

@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.30
+**Version:** 1.31
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -747,7 +747,7 @@ Two kinds, three periods, fixed thresholds (Section 7.1). Thresholds are constan
 
 **Design intent — read this before tuning any threshold.** A badge is a *competition*, decided once per period: it goes to the period's highest scorer, not to everyone who was active. The threshold is a **floor, not a target** — it exists only so the badge cannot be won by being the least inactive person in a quiet period. Thresholds are therefore deliberately easy, and should be lowered rather than raised if real-world use shows them excluding genuinely active players; raising one does not make the badge harder to win, it only makes "nobody won" more likely.
 
-The threshold is **never shown to users and no endpoint returns it**. Neither is any rank or standing: not "you are 2nd", not "0.3% to go". The profile shows a player their own value for the running period and nothing else, so the only thing a player can read off the game is what they themselves did.
+The threshold is **never shown to users and no endpoint returns it**. Neither is any rank or standing: not "you are 2nd", not "0.3% to go". The profile shows a player their own value for the running period and nothing else, so the only thing a player can read off the game is what they themselves did. Since v1.31 the profile does show something about badges *nobody* has won yet — placeholders, below — and that is a statement about which badges exist rather than about where the player stands; the paragraph that introduces them bounds exactly what they may carry, and none of it moves.
 
 **Awarding.** Candidates for a period are the users whose value is **greater than or equal to** the threshold for that period. If there are none, the badge is not awarded at all. Otherwise the badge goes to the candidate with the highest value, and to **every candidate tied at that highest value** — a tie awards all of them rather than being broken. (Section 7.8's "earliest achievement" tie-break orders the leaderboard and has no part in deciding a badge.) Badges already awarded are a permanent record of the periods a player won and are never revoked. Evaluation runs as a scheduled job shortly after each period closes (weekly Monday 04:00, monthly 1st 04:00, yearly Jan 1st 04:00, Europe/Berlin), and badges are written to the `badges` table.
 
@@ -756,6 +756,10 @@ The job is idempotent through the `UNIQUE (user_id, kind, period, period_key)` c
 The player's own value for the running period is shown on the profile, per kind and period, computed from the same `fog_daily_progress` sums. It is a plain reading of what they have done — no bar, no target, no percentage of a target, no rank.
 
 Badges are prominent and public: rendered on the profile as a badge shelf, and as compact icons inline in leaderboard rows. Anonymous users' badges are shown against their anonymous handle.
+
+**A badge a player has not earned is shown as a placeholder, and what makes a placeholder work is what it leaves out.** Under their own shelf a player sees one placeholder for every badge type they have never held: the same pictogram and the same ring count as the real thing, so it is recognisably *that* badge, drawn back in ink and additionally distinguished by shape — a hollow mark and broken rings — because grey against ink is a difference in lightness alone and Section 8.1 does not allow a distinction to rest on one channel. It is named as unearned in words, first words first, so nothing on the shelf can announce to a screen reader a badge its owner does not have. A placeholder may say that the badge exists, which kind it is, which period it belongs to, and — qualitatively, in words — the activity that earns it. It may not carry the threshold, the player's distance from one, a rank, a standing, a share of a target, a progress bar, or **anything that changes as the player's own value changes**. That last clause is the operative rule and not a restatement of the others: a placeholder that looked different once a player passed the floor would hand the floor straight back, readable by walking until the pixel changed. The set of placeholders therefore depends on which badges have been *earned* and on nothing else.
+
+The question a placeholder is meant to raise — what do I have to do to get that? — has no numeric answer even in principle, because a badge goes to the period's best rather than to everyone past the floor, and the profile says so in words rather than leaving a player to invent a number: it names the two activities and states that no fixed score wins a badge. A placeholder disappears at the first award and does not come back: a type is off the shelf permanently once it has been won once, in any period key, because badges recur and a placeholder that returned each period would be shown to a player who owns several of that badge, blinking off only when the evaluation job ran. Since awarded badges are never revoked, the earned set only grows and the placeholder set only shrinks, so neither can flicker. Placeholders belong to the player whose question they raise: they appear on that player's own profile, and not in leaderboard rows, and not on another player's profile — where "three of the six" would be a completion score comparable between players, which is a standing by another name.
 
 ### 7.8 Leaderboard
 
@@ -803,6 +807,8 @@ Four constraints bound it, and each of them is the whole point of one of the dec
 
 The mark deliberately does not appear on the nearby-bars panel, which names what is in range and is a `role="status"` statement carrying no per-bar affordance (Sections 7.5, 8.3), nor on the admin bar list, which is moderation rather than play and is not scoped to one player's mastery at all.
 
+**A state may not rest on grey either.** The rule above is written about the accent colour, and v1.31 found the gap: greying something out is a difference in lightness, which survives no black-and-white print and is the weakest signal on a palette that is already near-monochrome. So the badge placeholders of Section 7.7 are greyed *and* hollow *and* dashed, and anything else that separates two states by drawing one back must likewise put the same distinction into shape, weight or label.
+
 **Restraint does not override legibility.** A near-monochrome palette makes it easy to land below WCAG AA contrast without noticing. Body text and interactive labels meet 4.5:1 against their background, large text and icons 3:1. The accent red is never the only carrier of meaning — active states also change shape, weight, or label. The status icons of Section 8.6 are the single exception to that sentence, admitted by the same decision that narrowed the palette above, and they pay for it under their own rule: their colours must separate in luminance, not only in hue (Section 8.6). This is checked in Phase 8.
 
 ### 8.2 Typography and layout
@@ -826,7 +832,7 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 | District overview | All districts with individual progress percentages; tap to zoom in — which opens the map framed on that district, see below |
 | Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — the discovery stamp (7.4), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons |
 | Bar detail (`/bars/:id`) | Name, address, district, mastered status — the cocktail glass of Section 8.1 with the state in words beside it — community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
-| Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
+| Profile | Username, avatar, badge shelf — on the player's own profile followed by a placeholder for every badge they have never earned (7.7) — area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
 | Suggest a bar | Map picker + name + address |
 | Settings | Anonymous toggle, push permission, change password, how-it-works, privacy, delete account, logout |
@@ -1336,11 +1342,94 @@ These are consequences to design around, not reasons to reconsider:
 | O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at one minus the fallback's flat alpha (the middle of the WebGL path's density range since v1.28, Section 7.3). Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
 | O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
 | O15 | The fog flickering the owner saw on a tilted map (v1.25) is unexplained. Pitch is now unreachable (Section 8.3), which removes the trigger he found, but not necessarily the mechanism. Two candidate causes were ruled out by inspection: the fog quad does not stop covering the screen under pitch (`getBounds`' horizon clamp in maplibre-gl 4.7.1 only engages past ~69° for the default field of view, and the camera capped at 60° before this change), and the quad's UVs — linear in latitude across vertices placed in mercator — deviate by under 0.4 m at any pitch that was reachable, against a 50 m cell. What is left is GPU-side and cannot be observed in this repository's tests (jsdom has no WebGL2): the fog texture is `LINEAR` with no mipmaps, and the fragment shader is `precision mediump float` while sampling a ±1-texel blur kernel in UV space. Both degrade wherever one screen pixel covers several cells, which a pitched view produced in its far half — and which zooming out towards `MAP_MIN_ZOOM` produces on a flat map too, where a 50 m cell is well under a pixel. **Half of this was acted on in v1.28 and half was assessed and declined.** The precision was wrong on its own terms, independently of the shimmer: one texel of the 417 × 343 grid is 0.0024 of UV, and `mediump` — fp16 on the GPUs this runs on — resolves about 0.001 near UV 1.0, so a ±1-texel blur offset was barely two representable steps and the ±1.5-texel noise warp quantised to a handful of positions, both of them moving as the camera moves. The shader is now `precision highp float` with a `highp` sampler; GLSL ES 3.00 requires `highp` in the fragment stage, so WebGL2 being available is already the guarantee it compiles, and it costs nothing on any GPU this reaches. Mipmaps were assessed and are **not** the right fix: the mask is binary and the shader already blurs it explicitly at a radius Section 7.3 fixes, so a mip chain would add a second, zoom-dependent blur that widens the edge by an amount no constant controls; `texSubImage2D` does not update mip levels, so every reveal would have to regenerate the whole chain, at frame rate through the 600 ms reveal animation, against a spec that requires reveals to touch only the changed region; and the ±1-texel offsets are in level-0 texels, which stop meaning one texel the moment a coarser level is selected. Item stays **open**: the precision fix is deliberate but unconfirmed — nothing in this repository can execute the shader, so whether the shimmer is gone still needs a real device at low zoom. | Open — narrowed |
+| O16 | `CONFIG.BADGE_THRESHOLDS` reaches the browser, so Section 7.7's promise holds in its literal wording and not in its spirit. The section says the threshold is "never shown to users and no endpoint returns it", and both remain true: nothing renders a threshold, and no route serializes one. But `CONFIG` is a single object literal and `packages/web` imports it as a *value* in eight modules (`api/types.ts`, `TrackingIndicator.tsx`, `map/ink-style.ts`, `map/bars/bar-stamps.ts`, `MapPicker.tsx`, `tracking/useSampleTracking.ts` and two under `map/fog/`), so the whole object is bundled: a production build contains `explorer:{week:.1,month:.3,year:2},barfly:{week:1,month:2,year:3}` in plain text, readable in devtools in seconds. This predates v1.31 and was found by the change that introduced badge placeholders, which deliberately did not make it worse — `packages/shared/src/badges.ts` reads only `Object.keys(CONFIG.BADGE_THRESHOLDS)`, and `api/types.ts` only `keyof typeof`, both of which erase at compile time. Closing it means splitting `CONFIG` into a client-safe half and a server-only half and changing every one of those imports, which is a cross-cutting change and was rightly not folded into a UI block. The exposure is mild — the thresholds are floors, deliberately easy, and a badge goes to the period's best rather than to everyone past the floor, so knowing the number tells a player very little — but the specification should not read as a guarantee it does not enforce. | Open |
 
 
 ---
 
 ## 15. Changelog
+
+### v1.31 — a player can see the badges they have not won, and still cannot see the number
+
+One request from the owner, about the half of the badge system nobody had ever been shown: until a
+player won something, the shelf was one sentence saying they had not. There was nothing to want. The
+profile now draws a placeholder for every badge type the player has never held — the same pictogram,
+the same ring count, greyed and hollow — so the question the owner wanted asked can be asked at all.
+Section 7.7 records what one may and may not carry.
+
+**The request and the specification collided head-on, and the resolution is the owner's own fourth
+bullet.** "Was muss ich tun, um DAS zu bekommen?" reads as a request for a number, and the number is
+exactly what Section 7.7 forbids: the threshold is never shown and no endpoint returns it, and
+neither is a rank or a standing. *Ohne vollständige Informationen* is not a concession in that list
+of four, it is the mechanism — a placeholder that answered the question would end the curiosity it
+exists to create. So nothing was softened. The placeholder says the badge exists, which kind it is
+and which period it belongs to, and stays silent about the rest.
+
+**There is a harder reason than policy, and it is why no progress bar was drawn.** A badge is a
+competition: it goes to the period's highest scorer, and the threshold is only a floor that stops it
+being won by being the least inactive person. "What must I do" therefore has no true numeric answer
+even in principle — it depends on what everyone else does that week. A bar filling toward a floor
+would not merely have leaked a forbidden number, it would have promised a badge for reaching a number
+that does not win one. What the profile says instead is the true answer, in words: it names the two
+activities and states outright that no fixed score wins a badge. A player told nothing at all would
+have assumed a hidden number and gone looking for it.
+
+**One thing the change found and did not fix.** The brief for this work said that importing
+`BADGE_THRESHOLDS` into `packages/web` would be a wrong turn. It is not, because it has already
+happened: `CONFIG` is one object literal and eight modules under `packages/web` import it as a value,
+so the thresholds ship in the bundle and read out of devtools in plain text. Section 7.7's wording
+survives — nothing renders them, no endpoint returns them — but its spirit does not, and the gap was
+there before this change rather than being opened by it. Nothing here made it worse: the catalogue
+reads `Object.keys` and the kind type reads `keyof typeof`, both of which erase at compile time.
+Splitting `CONFIG` in two is a cross-cutting change and belongs to its own task, so it is recorded as
+O16 rather than smuggled into a change about a shelf of glyphs.
+
+**The rule that decided the implementation is the one that sounds like a detail.** No part of a
+placeholder may change as the player's own value changes. If a placeholder brightened, or said
+"nearly", or moved at all once a player crossed the floor, the floor could be read straight off the
+screen by walking until the pixel changed — a leak of the same number by a slower route. The
+placeholder set is therefore keyed on which badges have been *earned* and on nothing else, and that is
+enforced by the shape of the function rather than by a comment: `unearnedBadgeTypes` takes
+`{ kind, period }` and cannot see a value, though every award record passed to it carries one. There
+is a test that renders two players identical in what they have earned and as far apart as the data
+allows in what they are currently worth, and compares the rendered markup rather than the labels, so
+a leak dressed as a class name fails it too.
+
+**Grey is not a distinction, and that is now written down.** Section 8.1 already said the accent
+colour may never be the only carrier of meaning; it said nothing about drawing something back, which
+is the same failure at lower contrast — gone in a black-and-white print, and the weakest signal
+available on a palette that is near-monochrome to begin with. A placeholder is therefore greyed *and*
+hollow *and* dashed: the mark is a wall of ink around an empty middle, which is the state grammar
+Section 8.1 already set for the cocktail glass and is most of the glyph appearing or disappearing,
+and the rings are broken, which is the channel that same section gives district boundaries and for
+the same stated reason. Either shape channel alone survives greyscale. Section 8.1 now generalises
+the rule beyond the accent.
+
+**The names are the part that could have done real harm.** An earned badge announces "Explorer badge,
+week". A placeholder announcing the same words would tell a screen reader user they hold badges they
+do not, which is the single worst outcome available in this change, so the state leads rather than
+trails: "Not yet earned: Explorer badge, week". A listener who stops after the first words is exactly
+the person that failure lands on, and the first words are what settles it.
+
+**A placeholder ends at the first award, and belongs to one player.** Badges recur — explorer/week is
+won again every week someone leads it — so a placeholder keyed on the period *key* would return every
+Monday, show a player a badge they own several of, and blink off whenever the evaluation job ran. It
+is keyed on the type instead: won once, in any period, and it is gone permanently. Awarded badges are
+never revoked, so the earned set only grows and the placeholder set only shrinks; neither can
+flicker. And they are drawn only on the player's own profile. The leaderboard renders a shelf per
+row, where six grey glyphs per row would bury the badges people actually won; another player's
+profile would turn them into an inventory of what that player failed to win, with "three of the six"
+a completion score comparable between players — a standing by another name, which this section
+declines to publish. The shelf takes placeholders as an opt-in that defaults to off, so neither call
+site inherits them by accident.
+
+**The list of badges that exist is derived rather than written out**, in `packages/shared`, from the
+key set of `BADGE_THRESHOLDS` and the three periods. Listing the six pairs by hand would be shorter
+and would type-check forever — a subset of a union is still assignable to it — so a third kind added
+to the configuration would have produced a five-badge catalogue in silence instead of an error. The
+period tuple is now the thing the `BadgePeriod` union is derived *from*, for the same reason: an array
+beside a union is two places to add a fourth period, only one of which fails to compile. No threshold
+value is read anywhere in it, only the names of the keys.
 
 ### v1.30 — discovering a bar becomes a moment, and the map stamps it where it happened
 
@@ -2327,4 +2416,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.30*
+*End of specification v1.31*

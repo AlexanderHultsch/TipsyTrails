@@ -395,7 +395,19 @@ describe('empty states', () => {
 
     await renderApp('/profile/player-1');
 
-    expect(container.querySelector('.badge-shelf__empty')?.textContent).toContain('No badges yet');
+    // Section 7.7: what a player with no badges is shown is the badges they
+    // could have. The bare "No badges yet" sentence this used to assert was
+    // the whole of it, and it told a new player nothing about what exists to
+    // want - so the placeholders and their one line of copy replace it here
+    // rather than sitting under it. The sentence still stands where there are
+    // no placeholders to show (another player's profile, below).
+    expect(container.querySelector('.badge-shelf__empty')).toBeNull();
+    expect(
+      container.querySelectorAll('.badge-shelf--placeholders .badge-placeholder'),
+    ).toHaveLength(6);
+    expect(container.querySelector('.badge-shelf__note')?.textContent).toContain(
+      'Explore new ground',
+    );
   });
 
   it('hints at exploring when the map has no discovered bars yet', async () => {

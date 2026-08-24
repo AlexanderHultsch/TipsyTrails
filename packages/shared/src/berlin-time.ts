@@ -35,7 +35,16 @@ export function berlinDateString(atMs: number = Date.now()): string {
 //   math even though the Berlin day it represents may be 23 or 25 hours.
 // ---------------------------------------------------------------------------
 
-export type BadgePeriod = 'week' | 'month' | 'year';
+// The three periods, shortest first, and the union derived from the tuple
+// rather than written twice. Section 7.7's "two kinds, three periods" needs a
+// runtime list as well as a type - the badge catalogue (badges.ts) enumerates
+// every period, and the profile lists the player's value for each - and a
+// hand-written array beside a hand-written union is two places to add a
+// fourth period, of which only one fails to compile. Ordering is load-bearing
+// where the list is rendered: it ascends week -> month -> year.
+export const BADGE_PERIODS = ['week', 'month', 'year'] as const;
+
+export type BadgePeriod = (typeof BADGE_PERIODS)[number];
 
 export interface BadgePeriodBoundaries {
   startS: number;
