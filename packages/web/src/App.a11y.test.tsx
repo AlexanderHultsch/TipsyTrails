@@ -271,7 +271,10 @@ describe('the status-icon palette (SPEC.md Section 8.1/8.6)', () => {
   // out of the button's own rule rather than repeated here), and the
   // darkest ground that fill can sit over is fully fogged terrain - the fog
   // layer's own colour at CONFIG.FOG_MAX_OPACITY over paper, which
-  // composites to rgb(204, 199, 187). FOG_COLOR is not exported from
+  // composites to rgb(201, 196, 183). Since v1.28 that constant is the
+  // ceiling of a range rather than one flat value (Section 7.3), which is
+  // exactly the worst case this wants: no patch of fog is ever denser, so
+  // no ground under this button is ever darker. FOG_COLOR is not exported from
   // map/fog/webgl-fog-layer.ts, so it is mirrored here by hand, the same
   // way map/ink-style.ts mirrors PAPER and INK; the paper it is blended
   // over and the button fill on top of it are both read live.
@@ -304,7 +307,7 @@ describe('the status-icon palette (SPEC.md Section 8.1/8.6)', () => {
   const HUE_GAP_MIN = 30;
 
   it('the fogged ground the button sits over is the one Section 7.3 produces', () => {
-    expect(foggedGround).toBe('#ccc7bb');
+    expect(foggedGround).toBe('#c9c4b7');
   });
 
   it.each(levels)('%s clears 3:1 against the paper ground', (_name, colour) => {

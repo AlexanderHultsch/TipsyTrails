@@ -53,6 +53,70 @@ export function glslInt(value: number): string {
   return String(value);
 }
 
+/**
+ * SPEC.md Section 7.3's uneven fog density, as octaves of one value noise
+ * summed at falling amplitude - fractional Brownian motion, the ordinary
+ * construction. The count is the whole judgement here and three is it.
+ *
+ * One octave is a lattice, and a lattice reads as a regular grid of blobs at
+ * whatever zoom makes its period a comfortable fraction of the screen - the
+ * "visible cloud texture" this must not become. Two hide that only partly,
+ * because a frequency ratio of 2 puts the second lattice's corners exactly on
+ * the first one's and the two grids agree instead of cancelling. Three, at
+ * ratios that are not whole multiples of each other and each shifted by its
+ * own offset so the lattices do not share an origin either, leave no common
+ * grid to find.
+ *
+ * A fourth would buy nothing but detail at cell scale, and detail at cell
+ * scale is precisely what stops reading as uneven density and starts reading
+ * as a texture. More is not better here: Section 7.3's "no regular cloud
+ * texture" is a ceiling on how structured this may look.
+ *
+ * The frequencies are relative to CONFIG.FOG_DENSITY_NOISE_CELLS, so the
+ * finest feature is that many cells divided by the last frequency - about 5
+ * cells, deliberately kept well above the size of a screen pixel at
+ * MAP_MIN_ZOOM, where anything finer would alias into shimmer.
+ */
+export const FOG_DENSITY_OCTAVES = [
+  { frequency: 1, amplitude: 1, offset: 0 },
+  { frequency: 2.13, amplitude: 0.5, offset: 19.3 },
+  { frequency: 4.57, amplitude: 0.25, offset: 41.1 },
+] as const;
+
+const DENSITY_NOISE_EXPRESSION = FOG_DENSITY_OCTAVES.map(
+  (octave) =>
+    `${glslFloat(octave.amplitude)} * valueNoise(p * ${glslFloat(octave.frequency)} + ${glslFloat(octave.offset)})`,
+).join('\n    + ');
+
+const DENSITY_AMPLITUDE_TOTAL = FOG_DENSITY_OCTAVES.reduce(
+  (total, octave) => total + octave.amplitude,
+  0,
+);
+
+/**
+ * The fog's alpha, mirrored in TypeScript.
+ *
+ * `edgeFactor` is the shader's `smoothstep(EDGE_ALPHA_LOW, EDGE_ALPHA_HIGH,
+ * fog)` - 0 on revealed ground, 1 on fully unrevealed ground - and `density`
+ * is the fBm above, which is bounded to 0..1 by construction.
+ *
+ * The density term multiplies *into* the same product as the edge factor
+ * rather than being added beside it, and that is the property that keeps
+ * revealed ground revealed: at `edgeFactor === 0` the whole expression is 0
+ * whatever the density is. A term added outside the product would put a haze
+ * on ground the player has earned, which is the opposite of the mechanic.
+ *
+ * This exists because the shader is a string that cannot be executed in this
+ * repository - jsdom has no WebGL2 - so the arithmetic is tested here and the
+ * shader source is held to the same expression by a substring assertion in
+ * webgl-fog-layer.test.ts. That pairing is textual, not semantic: it proves
+ * the two say the same thing today, and it is the strongest guarantee
+ * available without a GPU.
+ */
+export function fogAlpha(edgeFactor: number, density: number): number {
+  return edgeFactor * (CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION * density);
+}
+
 const VERTEX_SHADER = `#version 300 es
 uniform mat4 u_matrix;
 in vec2 a_position;
@@ -83,9 +147,28 @@ void main() {
 //
 // The blur bounds must be compile-time constants, which is why the radius is
 // interpolated into the source rather than passed as a uniform.
+//
+// Everything above is the *edge*. Inside it the fog used to be a flat wash at
+// one alpha, which read as a sheet of tracing paper laid over the map rather
+// than as unexplored ground. `fogDensity` below varies that alpha with noise
+// sampled in grid space, so a patch of the city keeps its own density as the
+// camera moves over it - see `main`, and `FOG_DENSITY_OCTAVES` for why the
+// noise is layered the way it is.
+//
+// PRECISION IS `highp` DELIBERATELY (SPEC.md Open Item O15). This shader
+// takes a +/-1-texel blur kernel and a +/-1.5-texel noise warp in UV space,
+// and on Karlsruhe's 417 x 343 grid one texel is 0.0024 of UV. `mediump` is
+// only guaranteed to 10 bits of mantissa - and is fp16 on the mobile GPUs
+// this actually runs on - so near UV 1.0 its steps are about 0.001, which
+// makes a one-texel offset barely two representable steps: neighbouring blur
+// taps collapse onto the same texel and the warp quantises to a handful of
+// discrete positions, both of which change as the camera moves. `highp` is
+// fp32, roughly 20,000 steps per texel, and GLSL ES 3.00 requires it in the
+// fragment stage, so WebGL2 being available is already the guarantee that
+// this compiles. The density noise below needs it for the same reason.
 const FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
-uniform sampler2D u_fog;
+precision highp float;
+uniform highp sampler2D u_fog;
 uniform vec2 u_texelSize;
 uniform vec3 u_fogColor;
 in vec2 v_uv;
@@ -106,12 +189,32 @@ float valueNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// The fog's own density, 0..1, from FOG_DENSITY_OCTAVES (see the comment on
+// that constant for why there are three of them and not one or four). Every
+// octave is bounded to 0..1 and the sum is divided by the total amplitude, so
+// this is bounded to 0..1 too - which is what makes FOG_MAX_OPACITY an
+// exact ceiling rather than an approximate one.
+float fogDensity(vec2 p) {
+  return (
+    ${DENSITY_NOISE_EXPRESSION}
+  ) / ${glslFloat(DENSITY_AMPLITUDE_TOTAL)};
+}
+
 // Section 7.3: fog dense enough to hide detail, short of literal alpha 1 so
 // unrevealed ground still reads as fogged terrain rather than as a blank
-// panel. Orientation on unrevealed ground comes from the motorway layer,
-// which is drawn *above* this one (ink-style.ts, fog-controller.ts), not
-// from what shows through here.
+// panel. Orientation on unrevealed ground comes from the road and water
+// layers, which are drawn *above* this one (ink-style.ts, fog-controller.ts),
+// not from what shows through here.
+//
+// This is the alpha of the DENSEST fog and the ceiling on every fragment,
+// not one value the whole quad is painted at - see config.ts.
 const float FOG_MAX_OPACITY = ${glslFloat(CONFIG.FOG_MAX_OPACITY)};
+
+// Section 7.3's uneven density, from CONFIG. The noise thins the fog by up to
+// FOG_DENSITY_VARIATION below the ceiling, never above it, so the fog's alpha
+// runs over [FOG_MAX_OPACITY - FOG_DENSITY_VARIATION, FOG_MAX_OPACITY].
+const float FOG_DENSITY_VARIATION = ${glslFloat(CONFIG.FOG_DENSITY_VARIATION)};
+const float DENSITY_NOISE_CELLS = ${glslFloat(CONFIG.FOG_DENSITY_NOISE_CELLS)};
 
 // Section 7.3's edge, from CONFIG.FOG_EDGE_* - a whole number of cells for
 // the blur's loop bounds, and the alpha ramp as a tight band centred on the
@@ -121,14 +224,39 @@ const float EDGE_ALPHA_LOW = ${glslFloat(0.5 - CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH)
 const float EDGE_ALPHA_HIGH = ${glslFloat(0.5 + CONFIG.FOG_EDGE_ALPHA_HALF_WIDTH)};
 
 void main() {
+  // THE DENSITY IS ANCHORED TO THE GROUND, NOT TO THE SCREEN. v_uv is the
+  // grid's own coordinate - grid-geometry.ts derives it from the quad
+  // corners' longitude and latitude against the grid's fixed south-west and
+  // north-east corners, so a given patch of the city has one (u, v) forever
+  // and the camera does not appear in it at all. Sampling the noise here
+  // therefore gives every patch of the city its own density and keeps it as
+  // the map moves underneath. Anything screen-derived - the window-relative
+  // fragment position, the mercator position, the blurred sample position -
+  // would make the fog crawl and shimmer under a pan, which is worse than a
+  // flat wash. (The window-relative position is not named here in so many
+  // words on purpose: webgl-fog-layer.test.ts asserts its identifier appears
+  // nowhere in this source, and a comment would satisfy that assertion.)
+  //
+  // Dividing by (u_texelSize * DENSITY_NOISE_CELLS) turns UV into units of
+  // that many grid cells on both axes, so the noise is isotropic in cells
+  // rather than stretched by the grid's 417:343 aspect.
+  float density = fogDensity(v_uv / (u_texelSize * DENSITY_NOISE_CELLS));
+  float fogOpacity = FOG_MAX_OPACITY - FOG_DENSITY_VARIATION * density;
+
   // The quad reaches past the grid into the map's padding ring
   // (grid-geometry.ts), which has no cells and so can never be revealed.
   // WebGL2 has no CLAMP_TO_BORDER, and CLAMP_TO_EDGE would smear the
   // grid's edge texels across that whole ring - a cell revealed at the
   // city's edge would trail a cleared stripe out to the boundary - so the
   // ring is decided here instead of by the sampler.
+  //
+  // It takes the same density as the interior rather than a flat
+  // FOG_MAX_OPACITY: the noise is continuous across UV 0 and 1, so this
+  // carries the density straight over the grid's boundary. Left flat, the
+  // ring would sit at the ceiling against an interior that is mostly below
+  // it, and the grid's edge would appear as a rectangle drawn on the fog.
   if (v_uv.x < 0.0 || v_uv.x > 1.0 || v_uv.y < 0.0 || v_uv.y > 1.0) {
-    fragColor = vec4(u_fogColor * FOG_MAX_OPACITY, FOG_MAX_OPACITY);
+    fragColor = vec4(u_fogColor * fogOpacity, fogOpacity);
     return;
   }
 
@@ -146,7 +274,10 @@ void main() {
     }
   }
   float fog = sum / weight;
-  float alpha = smoothstep(EDGE_ALPHA_LOW, EDGE_ALPHA_HIGH, fog) * FOG_MAX_OPACITY;
+  // The density multiplies into the same product as the edge factor, so
+  // revealed ground - where the smoothstep is 0 - stays at alpha 0 whatever
+  // the density is. See fogAlpha() above, which mirrors this line.
+  float alpha = smoothstep(EDGE_ALPHA_LOW, EDGE_ALPHA_HIGH, fog) * fogOpacity;
   // Premultiplied alpha - MapLibre's custom-layer blend func is
   // gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) (see CustomLayerInterface).
   fragColor = vec4(u_fogColor * alpha, alpha);

@@ -15,8 +15,21 @@ import type { GridSize } from './grid-texture.js';
 // (webgl-fog-layer.ts), converted to CSS rgba. The colour stays an
 // independent implementation of the one visual direction (Section 8.1), the
 // same way the WebGL shader's colour isn't imported from ink-style.ts
-// either; the alpha does not - both renderers read CONFIG.FOG_MAX_OPACITY,
-// so the two paths cannot drift apart on how dense the fog is.
+// either; the alpha does not - both renderers derive it from
+// CONFIG.FOG_MAX_OPACITY, so the two paths cannot drift apart on how dense
+// the fog is.
+//
+// ONE FLAT ALPHA, AT THE MIDDLE OF THE WEBGL PATH'S RANGE. Section 7.3's
+// uneven density is a noise field evaluated per fragment, which is the
+// feature parity this renderer is told not to attempt. But FOG_MAX_OPACITY
+// stopped being "the alpha of the fog" when that landed and became the alpha
+// of its *densest* patch, so painting this canvas at FOG_MAX_OPACITY would
+// silently make the fallback denser than any ground the WebGL path actually
+// produces on average - a change nobody asked for, arriving as a side effect
+// of a change to the other renderer. The honest single value for a range is
+// its midpoint, and the density noise is symmetric about it, so that is what
+// this uses: the fallback shows the same fog as the WebGL path does on
+// average, with none of its variation.
 //
 // WHAT THIS RENDERER CANNOT DO. The WebGL path is a MapLibre style layer and
 // is inserted directly beneath the motorway layer (fog-controller.ts), so
@@ -25,10 +38,12 @@ import type { GridSize } from './grid-texture.js';
 // overlay above the entire map, not a style layer - so there is no way to
 // interleave it with the vector layers. On a device without WebGL2 the fog
 // therefore covers everything uniformly, motorways included, and every
-// detail of the base map keeps showing through it at 1 - FOG_MAX_OPACITY.
+// detail of the base map keeps showing through it at 1 -
+// FALLBACK_FOG_OPACITY.
 // This is a real divergence in what a user sees, not an approximation; it
 // is recorded as an Open Item in SPEC.md Section 14.
-const FOG_CSS_COLOR = `rgba(199, 194, 182, ${CONFIG.FOG_MAX_OPACITY})`;
+const FALLBACK_FOG_OPACITY = CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION / 2;
+const FOG_CSS_COLOR = `rgba(199, 194, 182, ${FALLBACK_FOG_OPACITY})`;
 
 export interface CanvasFogFallbackOptions {
   map: MaplibreMap;

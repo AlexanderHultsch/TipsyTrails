@@ -103,10 +103,18 @@ describe('CanvasFogFallback', () => {
     expect(ctxRig.fillRectCalls[0].op).toBe('source-over');
   });
 
-  // Both renderers read one fog opacity (CONFIG.FOG_MAX_OPACITY) so they
-  // cannot drift apart on how dense the fog is - the WebGL shader's half of
-  // this is asserted in webgl-fog-layer.test.ts.
-  it('fills the fog at the configured opacity rather than a literal of its own', () => {
+  // Both renderers derive their fog opacity from CONFIG.FOG_MAX_OPACITY so
+  // they cannot drift apart on how dense the fog is - the WebGL shader's
+  // half of this is asserted in webgl-fog-layer.test.ts.
+  //
+  // This path paints one flat alpha because Section 7.3 tells it not to
+  // chase the WebGL path's per-fragment density. The value it paints is the
+  // MIDDLE of that path's range and not its ceiling: FOG_MAX_OPACITY is the
+  // alpha of the densest fog, so taking it literally here would have made
+  // the fallback denser than the ground the other renderer actually produces
+  // on average, as an unintended side effect of a change to the other
+  // renderer.
+  it('fills the fog at the middle of the WebGL path opacity range, not at its ceiling', () => {
     const { map } = createFakeMap();
     new CanvasFogFallback({
       map: map as unknown as MaplibreMap,
@@ -115,8 +123,21 @@ describe('CanvasFogFallback', () => {
       getMask: emptyMask,
     });
 
+    const expected = CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION / 2;
     const fogFill = ctxRig.fillRectCalls.find((call) => call.op === 'source-over');
-    expect(fogFill?.style).toBe(`rgba(199, 194, 182, ${CONFIG.FOG_MAX_OPACITY})`);
+    expect(fogFill?.style).toBe(`rgba(199, 194, 182, ${expected})`);
+    // And it is not the ceiling, so long as there is any variation at all.
+    expect(fogFill?.style).not.toBe(`rgba(199, 194, 182, ${CONFIG.FOG_MAX_OPACITY})`);
+  });
+
+  // The fallback's flat alpha is a compromise, but not one that is allowed to
+  // stop being fog: Section 7.3 requires the fog to hide detail rather than
+  // tint it, on this path as much as on the other one.
+  it('keeps the fallback opacity inside the WebGL path range and dense enough to hide detail', () => {
+    const opacity = CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION / 2;
+    expect(opacity).toBeLessThan(CONFIG.FOG_MAX_OPACITY);
+    expect(opacity).toBeGreaterThan(CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION);
+    expect(opacity).toBeGreaterThanOrEqual(0.8);
   });
 
   it('punches exactly one destination-out hole per revealed cell', () => {

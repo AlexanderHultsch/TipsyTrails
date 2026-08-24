@@ -3,12 +3,63 @@ export const CONFIG = {
   FOG_MAX_SPEED_KMH: 30, // above this, no reveal
   FOG_MAX_ACCURACY_M: 200, // samples worse than this are discarded entirely
   FOG_REVEAL_ANIMATION_MS: 600, // SPEC.md Section 7.3
-  // Alpha of fully unrevealed fog, 0..1 — SPEC.md Section 7.3. Read by both
-  // renderers: the WebGL shader's FOG_MAX_OPACITY (webgl-fog-layer.ts) and
-  // the 2D canvas fallback's rgba() fill (canvas-fallback.ts). High enough
-  // that the fog hides detail rather than merely tinting it; the motorway
-  // layer stays legible by being drawn above the fog, not through it.
-  FOG_MAX_OPACITY: 0.88,
+  // Alpha of the DENSEST unrevealed fog, 0..1 — SPEC.md Section 7.3. Read by
+  // both renderers: the WebGL shader's FOG_MAX_OPACITY (webgl-fog-layer.ts)
+  // and the 2D canvas fallback's rgba() fill (canvas-fallback.ts). High
+  // enough that the fog hides detail rather than merely tinting it; the road
+  // and water layers stay legible by being drawn above the fog, not through
+  // it.
+  //
+  // This is a CEILING, not the single value the whole fog is painted at. It
+  // used to be both, which is what made the fog a flat wash; since v1.28 the
+  // WebGL renderer thins it by up to FOG_DENSITY_VARIATION below this
+  // figure, so the fog's floor is FOG_MAX_OPACITY - FOG_DENSITY_VARIATION
+  // and this number is the alpha of the densest patch and the alpha no fog
+  // anywhere ever exceeds.
+  //
+  // The variation only ever goes DOWNWARD from here, and that is what lets
+  // this constant keep exactly one reading everywhere it is already read.
+  // Every other consumer wants the *worst case* — the darkest ground the fog
+  // can put under something drawn on top of it: the road opacity's contrast
+  // argument (map/ink-style.ts), the status icons' contrast floor
+  // (App.a11y.test.tsx) and the canvas fallback's flat fill. A variation that
+  // went upward, or that straddled a midpoint, would silently understate that
+  // worst case in all three.
+  //
+  // Raised from 0.88 in v1.28. Nudge this to change how dense the fog is at
+  // its densest and FOG_DENSITY_VARIATION to change how uneven it is; they
+  // are one pair of knobs, and the floor is their difference (0.84 as set
+  // here). Raising it past 1.0 is meaningless — alpha is clamped by the GPU.
+  FOG_MAX_OPACITY: 0.96,
+
+  // SPEC.md Section 7.3's uneven fog, and the knob for how uneven. How far
+  // BELOW FOG_MAX_OPACITY the density noise may thin the fog: the fog's alpha
+  // runs over [FOG_MAX_OPACITY - FOG_DENSITY_VARIATION, FOG_MAX_OPACITY], and
+  // 0 here is exactly the flat wash this replaced.
+  //
+  // What a player sees vary is how much of the base map bleeds through the
+  // fog: 4% under the densest patch and 16% under the thinnest, against a
+  // flat 12% before. It is bounded from below on purpose — the thinnest patch
+  // still has to hide detail rather than tint it, which Section 7.3 requires
+  // of the fog everywhere and is not a matter of taste — and bounded from
+  // above by nothing but that, because a variation the player cannot make out
+  // is the flat wash again under another name.
+  FOG_DENSITY_VARIATION: 0.12,
+
+  // The period, in grid cells, of the coarsest octave of that density noise —
+  // 24 cells is 1.2 km at Karlsruhe's 50 m cell, so a walk crosses a few
+  // patches rather than standing in one. Two finer octaves sit under it
+  // (webgl-fog-layer.ts fixes their frequencies), putting the finest feature
+  // at about 5 cells across.
+  //
+  // Deliberately no finer than that, for two separate reasons. A feature
+  // approaching the size of a screen pixel aliases into shimmer, and
+  // MAP_MIN_ZOOM is where a 50 m cell is already down to about two pixels.
+  // And detail at cell scale is what stops reading as uneven density and
+  // starts reading as a texture, which is the one thing Section 7.3 rules
+  // out here. This is the "does it look like clouds" knob: larger is vaguer,
+  // smaller is more structured, and more structured is the failure.
+  FOG_DENSITY_NOISE_CELLS: 24,
 
   // SPEC.md Section 7.3, "Rendering". The WebGL fog quad is rebuilt every
   // frame from the map's *current viewport* (`grid-geometry.ts`), and this
