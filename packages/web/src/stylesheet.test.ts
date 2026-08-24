@@ -526,6 +526,80 @@ describe('index.css: the map screen lays its overlays out, it does not pile them
   });
 });
 
+// SPEC.md Sections 7.4/8.3's bar stamp. Three of the things this feature
+// promises are single declarations in this file with no visible effect until
+// a real browser lays the map out, and jsdom renders none of them - the same
+// limit every scan in this file works under, and the reason each of these is
+// checked as text rather than by rendering the map.
+describe('index.css: the bar stamp (SPEC.md Sections 7.4, 8.3)', () => {
+  const css = readFileSync(fileURLToPath(new URL('./index.css', here)), 'utf-8');
+
+  function bodiesFor(selector: string): string[] {
+    return rules()
+      .filter((rule) => rule.selector.split(',').some((part) => part.trim() === selector))
+      .map((rule) => rule.body);
+  }
+
+  it('takes no pointer event anywhere, so nothing about it can eat a tap', () => {
+    // It is a moment on the map and not a modal: the player keeps panning
+    // and keeps tapping markers - including the one they have just
+    // discovered - for the whole time it is on screen. The container is
+    // where `pointer-events` is inherited from by everything inside it; the
+    // scrim says it again because the scrim is the part that covers the
+    // entire map.
+    for (const selector of ['.bar-stamps', '.bar-stamp-scrim']) {
+      const bodies = bodiesFor(selector);
+      expect(bodies.length, `no rule targets ${selector}`).toBeGreaterThan(0);
+      expect(
+        bodies.some((body) => /pointer-events\s*:\s*none/.test(body)),
+        `${selector} must set pointer-events: none, or the discovery moment blocks the ` +
+          'map underneath it - a player cannot pan away from it and cannot reach the ' +
+          'check-in on the marker of the bar they have just been told they found',
+      ).toBe(true);
+    }
+  });
+
+  // Section 8.2/12: reduced motion takes the movement away and leaves the
+  // information. The two assertions here are one argument: the stamp's last
+  // keyframe is transparent, so the global reduce rule - which collapses
+  // every animation's *duration* rather than removing it - would run this
+  // one instantly to "gone" and tell a player who asked for less movement
+  // nothing at all. Dropping the animation is what leaves the base rules,
+  // which are the finished stamp.
+  it('drops the stamp animation under reduced motion rather than collapsing it to its last frame', () => {
+    const press = css.match(/@keyframes bar-stamp-press \{([\s\S]*?)\n\}/);
+    expect(press, 'no bar-stamp-press keyframes').not.toBeNull();
+    expect(
+      press?.[1],
+      'the stamp animation is expected to end transparent - if it no longer does, this ' +
+        'test is asserting a reason that has gone away and should be rewritten rather ' +
+        'than deleted',
+    ).toMatch(/100%\s*\{\s*opacity:\s*0/);
+
+    const reduced = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim() === '.bar-stamp'),
+    );
+    expect(
+      reduced.some((rule) => /animation\s*:\s*none/.test(rule.body)),
+      'under prefers-reduced-motion the stamp must drop its animation entirely. The ' +
+        'global rule only collapses animation-duration, which runs this one straight to ' +
+        'its final keyframe - fully transparent - so a player who asked for less motion ' +
+        'would never be told they had discovered a bar. Removing the motion is required; ' +
+        'removing the information is the same failure as ignoring the setting.',
+    ).toBe(true);
+  });
+
+  it('sets the caption in capitals in CSS, not in the document', () => {
+    // "BAR DISCOVERED" is text in the app's own type (Section 8.1). The
+    // string in the DOM stays ordinary English - map/bars/bar-stamps.ts's
+    // BAR_STAMP_CAPTION - so what is read out is a sentence and not
+    // shouting.
+    const title = bodiesFor('.bar-stamp__title');
+    expect(title.length, 'no rule targets .bar-stamp__title').toBeGreaterThan(0);
+    expect(title.some((body) => /text-transform\s*:\s*uppercase/.test(body))).toBe(true);
+  });
+});
+
 // Section 8.4's tab bar. It is the one piece of chrome that is on every
 // signed-in screen at once, and the only element allowed to sit on the bottom
 // edge - everything else on that edge clears it. Both halves of that bargain

@@ -116,6 +116,47 @@ export const CONFIG = {
   BAR_ONSITE_RADIUS_M: 30,
   BAR_ACCURACY_TOLERANCE_M: 20, // added to on-site radius, capped by accuracy
 
+  // SPEC.md Sections 7.4 and 8.3's bar stamp — the moment a bar is
+  // discovered. How long one stamp is on screen, from the frame it is added
+  // to the frame it is removed. One number, not three, and that is the point
+  // of it: the element runs a single CSS animation of exactly this length
+  // (index.css, `bar-stamp-press` — the press, the hold and the fade are
+  // keyframe stops inside it) and the timer that removes the element waits
+  // exactly this long, so the paint and the DOM cannot drift apart into a
+  // stamp that has finished fading and is still in the document, or one
+  // removed mid-fade.
+  //
+  // Long enough to read the bar's name at a glance and short enough that a
+  // player walking down a street of bars is not watching an animation
+  // instead of the map. It is not tied to FOG_REVEAL_ANIMATION_MS: that one
+  // is how long the fog takes to clear, which is what the stamp *waits for*
+  // (see BAR_STAMP_MAX_PER_BATCH below and map/bars/bar-stamps.ts), not how
+  // long it lasts.
+  BAR_STAMP_DURATION_MS: 1600,
+  // A batch can discover several bars at once (`newBars` is an array), and
+  // they are stamped one after another rather than all at the same instant:
+  // several stamps appearing together is a flash of noise, and each one is
+  // anchored at its own bar, so the eye needs to be led from one to the
+  // next. This is the gap between one stamp appearing and the next.
+  //
+  // Deliberately far shorter than BAR_STAMP_DURATION_MS, so the stamps
+  // overlap on screen: a batch of three reads as one event with three marks
+  // in it rather than as three separate events queued up behind each other.
+  BAR_STAMP_STAGGER_MS: 500,
+  // How many bars of one batch are actually stamped. The cap is on the
+  // *animation* and never on the information: every discovered bar is named
+  // in the announcement (map/bars/bar-stamps.ts) and every one of them gets
+  // its permanent marker, whether or not it was stamped.
+  //
+  // It exists because the worst case is not a walk down a dense street. A
+  // batch carries up to SAMPLE_MAX_BATCH samples, which is ten minutes of
+  // walking when a queue drains after an offline stretch, and BAR_DISCOVERY
+  // _RADIUS_M is 100 m — ten minutes through Karlsruhe's centre can discover
+  // a dozen bars in one response. Uncapped, that is (n-1) * STAGGER +
+  // DURATION of dimmed map: the moment turns into a queue the player has to
+  // sit through, which is the opposite of what it is for.
+  BAR_STAMP_MAX_PER_BATCH: 3,
+
   VISIT_REQUIRED_MS: 20 * 60 * 1000,
   VISIT_EXPIRY_MS: 6 * 60 * 60 * 1000,
   VISIT_PUSH_AFTER_MS: 21 * 60 * 1000,

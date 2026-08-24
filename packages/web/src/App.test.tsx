@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONFIG, gridMapBounds } from '@tipsytrails/shared';
+import { CONFIG, DERIVED, gridMapBounds } from '@tipsytrails/shared';
 import type { GridParams } from '@tipsytrails/shared';
 import { App } from './App.js';
 import { ACTIVE_CITY_SLUG } from './api/city.js';
@@ -3030,6 +3030,183 @@ describe('App', () => {
       });
 
       expect(barsCallCount).toBe(1);
+    });
+  });
+
+  // SPEC.md Sections 7.4/8.3: walking into an unknown bar's radius is a
+  // moment on the map. map/bars/bar-stamps.test.ts covers the moment itself
+  // against a hand-built map; what is proved here is the wiring - that the
+  // bars POST /api/samples reports reach the screen at all, and that nothing
+  // else does.
+  describe('the bar stamp (SPEC.md Sections 7.4, 8.3)', () => {
+    function mapContainer(): HTMLElement {
+      return mapInstances[0].container;
+    }
+
+    function stubMapFetch(handler: FetchHandler) {
+      return stubFetch((url, init) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        if (url.startsWith('/tiles/')) {
+          return jsonResponse(206, {});
+        }
+        if (url === '/api/visits/pending') {
+          return jsonResponse(200, { visits: [] });
+        }
+        return handler(url, init);
+      });
+    }
+
+    async function postASample(geo: GeolocationStub) {
+      act(() => {
+        geo.triggerPosition({ accuracy: 10 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    it('stamps a newly discovered bar onto the map and hands over to its marker', async () => {
+      const newBar = {
+        id: 9,
+        districtId: null,
+        name: 'New Find',
+        address: null,
+        lat: 49.007,
+        lon: 8.404,
+        source: 'osm',
+        discoveredAt: 1_700_000_000,
+        mastered: false,
+      };
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let barsCallCount = 0;
+      stubMapFetch((url) => {
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, { newCells: 1, newBars: [newBar] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await postASample(geo);
+
+      // In words, once, and politely - the map's own toasts set that
+      // precedent (map/bars/bar-stamps.ts says why it is not an alert).
+      expect(mapContainer().querySelector('.bar-stamps__announcement')?.textContent).toBe(
+        'Bar discovered: New Find.',
+      );
+
+      // The refetch the discovery triggered has already drawn this bar's
+      // permanent marker - the race the hand-over exists for. It is held
+      // back before the stamp is even drawn, so there is never a frame with
+      // two identical glasses on one point.
+      const marker = mapContainer().querySelector(
+        'button.bar-marker[aria-label^="New Find - "]',
+      ) as HTMLButtonElement;
+      expect(marker).not.toBeNull();
+      expect(marker.classList.contains('bar-marker--stamping')).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.FOG_REVEAL_ANIMATION_MS);
+      });
+
+      const stamp = mapContainer().querySelector('.bar-stamp');
+      expect(stamp).not.toBeNull();
+      expect(stamp?.querySelector('.bar-stamp__name')?.textContent).toBe('New Find');
+      expect(mapContainer().querySelector('.bar-stamp-scrim')).not.toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONFIG.BAR_STAMP_DURATION_MS);
+      });
+
+      // It ends by itself, and the marker takes its ink back.
+      expect(mapContainer().querySelector('.bar-stamp')).toBeNull();
+      expect(mapContainer().querySelector('.bar-stamp-scrim')).toBeNull();
+      expect(marker.classList.contains('bar-marker--stamping')).toBe(false);
+    });
+
+    // The trap this feature is one line away from at all times. Since v1.29
+    // `discoveryVersion` also advances when a visit reaches `completed`,
+    // because both mean "refetch GET /api/bars" - so a stamp keyed on that
+    // signal would fire when a bar is *mastered*, which already has its own
+    // message on this screen and is not a discovery at all.
+    it('stamps nothing when a post masters a bar rather than discovering one', async () => {
+      const geo = stubGeolocation();
+      stubWakeLock();
+      let barsCallCount = 0;
+      stubMapFetch((url) => {
+        if (url === '/api/bars') {
+          barsCallCount++;
+          return jsonResponse(200, {
+            bars: [
+              {
+                id: 1,
+                districtId: null,
+                name: 'The Fox',
+                address: null,
+                lat: 49.007,
+                lon: 8.404,
+                source: 'osm',
+                discoveredAt: 1,
+                mastered: barsCallCount > 1,
+              },
+            ],
+          });
+        }
+        if (url === '/api/samples') {
+          return jsonResponse(200, {
+            newCells: 0,
+            newBars: [],
+            visitUpdates: [
+              {
+                id: 5,
+                barId: 1,
+                barName: 'The Fox',
+                startedAt: 0,
+                lastSampleAt: 0,
+                onsiteSamples: 2,
+                confirmedS: DERIVED.VISIT_REQUIRED_S,
+                remainingS: 0,
+                status: 'completed',
+              },
+            ],
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      vi.useFakeTimers();
+      await renderMapWithFakeTimers();
+      await postASample(geo);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          CONFIG.FOG_REVEAL_ANIMATION_MS + CONFIG.BAR_STAMP_DURATION_MS,
+        );
+      });
+
+      // The bar list was refetched - that is what empties the glass - and
+      // nothing was stamped, announced or dimmed.
+      expect(barsCallCount).toBe(2);
+      expect(mapContainer().querySelector('.bar-stamp')).toBeNull();
+      expect(mapContainer().querySelector('.bar-stamp-scrim')).toBeNull();
+      expect(mapContainer().querySelector('.bar-stamps__announcement')?.textContent).toBe('');
+      expect(
+        mapContainer()
+          .querySelector('button.bar-marker')
+          ?.classList.contains('bar-marker--stamping'),
+      ).toBe(false);
+      // The moment mastering does have is the one it already had.
+      expect(container.querySelector('.map-toast--mastered')?.textContent).toContain('The Fox');
     });
   });
 });

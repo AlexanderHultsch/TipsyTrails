@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CONFIG } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
-import type { Sample, VisitSummary } from '../api/types.js';
+import type { Bar, Sample, VisitSummary } from '../api/types.js';
 import { setLastKnownPosition } from './lastKnownPosition.js';
 import { computeConnectionStatus, computeGpsStatus } from './status.js';
 import type { ConnectionStatus, GpsStatus } from './status.js';
@@ -79,6 +79,40 @@ export interface SampleTrackingState {
   // in ~40 that completes a visit is the trade the wrong way round.
   // map/bars/useDiscoveredBars.ts is the consumer.
   discoveryVersion: number;
+  // Section 7.4: the bars this player had never been near before, exactly as
+  // the latest successful POST /api/samples reported them — replaced on
+  // every successful post, including with an empty array, unlike
+  // newBarsVersion below.
+  //
+  // This exists because discoveryVersion above cannot answer the question
+  // the map screen actually has. A counter says *that* something was
+  // discovered; the bar stamp (map/bars/bar-stamps.ts) has to land on a
+  // point and carry a name, so it needs *which* bars, and until this field
+  // the response's `newBars` were read for their length and dropped. The
+  // pair below is modelled on visitUpdates/visitVersion for the reason that
+  // pair gives: the array is what changed, the counter is when.
+  //
+  // Keyed on separately from discoveryVersion rather than folded into it,
+  // and that is the whole reason there are two: since v1.29 discoveryVersion
+  // also advances when a visit reaches `completed`, because both cases mean
+  // "refetch GET /api/bars". Mastering a bar is not discovering one — it has
+  // its own message (screens/Map.tsx) — so a stamp keyed on that signal
+  // would fire at the wrong moment.
+  newBars: Bar[];
+  // Increments once per successful POST /api/samples that reported at least
+  // one newly discovered bar. The same independence the three counters above
+  // already have from each other, for the same reason: a discovery can
+  // arrive on a sample that reveals no fog and touches no visit.
+  //
+  // The emptiness check behind this is guarded twice, deliberately and with
+  // no test holding the second one: `BarStamps.stamp` returns on an empty
+  // batch before it touches any state, so advancing this counter on a post
+  // that discovered nothing has no observable effect - it calls a no-op
+  // every ten seconds. Removing the guard here was mutation-tested and
+  // survived the whole suite for exactly that reason. It stays because it
+  // is what makes the sentence above true for the *next* consumer, which
+  // may not guard for itself; it is not load-bearing for today's one.
+  newBarsVersion: number;
   // The visitUpdates array of the latest successful POST /api/samples
   // (Section 7.5 steps 3-4), replaced on every successful post - including
   // an empty one, unlike visitVersion below. tracking/useVisits.ts pairs
@@ -136,6 +170,8 @@ export function useSampleTracking(): SampleTrackingState {
   const [postError, setPostError] = useState<string | null>(null);
   const [revealVersion, setRevealVersion] = useState(0);
   const [discoveryVersion, setDiscoveryVersion] = useState(0);
+  const [newBars, setNewBars] = useState<Bar[]>([]);
+  const [newBarsVersion, setNewBarsVersion] = useState(0);
   const [visitUpdates, setVisitUpdates] = useState<VisitSummary[]>([]);
   const [visitVersion, setVisitVersion] = useState(0);
   const [lastPosition, setLastPosition] = useState<LastAcceptedPosition | null>(null);
@@ -263,8 +299,16 @@ export function useSampleTracking(): SampleTrackingState {
         const masteredABar = (result.visitUpdates ?? []).some(
           (visit) => visit.status === 'completed',
         );
-        if ((result.newBars?.length ?? 0) > 0 || masteredABar) {
+        // Read once and used three times below, so "was anything discovered
+        // by this batch" cannot come out differently for the bar list, the
+        // stamp and the stamp's signal.
+        const discovered = result.newBars ?? [];
+        if (discovered.length > 0 || masteredABar) {
           setDiscoveryVersion((version) => version + 1);
+        }
+        setNewBars(discovered);
+        if (discovered.length > 0) {
+          setNewBarsVersion((version) => version + 1);
         }
         setVisitUpdates(result.visitUpdates ?? []);
         if ((result.visitUpdates?.length ?? 0) > 0) {
@@ -334,6 +378,8 @@ export function useSampleTracking(): SampleTrackingState {
     postError,
     revealVersion,
     discoveryVersion,
+    newBars,
+    newBarsVersion,
     visitUpdates,
     visitVersion,
     lastPosition,

@@ -221,6 +221,82 @@ describe('BarMarkers', () => {
     });
   });
 
+  // SPEC.md Sections 7.4/8.3: while a bar's discovery stamp
+  // (map/bars/bar-stamps.ts) is on screen, the stamp is the only glass at
+  // that point. The two are otherwise guaranteed to collide - the discovery
+  // that starts the stamp is the same event that refetches the bar list this
+  // marker comes from.
+  describe('the hand-over to a discovery stamp (SPEC.md Sections 7.4, 8.3)', () => {
+    it('gives up the marker ink while the stamp plays, and keeps the button', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });
+      markers.setBars([makeBar({ id: 1, name: 'The Fox' })]);
+
+      markers.setStamping(new Set([1]));
+
+      const button = container.querySelector('button.bar-marker') as HTMLButtonElement;
+      expect(button.classList.contains('bar-marker--stamping')).toBe(true);
+      // Only the ink. Section 7.5's check-in starts at this button and has
+      // to stay reachable throughout - the player is standing at the bar
+      // they have just been told they found.
+      expect(button.tabIndex).toBe(0);
+      expect(button.getAttribute('aria-label')).toBe('The Fox - not mastered yet');
+      expect(glassPathsOf(button)).toEqual(cocktailGlassPathData(false));
+    });
+
+    it('calls onSelect from a marker whose stamp is still playing', () => {
+      const { map, container } = createFakeMap();
+      const onSelect = vi.fn();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect });
+      const bar = makeBar({ id: 1 });
+      markers.setBars([bar]);
+      markers.setStamping(new Set([1]));
+
+      (container.querySelector('button.bar-marker') as HTMLButtonElement).click();
+
+      expect(onSelect).toHaveBeenCalledWith(bar);
+    });
+
+    it('holds back a marker that only arrives after the stamp began', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });
+
+      // The normal order, not an edge case: the stamp starts when the
+      // discovery lands and this marker arrives with the refetch that same
+      // discovery triggered.
+      markers.setStamping(new Set([9]));
+      markers.setBars([makeBar({ id: 9, name: 'New Find' })]);
+
+      const button = container.querySelector('button.bar-marker') as HTMLButtonElement;
+      expect(button.classList.contains('bar-marker--stamping')).toBe(true);
+    });
+
+    it('takes the ink back the moment the stamp releases the bar', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });
+      markers.setBars([makeBar({ id: 1 })]);
+
+      markers.setStamping(new Set([1]));
+      markers.setStamping(new Set());
+
+      const button = container.querySelector('button.bar-marker') as HTMLButtonElement;
+      expect(button.classList.contains('bar-marker--stamping')).toBe(false);
+    });
+
+    it('leaves the markers of bars that are not being stamped alone', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });
+      markers.setBars([makeBar({ id: 1, name: 'A' }), makeBar({ id: 2, name: 'B' })]);
+
+      markers.setStamping(new Set([1]));
+
+      const stamping = container.querySelector('button.bar-marker[aria-label^="A - "]');
+      const untouched = container.querySelector('button.bar-marker[aria-label^="B - "]');
+      expect(stamping?.classList.contains('bar-marker--stamping')).toBe(true);
+      expect(untouched?.classList.contains('bar-marker--stamping')).toBe(false);
+    });
+  });
+
   it('removes the move listener and every marker element on destroy', () => {
     const { map, container } = createFakeMap();
     const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });

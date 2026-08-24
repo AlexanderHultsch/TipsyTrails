@@ -12,6 +12,7 @@ import { NearbyBarsPanel } from '../components/NearbyBarsPanel.js';
 import { PendingVisitBanner } from '../components/PendingVisitBanner.js';
 import { TrackingIndicator } from '../components/TrackingIndicator.js';
 import { useBarMarkers } from '../map/bars/useBarMarkers.js';
+import { useBarStamps } from '../map/bars/useBarStamps.js';
 import { useDiscoveredBars } from '../map/bars/useDiscoveredBars.js';
 import { useDistrictBorders } from '../map/districts/useDistrictBorders.js';
 import { useFogLayer } from '../map/fog/useFogLayer.js';
@@ -192,6 +193,21 @@ export function MapScreen() {
   useDistrictBorders(mapInstance);
   const city = useCityMaxBounds(mapInstance);
   const discoveredBars = useDiscoveredBars(trackingState.discoveryVersion);
+  // Sections 7.4/8.3: walking into an unknown bar's discovery radius stamps
+  // the cocktail glass onto the map at that bar. Driven by what the sample
+  // response actually discovered (newBars) and not by discoveryVersion,
+  // which since v1.29 also advances when a visit completes - mastering a bar
+  // has its own message further down and is not a discovery.
+  //
+  // It returns the bars it is currently stamping, which the marker layer
+  // below needs: a discovery refetches the bar list, so the stamp and that
+  // bar's permanent marker are about to be two identical glasses on one
+  // point (map/bars/bar-stamps.ts explains the hand-over).
+  const stampingBarIds = useBarStamps(
+    mapInstance,
+    trackingState.newBars,
+    trackingState.newBarsVersion,
+  );
   // Section 7.5 step 1: tapping a marker leads to that bar, where the
   // check-in action is offered - and it does so without leaving the map.
   // Navigating to /bars/:id would unmount this screen and with it
@@ -213,7 +229,7 @@ export function MapScreen() {
   // Declared after useVisits so the tap handler below can clear a check-in
   // error left over from a different bar - opening a bar's sheet should not
   // show the failure of the last attempt at another one.
-  useBarMarkers(mapInstance, discoveredBars, (bar) => {
+  useBarMarkers(mapInstance, discoveredBars, stampingBarIds, (bar) => {
     setSelectedBarId(bar.id);
     visits.clearCheckInError();
   });

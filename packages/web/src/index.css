@@ -1133,6 +1133,186 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+/* Sections 7.4/8.3's hand-over. While a bar's discovery stamp is on screen
+   the stamp is the only glass at that point, so the marker gives up its ink
+   and takes it back the instant the stamp is removed
+   (map/bars/bar-markers.ts, setStamping). Only the ink: the button keeps its
+   44px, its accessible name and its place in the tab order, because the
+   check-in flow (Section 7.5) has to stay reachable at the bar the player
+   has just walked up to. This is why it is the svg that is hidden and not
+   the button - `visibility: hidden` or `display: none` on the marker itself
+   would take the tap target away with the glass. */
+.bar-marker--stamping svg {
+  opacity: 0;
+}
+
+/* Sections 7.4/8.3: discovering a bar is a moment on the map. The container
+   is a sibling of .bar-markers inside MapLibre's own element, positioned the
+   same way and for the same reason - what it holds is anchored to a bar's
+   position on the ground, so it cannot live in the overlay rows of
+   .map-overlays, which lay out things anchored to the *screen*.
+
+   z-index 5 puts the whole thing above the bar markers and above the
+   own-position marker's 4, and .map-overlays' own 10 keeps every overlay -
+   the pending-visit banner, the bar sheet, the toasts - above it. The dim is
+   the map's, not the app's.
+
+   `pointer-events: none` is the rule for every part of this and is set once,
+   here, where it is inherited: none of it may ever eat a tap. It is not a
+   modal - the player keeps panning the map and keeps tapping markers while
+   it plays, and there is nothing to dismiss. */
+.bar-stamps {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* "Der Hintergrund wird minimal abgedunkelt" - minimal is the requirement
+   and not an approximation of one. Ink at low alpha rather than a grey of
+   its own, so the dim is the same colour the whole app is drawn in; light
+   enough that the map stays readable underneath it, because the player is
+   still walking and still navigating while this is on screen. */
+.bar-stamp-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(28, 26, 23, 0.18);
+  pointer-events: none;
+}
+
+/* The scrim's whole life is one animation of the batch's own length, handed
+   in by map/bars/bar-stamps.ts (--bar-stamp-scrim-duration) rather than set
+   here: a scrim that ended on a number of its own would either uncover the
+   map under a stamp still playing or outlive the last one. `forwards` holds
+   the final frame - fully transparent - for the moment between the animation
+   ending and the element being removed, so the dim never snaps off. */
+.bar-stamp-scrim--motion {
+  animation: bar-stamp-scrim-dim var(--bar-stamp-scrim-duration) ease-in-out forwards;
+}
+
+@keyframes bar-stamp-scrim-dim {
+  0% {
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The stamp itself, placed at the bar's projected position exactly as a
+   marker is - same box, same centring - so the glass inside it lands on the
+   marker's own glass to the pixel and the hand-over is a substitution rather
+   than a jump. */
+.bar-stamp {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  color: var(--color-ink);
+  pointer-events: none;
+}
+
+/* The same 22px the marker draws its glass at (.bar-marker svg above), and
+   for the same reason: this is the size the mark is read at on a map. */
+.bar-stamp svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+/* Section 8.1: ink only. A discovery is neither the player's own position
+   nor an active state, so it gets no accent colour - what makes it read is
+   the dim behind it and the motion, not a colour the rest of the map is not
+   allowed. On paper at low alpha so the caption stays legible over whatever
+   the map is drawing underneath. Centred under the glass and taken out of
+   the flex flow, so its width has no say in where the glass lands. */
+.bar-stamp__caption {
+  position: absolute;
+  top: calc(50% + 16px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.25rem 0.5rem;
+  max-width: 12rem;
+  background: rgba(244, 239, 230, 0.85);
+  border-radius: 4px;
+  text-align: center;
+}
+
+/* "BAR DISCOVERED" - upper case and letter-spaced here rather than in the
+   DOM, so what a reader of the markup gets is the ordinary English string
+   the accessible announcement is built from and not shouting
+   (map/bars/bar-stamps.ts, BAR_STAMP_CAPTION). */
+.bar-stamp__title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The bar's name in the serif the map labels use (Section 8.2's one serif
+   family): this is a place on the map being named, not UI chrome. Wraps
+   rather than overflowing - bar names are not written to a width. */
+.bar-stamp__name {
+  font-family: var(--font-serif);
+  font-size: 0.9375rem;
+  line-height: 1.2;
+}
+
+/* The press: the glass arrives large and slightly proud of the map, is
+   pushed down onto it, overshoots a little as a stamp does, settles, holds
+   long enough to be read, and fades. One animation for the whole life of the
+   element, of exactly the length the element is kept in the document
+   (--bar-stamp-duration, from CONFIG.BAR_STAMP_DURATION_MS) - so the paint
+   and the DOM cannot disagree about when this is over.
+
+   The base rule above is the *resting* state: the glass at the marker's own
+   size, fully opaque. That is what makes the reduced-motion branch below
+   work by omission rather than by a second set of declarations - an element
+   with no animation is simply the finished stamp, which is the information
+   without the movement. */
+.bar-stamp--motion {
+  animation: bar-stamp-press var(--bar-stamp-duration) ease-out forwards;
+}
+
+@keyframes bar-stamp-press {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.4);
+  }
+  8% {
+    opacity: 1;
+  }
+  18% {
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+  28% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  84% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
 /* Section 8.1/8.3: the player's own position - the one marker allowed to
    use the accent colour. Shape-distinct from a bar marker (a solid dot
    with a halo, not the martini-glass pictogram) rather than colour alone
@@ -1826,5 +2006,30 @@ button:focus-visible,
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* Sections 7.4/8.2, and the one case the rule above is not enough for.
+     Collapsing a duration to nothing runs an animation instantly to its last
+     keyframe, and the bar stamp's last keyframe is `opacity: 0` - so the
+     universal rule alone would take the *information* away rather than the
+     motion, and a player who asked for less movement would never be told
+     they had found a bar. `animation: none` drops the animation entirely
+     instead, leaving the base rules, which are the finished stamp: the glass
+     at rest on the map, the caption beside it, both removed by their own
+     timer exactly as they are for everyone else. No scale, no travel, no
+     dim fading in - and nothing missing.
+
+     map/bars/bar-stamps.ts makes the same decision in JavaScript, by not
+     applying the two modifier classes at all when the query matches. That is
+     the branch that runs in a real browser; this is the same answer written
+     where the animations are, so the stylesheet cannot be read as asking for
+     something it does not mean. The modifier classes are listed alongside
+     the base ones for that reason: the stylesheet has to hold on its own,
+     without depending on the script having already decided correctly. */
+  .bar-stamp,
+  .bar-stamp--motion,
+  .bar-stamp-scrim,
+  .bar-stamp-scrim--motion {
+    animation: none;
   }
 }

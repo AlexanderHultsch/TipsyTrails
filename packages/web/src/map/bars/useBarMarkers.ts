@@ -13,6 +13,10 @@ import { BarMarkers } from './bar-markers.js';
 export function useBarMarkers(
   map: MaplibreMap | null,
   bars: Bar[],
+  // Sections 7.4/8.3: the bars whose discovery stamp is playing right now
+  // (map/bars/useBarStamps.ts), whose markers hand their ink to the stamp
+  // for its duration - see BarMarkers.setStamping.
+  stampingBarIds: ReadonlySet<number>,
   onSelect: (bar: Bar) => void,
 ): void {
   const markersRef = useRef<BarMarkers | null>(null);
@@ -33,6 +37,14 @@ export function useBarMarkers(
     // Mount-only per map instance, matching useFogLayer.ts's own mount-only
     // effect - a new `map` means a fresh BarMarkers, not an update.
   }, [map]);
+
+  // Before the bars, and that order is load-bearing: a batch that discovers
+  // a bar publishes the stamping id and the refetched list in the same
+  // render, and setBars is what creates that bar's marker. Told afterwards,
+  // the marker would exist for one paint with its ink showing.
+  useEffect(() => {
+    markersRef.current?.setStamping(stampingBarIds);
+  }, [stampingBarIds]);
 
   useEffect(() => {
     markersRef.current?.setBars(bars);

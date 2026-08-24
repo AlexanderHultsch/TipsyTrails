@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.29
+**Version:** 1.30
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -637,7 +637,7 @@ Every newly set bit increments `fog_state.revealed_cells`, the matching `fog_dis
 Visual behaviour:
 - Unrevealed: opaque grey fog, dense enough that it hides detail rather than tinting it, and **not at one alpha everywhere** — see the paragraph on uneven density below. `FOG_MAX_OPACITY` is the alpha of its densest patch and the ceiling on every fragment; the floor is `FOG_MAX_OPACITY - FOG_DENSITY_VARIATION`. The fog is inserted into the style at one fixed point in the layer order: **beneath** it, in order, sit the paper background, green landcover, parks, building fills, building outlines and the minor-road layer; **above** it sit water fill, water outline, waterways, and both major-road layers. So a player on unrevealed ground sees roads and water and nothing else — buildings, green areas and parks are hidden by the fog, deliberately. This widens the earlier rule, under which only the motorway/trunk layer stayed above the fog and water was dimmed away with everything else: orientation in unexplored ground is carried better by the water and the ordinary street grid than by the trunk network alone, and the fog still gets to do its job on everything that describes what a place is actually like.
 - Revealed: fog alpha 0. **The edge is a boundary, not a fade.** It is irregular but crisp: a low-frequency noise offset displaces the sampling position so the edge never reads as a circle around the player or as a staircase of 50 m squares, and a narrow blur plus a tight alpha band around its midpoint keep the transition itself down to a fraction of a cell. The two numbers are `FOG_EDGE_BLUR_RADIUS_CELLS` and `FOG_EDGE_ALPHA_HALF_WIDTH`, and they are not independent: blurring a binary mask leaves the blurred value linear in distance from the boundary with slope `1 / (2r + 1)` per cell, so the visible transition is exactly `2 · (2r + 1) · h` cells wide. That relationship is recorded here so the next person tuning it does not have to re-derive it, and so that a change to either constant is understood as a change to one width rather than to two knobs. This edge is not decoration. It is the only feedback that the reveal mechanic works at all — an earlier version faded over roughly 190 m, which read as no boundary, and a player who cannot see ground being unlocked cannot see the game working.
-- Newly revealed cells animate from opaque to clear over 600 ms.
+- Newly revealed cells animate from opaque to clear over `FOG_REVEAL_ANIMATION_MS` (600 ms). This is also what the bar stamp of Section 7.4 waits out before it draws anything: the fog clearing and the stamp landing are two steps of one moment, in that order, so the stamp reads the same constant rather than carrying a second number that means the same thing. It lines the two up and cannot guarantee it — the reveal begins when `GET /api/fog` answers, which is a request issued after the `POST /api/samples` that reported the discovery — and a stamp arriving slightly early on a slow connection is the accepted cost of not coupling a discovery to the fog layer's network.
 - Buildings, green areas, parks and minor roads are only rendered where revealed. Water and the major roads are drawn everywhere, above the fog.
 
 **The fog's interior is uneven, and the unevenness comes from noise rather than from a texture.** The edge above was made irregular first, and that left the inside of it a flat wash at a single alpha — which reads as a sheet of tracing paper laid over the map, not as a city nobody has walked yet. The alpha is therefore varied by a noise field: `FOG_MAX_OPACITY` becomes the ceiling and the fog thins by up to `FOG_DENSITY_VARIATION` below it, so what a player sees vary is how much of the base map bleeds through from one patch to the next. The variation is bounded from below because the thinnest patch still has to hide detail rather than tint it, which is the requirement above and not a matter of taste, and bounded above by nothing but that, because a variation nobody can make out is the flat wash again under another name.
@@ -673,6 +673,16 @@ When an accepted sample lands within `BAR_DISCOVERY_RADIUS_M` of an active bar, 
 Undiscovered bars are never sent to the client. The client receives only discovered bars. The API must never leak undiscovered bar positions, including through aggregate endpoints such as counts per district.
 
 This applies to error codes as well: `GET /api/bars/:id` returns the same response for an undiscovered bar and for a bar that does not exist. See Section 9.5.
+
+**Discovering a bar is a moment on the map, and the map says so where it happened.** Walking into a bar's radius used to change nothing a player could see except a marker appearing among the others, which is the one event in this game that a player earns by walking and is told nothing about. So: the fog clears (Section 7.3), the map dims a little, and the cocktail glass of Section 8.1 is **stamped onto the map at the bar**, with "BAR DISCOVERED" and the bar's name under it, and then it goes away by itself. It is anchored at the bar's own position and re-projected as the map moves, exactly as a marker is — a message in a corner of the screen would be about a place without ever pointing at it.
+
+**It is not a modal and it cannot be got stuck in.** Nothing about it takes a pointer event, nothing traps focus, and there is no control to dismiss: the player keeps panning, keeps tapping markers, and reaches Section 7.5's check-in at the bar they have just been told about while the stamp is still on screen. Every element it creates is removed by a timer scheduled when it is created, and a second discovery never leaves the first one's dim behind. Its timing lives in `config.ts` like every other number here — `BAR_STAMP_DURATION_MS` for how long one stamp is on screen, `BAR_STAMP_STAGGER_MS` for the gap between two of them — and `BAR_STAMP_DURATION_MS` is one number for both the animation and the element's life, so what is painted and what is in the document cannot disagree about when the moment is over.
+
+**A batch discovers a set of bars, not a bar.** `newBars` is an array (Section 9.2) and a batch can carry ten minutes of walking when a queue drains after an offline stretch, so the plural case is the ordinary one rather than an edge. They are stamped one after another, `BAR_STAMP_STAGGER_MS` apart and overlapping on screen, so a batch reads as one event with several marks in it. `BAR_STAMP_MAX_PER_BATCH` caps how many are stamped, and the cap is on the **animation only**: every discovered bar is named in the one spoken announcement and every one of them gets its marker, whatever the cap. Uncapped, a queue draining in Karlsruhe's centre would dim the map for as long as it took to play a dozen stamps, which turns a moment into something to sit through.
+
+**The stamp and the marker are the same glass, so they are never both drawn.** The same response that reports a discovery is what refetches the bar list, so that bar's permanent marker appears within a few hundred milliseconds of the stamp starting, at the same point, drawing the same mark — and a stamp landing on an identical marker that just appeared is a flicker rather than a moment. The marker therefore gives up its ink for exactly as long as its stamp is on screen and takes it back the instant the stamp is removed. Its **button** is never hidden: the tap target, the accessible name and the tab position all stay, because Section 7.5's check-in has to be reachable at the bar the player is standing at, including during the second and a half in which they are being told they found it.
+
+**The announcement is in words, once per batch.** The visual half is a shape appearing on a map, which Section 8.1 does not allow to be the only channel. One `role="status"` live region — polite, not `role="alert"`: a discovery is good news and must not cut off what a screen reader is saying — carries one sentence naming every bar the batch discovered. One sentence and not one per bar, because three stamps must not be three interruptions.
 
 ### 7.5 Check-in and mastering
 
@@ -789,6 +799,7 @@ Four constraints bound it, and each of them is the whole point of one of the dec
 - **It stays a silhouette in ink.** The accent colour is reserved for the player's own position and for active states, and a mastered bar is neither. Both states are `currentColor` and nothing else.
 - **The state is also in words.** A screen reader user gets nothing from a fuller or emptier glass, so the mastered state joins the accessible name of anything whose whole content is the mark (the map marker), and stands as visible text beside it everywhere else. This is the same rule the paragraph below states generally; it is repeated here because this mark carries a state whose only other channel is a shape.
 - **It is a statement and never a control.** Mastering is earned by a check-in (Section 7.5) and by nothing a player can tap on the mark itself. It does change the moment it is earned: a sample response that reports a visit reaching `completed` refreshes the bar list behind the markers, so the glass on the map empties then rather than the next time the screen is opened.
+- **It is also the mark that is stamped onto the map when a bar is discovered** (Section 7.4), and that is the fourth surface drawing from the same paths rather than a fifth shape. It stays a silhouette there too: a discovery is neither the player's own position nor an active state, so it gets no accent colour, and what makes the moment read is the dim behind it and the movement, not a colour the rest of the map is not allowed. A bar being discovered has not been mastered — mastering needs a completed visit at a bar the player had already found — so in practice it is always the full glass; it is drawn from the bar's own flag rather than assumed, because the stamp's last frame and the marker it hands over to have to be the same shape.
 
 The mark deliberately does not appear on the nearby-bars panel, which names what is in range and is a `role="status"` statement carrying no per-bar affordance (Sections 7.5, 8.3), nor on the admin bar list, which is moderation rather than play and is not scoped to one player's mastery at all.
 
@@ -800,6 +811,7 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 - Minimum tap target 44 × 44 px. Bottom-anchored primary actions (thumb reach).
 - **The app extends under the device's safe areas, and pads around them itself.** `index.html`'s viewport meta tag carries `viewport-fit=cover`, without which `env(safe-area-inset-*)` reports `0px` in an installed iOS PWA and the bottom tab bar sits flush against the home indicator with no clearance at all. Turning that on makes the top edge-to-edge too, so both insets are read from one named token each — `--bottom-nav-inset` and `--safe-area-top` — declared once in `:root` and referenced by name everywhere else. A second raw `env()` anywhere in the stylesheet is a second element claiming the same strip of screen, and doubles the gap rather than widening it; the stylesheet's own tests enforce the single declaration and the two places that must read the top token (`.screen`, and the map's top controls row, which sits at the physical top edge because the map screen is `position: fixed`).
 - Respect `prefers-reduced-motion`: disable the fog dissolve animation and all transitions.
+- **Reduced motion removes the movement and keeps what the movement was saying.** Disabling a feature outright because it happens to be animated is the same failure as ignoring the setting: a player who asked for less movement still has to be told they discovered a bar. So Section 7.4's stamp under `reduce` has no scale, no travel and no fade — and its mark, its caption, the bar's name and its spoken announcement are all still there, and still go away on their own timer. This is a stronger requirement than the blanket rule above, and the blanket rule alone does not satisfy it: collapsing every `animation-duration` to nothing runs an animation straight to its **last** keyframe, and anything that ends by fading out ends invisible. Such an animation must be dropped rather than shortened, and the resting state it leaves behind must be the finished thing rather than the first frame of it.
 
 ### 8.3 Screens
 
@@ -812,7 +824,7 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 | Change password | Forced when `must_change_password` is set; also reachable from Settings |
 | City overview | Karlsruhe outline with overall progress; neighbouring municipalities drawn greyed out and non-interactive |
 | District overview | All districts with individual progress percentages; tap to zoom in — which opens the map framed on that district, see below |
-| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons |
+| Map (main) | Fog map, district boundaries (7.3), own position and direction of travel, discovered bar markers drawn as the cocktail glass of Section 8.1, full or nearly empty by whether that bar is mastered (5.7) — tapping one opens that bar's sheet **on this screen**, carrying the check-in action and the same mark (7.5) — the discovery stamp (7.4), pending-visit banner, nearby-bars panel (names the bars in range, carries no check-in and no mark — 7.5), GPS/connection/tracking icons |
 | Bar detail (`/bars/:id`) | Name, address, district, mastered status — the cocktail glass of Section 8.1 with the state in words beside it — community tag if applicable. The linkable page for a bar; it carries **no** check-in action, and 7.5 explains why |
 | Profile | Username, avatar, badge shelf, area %, bars mastered, this period's own totals (no target, no rank — Section 7.7) |
 | Leaderboard | Ranked list, metric toggle, period filter |
@@ -832,6 +844,8 @@ The mark deliberately does not appear on the nearby-bars panel, which names what
 This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed — which is the sentence proving its own point, since the ninth overlay is exactly what a list of hand-tuned offsets cannot survive. The requirement is therefore the rule and never the individual fixes. Nine independently positioned overlays that agree by coincidence are not a layout: what the screen needs is one container laying its edges out as bands that claim their own space, so a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
 
 Two things follow that are worth stating because they are easy to lose. The container must let pointer events through to the map and take them back only on the overlays themselves, or the map stops responding to drags. And the bottom safe-area inset belongs to the layout, applied once, rather than being repeated by every child that happens to sit at that edge.
+
+**Not everything drawn on the map is an overlay, and the line between the two is what a thing is anchored to.** An overlay is anchored to the *screen* — a bar along an edge, a control in a corner — and is placed by the rows above. The bar markers and Section 7.4's discovery stamp are anchored to the *ground*: they belong at a point on the map, they are projected from a latitude and longitude and re-projected as the camera moves, and a row would be exactly the wrong place for them. They therefore live inside the map's own element, positioned against it, and that is not the defect the rule above is about — it is the only way to be at a place. They sit below every overlay, so the layout above still decides what may cover what, and the discovery stamp's dim covers the map and never the app's own chrome. Nothing anchored to the ground takes a pointer event except the bar marker, which is a control.
 
 **The map opens at street level.** The opening view is zoom **16** — a few blocks across, the scale at which a bar marker, the player's own position, and the 50 m grain of the fog are all legible and a player can act on what they see. It opened at zoom 12 before, a city overview: a whole city of fog with nothing in it to walk towards. The city as a whole already has a screen of its own (City overview, above), so the map does not have to be one too. Zooming out to `MAP_MIN_ZOOM` stays available and is unchanged. Like the zoom limits it sits beside, the opening zoom is a constant in `packages/shared/src/config.ts` and never a number at the call site (Section 0, rule 3).
 
@@ -1327,6 +1341,70 @@ These are consequences to design around, not reasons to reconsider:
 ---
 
 ## 15. Changelog
+
+### v1.30 — discovering a bar becomes a moment, and the map stamps it where it happened
+
+One request from the owner, about the one event in this game a player earns by walking and was told
+nothing about: walking into an unknown bar's radius cleared some fog and added a marker among the
+others. It is now a stamp — the map dims a little and the cocktail glass is pressed onto it at the
+bar, captioned "BAR DISCOVERED" with the bar's name, and then it goes away by itself. Section 7.4
+records it.
+
+**The map screen did not know which bars had been discovered, and that was the work.** `POST
+/api/samples` has always answered with `newBars` (Section 9.2), and the client read its *length* and
+threw the bars away: the response bumped `discoveryVersion`, a counter, and a counter can say that
+something was discovered but not what or where. A stamp needs a name and a position, so the sample
+hook now holds the discovered bars themselves beside a version of their own, modelled on the
+`visitUpdates`/`visitVersion` pair already there and for the same reason — the array is what changed
+and the counter is when. Nothing was added to the server; it had already been reporting this for
+four phases.
+
+**Keying it on `discoveryVersion` would have been the bug, and it would have looked correct.** That
+signal has meant "refetch `GET /api/bars`" since v1.29, when mastering a bar was added to it as a
+second reason. A stamp hung on it would fire when a player *masters* a bar — a moment that already
+has its own message on this screen and is not a discovery at all. So the stamp is keyed on what was
+actually discovered, and there is a test that masters a bar and asserts that nothing is stamped,
+announced or dimmed.
+
+**A batch discovers a set of bars and not a bar.** `newBars` is an array, and the case that decides
+the design is not a dense street but a queue draining after an offline stretch: a batch carries up to
+`SAMPLE_MAX_BATCH` samples, which is ten minutes of walking, and ten minutes through the centre can
+discover a dozen bars in one response. They are stamped one after another, `BAR_STAMP_STAGGER_MS`
+apart and overlapping, so a batch reads as one event with several marks in it; `BAR_STAMP_MAX_PER_BATCH`
+caps how many are stamped, and the cap is on the animation alone — every discovered bar is named in
+the announcement and every one of them still gets its marker. Uncapped, the moment becomes something
+to sit through.
+
+**The stamp and the marker are the same glass at the same point, seconds apart, and that had to be
+made deliberate.** The response that reports the discovery is the response that refetches the bar
+list, so the permanent marker arrives while the stamp is still travelling: two identical marks on one
+spot, which is a flicker and not a moment. The marker now gives up its ink for exactly as long as its
+stamp is on screen and takes it back the instant the stamp is removed, so one glass is visible
+throughout. Only the ink: the button keeps its 44 px, its accessible name and its tab position,
+because Section 7.5's check-in has to be reachable at the bar the player is standing in front of,
+including during the second and a half in which they are being told they found it.
+
+**Reduced motion loses the movement and keeps everything the movement was saying**, and Section 8.2
+now says that in general rather than leaving it to be inferred. The blanket rule this specification
+already had is not enough on its own and the reason is worth recording: collapsing every
+`animation-duration` to nothing runs an animation to its *last* keyframe, and this one ends faded
+out — so the global rule alone would have taken the information away and left the setting looking
+respected. The animation is dropped instead of shortened, the resting state underneath it is the
+finished stamp, and a player who asked for less movement gets the mark, the caption, the name and the
+spoken announcement, on the same timer as everyone else.
+
+**And it says it in words, once.** One polite `role="status"` region names every bar the batch
+discovered, in one sentence — the same choice the map's other messages make, and not `role="alert"`:
+a discovery is good news and must not cut off what a screen reader is part-way through. One sentence
+rather than one per bar, because three stamps must not be three interruptions. The caption itself is
+text in the app's own type, upper-cased in CSS, so what is in the document stays an ordinary English
+string.
+
+**Section 8.3 gained a distinction it had been relying on without stating.** Its overlay rule is
+about things anchored to the *screen*, and the bar markers had always been anchored to the *ground* —
+projected from a position, placed against the map, outside the overlay rows. The stamp is the second
+of those, so the line is now written down: what belongs at a place is positioned against the map and
+sits below every overlay, and the layout still decides what may cover what.
 
 ### v1.29 — the cocktail glass becomes the mark for a bar, and it says whether that bar is mastered
 
@@ -2249,4 +2327,4 @@ Additions (gaps that were not contradictions but would have caused a stop-and-as
 
 ---
 
-*End of specification v1.29*
+*End of specification v1.30*

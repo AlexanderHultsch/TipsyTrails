@@ -55,6 +55,12 @@ export class BarMarkers {
   private readonly onSelect: (bar: Bar) => void;
   private readonly container: HTMLDivElement;
   private readonly markers = new Map<number, MarkerEntry>();
+  // The bars whose discovery stamp is currently playing (map/bars/
+  // bar-stamps.ts). Held here rather than passed through setBars because the
+  // two arrive independently: the stamp starts the moment the discovery
+  // lands, and the bar list carrying that same bar arrives from a refetch
+  // some time afterwards.
+  private stamping: ReadonlySet<number> = new Set();
   private readonly handleMove = () => this.reposition();
 
   constructor(options: BarMarkersOptions) {
@@ -99,6 +105,27 @@ export class BarMarkers {
     this.reposition();
   }
 
+  /**
+   * Sections 7.4/8.3's hand-over: while a bar's discovery stamp is on
+   * screen, that bar's marker gives up its ink so the stamp is the only
+   * glass at that point (index.css, `.bar-marker--stamping`) - a stamp
+   * landing on an identical marker that just appeared is a flicker, not a
+   * moment, and the two arrive within a few hundred milliseconds of each
+   * other by construction.
+   *
+   * What it does *not* do is hide the marker. The button keeps its 44 px tap
+   * target, its accessible name and its place in the tab order throughout,
+   * because Section 7.5's check-in has to stay reachable at the bar the
+   * player has just walked up to - including in the second and a half in
+   * which they are being told they found it.
+   */
+  setStamping(barIds: ReadonlySet<number>): void {
+    this.stamping = barIds;
+    for (const [id, entry] of this.markers) {
+      entry.element.classList.toggle('bar-marker--stamping', barIds.has(id));
+    }
+  }
+
   private createElement(bar: Bar): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
@@ -124,6 +151,13 @@ export class BarMarkers {
       'bar-marker',
       bar.mastered ? 'bar-marker--mastered' : null,
       isCommunity ? 'bar-marker--community' : null,
+      // This rebuilds the whole class list, so the stamp's hand-over has to
+      // be part of it: a marker created (or repainted) while its stamp is
+      // playing would otherwise arrive with its ink showing, which is the
+      // exact frame setStamping exists to prevent - and that marker is
+      // created by the refetch the discovery itself triggered, so it is the
+      // normal case rather than an edge one.
+      this.stamping.has(bar.id) ? 'bar-marker--stamping' : null,
     ]
       .filter((name) => name !== null)
       .join(' ');
