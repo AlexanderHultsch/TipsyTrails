@@ -53,6 +53,37 @@ interface StoredFogState {
   mask: string;
 }
 
+// The stored value is same-origin data only this app ever writes, so the
+// case worth defending is not an attacker but a *previous release*: an entry
+// written by an older `StoredFogState` (a field since renamed, or added) that
+// parses as JSON perfectly well and is simply not this shape any more. The
+// try/catch in `loadFogState` already covers malformed JSON; it does not
+// cover valid JSON of the wrong shape, which used to flow into the fog
+// renderer as `undefined` typed `number`.
+//
+// Deliberately a handful of shape checks and not a schema: `packages/web`
+// carries no validation dependency, and a cache that cannot be trusted is
+// dropped rather than repaired, so all this has to decide is trusted / not.
+// `Number.isFinite` rather than `typeof === 'number'` because JSON.stringify
+// writes a NaN or an Infinity out as `null`, so a grid dimension that was
+// already nonsense when it was saved reads back as one of these too.
+function parseStoredFogState(value: unknown): StoredFogState | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const numbers = ['gridWidth', 'gridHeight', 'cellSizeM', 'originLat', 'originLon'] as const;
+  for (const field of numbers) {
+    if (!Number.isFinite(candidate[field])) {
+      return null;
+    }
+  }
+  if (typeof candidate.mask !== 'string') {
+    return null;
+  }
+  return candidate as unknown as StoredFogState;
+}
+
 function uint8ToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 1) {
@@ -93,7 +124,10 @@ export function loadFogState(userId: number): CachedFogState | null {
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as StoredFogState;
+    const parsed = parseStoredFogState(JSON.parse(raw));
+    if (!parsed) {
+      return null;
+    }
     return {
       gridWidth: parsed.gridWidth,
       gridHeight: parsed.gridHeight,

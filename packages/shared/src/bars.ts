@@ -221,13 +221,47 @@ function tagsFromGeoJsonProperties(
   return tags;
 }
 
+/**
+ * A Point feature's `[lon, lat]`, or null if the feature does not carry one.
+ *
+ * `coordinates` is `unknown` on the raw type because it comes out of
+ * `JSON.parse`, and it used to be cast straight to `[number, number]` and
+ * destructured. A hand-edited or truncated export where it is not an array
+ * of two numbers then either threw a bare TypeError out of the destructuring
+ * (a non-iterable value) or, worse, carried `undefined` forward as a
+ * coordinate — which reaches `toCell` and comes back as "falls outside the
+ * grid", pointing the operator at the city config's bounding box when the
+ * real fault is the export file. A position with a third element (GeoJSON
+ * allows an elevation) is still accepted: only the first two are read, which
+ * is what the destructuring did too.
+ */
+function pointCoordinates(coordinates: unknown): [number, number] | null {
+  if (!Array.isArray(coordinates) || coordinates.length < 2) {
+    return null;
+  }
+  const [lon, lat] = coordinates as unknown[];
+  if (typeof lon !== 'number' || typeof lat !== 'number') {
+    return null;
+  }
+  return [lon, lat];
+}
+
 function geoJsonToBarsResponse(collection: RawGeoJsonFeatureCollection): OverpassBarsResponse {
   const elements: OverpassBarElement[] = [];
   for (const feature of collection.features) {
     const geometry = feature.geometry;
     if (!geometry || geometry.type !== 'Point') continue;
 
-    const [lon, lat] = geometry.coordinates as [number, number];
+    const point = pointCoordinates(geometry.coordinates);
+    if (!point) {
+      const name = feature.properties?.name;
+      throw new OverpassBarsResponseError(
+        `GeoJSON Point feature${typeof name === 'string' ? ` "${name}"` : ''} has no usable ` +
+          `"coordinates" (expected [lon, lat] as two numbers, got ` +
+          `${JSON.stringify(geometry.coordinates)}).`,
+      );
+    }
+    const [lon, lat] = point;
     const { type, id } = osmTypeAndIdFromGeoJsonFeature(feature);
     const tags = tagsFromGeoJsonProperties(feature.properties);
 
@@ -667,6 +701,71 @@ export interface BarDiff {
   added: Bar[];
   removed: Bar[];
   changed: ChangedBar[];
+}
+
+export class BarsFileError extends Error {}
+
+function barProblem(value: unknown, index: number): string | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return `entry ${index} is not an object`;
+  }
+  const bar = value as Record<string, unknown>;
+  if (typeof bar.osm_id !== 'string' || bar.osm_id.length === 0) {
+    return `entry ${index} has no "osm_id" string`;
+  }
+  if (typeof bar.name !== 'string' || bar.name.length === 0) {
+    return `entry ${index} ("${bar.osm_id}") has no "name" string`;
+  }
+  if (bar.address !== null && typeof bar.address !== 'string') {
+    return `entry ${index} ("${bar.osm_id}") has an "address" that is neither a string nor null`;
+  }
+  if (!Number.isFinite(bar.lat) || !Number.isFinite(bar.lon)) {
+    return `entry ${index} ("${bar.osm_id}") has no finite "lat"/"lon"`;
+  }
+  if (!Number.isInteger(bar.cell_index) || (bar.cell_index as number) < 0) {
+    return `entry ${index} ("${bar.osm_id}") has no non-negative integer "cell_index"`;
+  }
+  if (bar.source !== 'osm') {
+    return `entry ${index} ("${bar.osm_id}") has source ${JSON.stringify(bar.source)}, expected "osm"`;
+  }
+  return null;
+}
+
+/**
+ * Validates the parsed contents of a `data/seed/<slug>/bars.json` — the file
+ * this module's own output is written to, and the file
+ * `packages/api/src/db/seed-bars.ts` reads back at boot.
+ *
+ * It exists because `scripts/import-osm-bars.ts` read the previous file with
+ * a bare `JSON.parse(raw) as Bar[]` before diffing against it. A file holding
+ * valid JSON that is not an array of bars got no further than a TypeError
+ * from inside `diffBars` ("previous.map is not a function"), naming neither
+ * the file nor what was wrong with it — and a file holding `null` produced no
+ * diff at all and said nothing, which is the worse of the two outcomes for a
+ * step whose entire job is to report what changed.
+ *
+ * The checks mirror `seed-bars.ts`'s zod `barSchema` field for field
+ * deliberately: the two are the same file, so a file this accepts is exactly
+ * a file the server can seed from, and there is no window where the import
+ * happily diffs against something the app would refuse to boot on.
+ * `packages/shared` carries no runtime dependencies (see `city.ts`), so this
+ * is hand-written rather than a second zod schema.
+ */
+export function parseBarsFile(value: unknown, sourcePath: string): Bar[] {
+  if (!Array.isArray(value)) {
+    throw new BarsFileError(
+      `"${sourcePath}" does not contain a JSON array of bars (got ${
+        value === null ? 'null' : typeof value
+      }).`,
+    );
+  }
+  for (const [index, entry] of value.entries()) {
+    const problem = barProblem(entry, index);
+    if (problem !== null) {
+      throw new BarsFileError(`"${sourcePath}" is not a valid bars.json: ${problem}.`);
+    }
+  }
+  return value as Bar[];
 }
 
 /** Compares two bar sets by `osm_id`, reporting additions, removals and field changes. */

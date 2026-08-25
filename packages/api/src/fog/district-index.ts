@@ -1,11 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
-
-interface GridMetaDistrict {
-  name: string;
-  index: number;
-}
+import { loadGridMeta } from '../db/seed-city.js';
 
 interface DistrictRow {
   id: number;
@@ -23,6 +19,13 @@ interface DistrictRow {
  * only key both sides share. Returns null if `grid-meta.json` is absent,
  * the same "this feature's data, not the whole site's" absence handling
  * `app.ts` already applies to `grid.bin` itself.
+ *
+ * A file that is *present but wrong* is a different case from an absent one
+ * and is not degraded to null: it throws, through `loadGridMeta`'s message
+ * naming the path and the offending field. Silently mapping nothing would
+ * put every seeded bar and every revealed cell in no district at all, which
+ * looks exactly like a city with no districts — the failure this refuses to
+ * make quiet.
  */
 export function loadDistrictIdByGridIndex(
   db: Database.Database,
@@ -34,7 +37,7 @@ export function loadDistrictIdByGridIndex(
     return null;
   }
 
-  const raw = JSON.parse(readFileSync(metaPath, 'utf-8')) as { districts: GridMetaDistrict[] };
+  const meta = loadGridMeta(seedDir, citySlug);
 
   const rows = db
     .prepare<[string], DistrictRow>(
@@ -47,7 +50,7 @@ export function loadDistrictIdByGridIndex(
   const idByName = new Map(rows.map((row) => [row.name, row.id]));
 
   const map = new Map<number, number>();
-  for (const district of raw.districts) {
+  for (const district of meta.districts) {
     const id = idByName.get(district.name);
     if (id != null) {
       map.set(district.index, id);

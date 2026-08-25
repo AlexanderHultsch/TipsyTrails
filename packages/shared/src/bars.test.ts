@@ -9,6 +9,7 @@ import {
   diffBars,
   gridParamsFromCityConfig,
   osmElementsToBars,
+  parseBarsFile,
   parseBarsPayload,
   type Bar,
   type OverpassBarElement,
@@ -780,5 +781,108 @@ describe('compareBarsByName', () => {
         `"${left}" and "${right}" must not compare equal, or the id tie-break decides their order`,
       ).not.toBe(0);
     }
+  });
+});
+
+// Review block R2 (boundaries): both suites below exercise the *rejecting*
+// branch of a check added in that block. A validator no test can make say no
+// is decoration, so each case here is one the previous cast let through as
+// type-confused data or as a TypeError from somewhere unrelated.
+describe('parseBarsPayload: a GeoJSON Point with unusable coordinates', () => {
+  function pointPayload(coordinates: unknown): string {
+    return JSON.stringify({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          id: 'node/10',
+          properties: { amenity: 'bar', name: 'Durlacher Hof' },
+          geometry: { type: 'Point', coordinates },
+        },
+      ],
+    });
+  }
+
+  it.each([
+    ['not an array', '8.41,49.01'],
+    ['a one-element array', [8.41]],
+    ['an empty array', []],
+    ['null', null],
+    ['strings rather than numbers', ['8.41', '49.01']],
+  ])('is rejected by name rather than carried forward when it is %s', (_label, coordinates) => {
+    expect(() => parseBarsPayload(pointPayload(coordinates), 'application/json')).toThrow(
+      /Durlacher Hof.*coordinates/s,
+    );
+  });
+
+  // The elevation case is the reason this is a length/type check and not an
+  // exact-length one: RFC 7946 allows a third element, the destructuring this
+  // replaced accepted it, and it must keep working.
+  it('still accepts a position carrying an elevation as its third element', () => {
+    const parsed = parseBarsPayload(pointPayload([8.41, 49.01, 116]), 'application/json');
+    expect(parsed.elements).toEqual([
+      {
+        type: 'node',
+        id: 10,
+        lat: 49.01,
+        lon: 8.41,
+        tags: { amenity: 'bar', name: 'Durlacher Hof' },
+      },
+    ]);
+  });
+});
+
+describe('parseBarsFile', () => {
+  const VALID: Bar = {
+    osm_id: 'node/10',
+    name: 'Durlacher Hof',
+    address: 'Kaiserstraße 1, 76133 Karlsruhe',
+    lat: 49.01,
+    lon: 8.41,
+    cell_index: 42,
+    source: 'osm',
+  };
+
+  it('returns the entries unchanged for a well-formed file', () => {
+    expect(
+      parseBarsFile([VALID, { ...VALID, osm_id: 'way/20', address: null }], 'bars.json'),
+    ).toEqual([VALID, { ...VALID, osm_id: 'way/20', address: null }]);
+  });
+
+  it('accepts an empty array — a city with no bars yet is a file, not a fault', () => {
+    expect(parseBarsFile([], 'bars.json')).toEqual([]);
+  });
+
+  it.each([
+    ['an object', {}],
+    ['null', null],
+    ['a string', 'bars'],
+    ['a number', 7],
+  ])('rejects a payload that is %s, naming the file', (_label, payload) => {
+    expect(() => parseBarsFile(payload, '/seed/bars.json')).toThrow(
+      /\/seed\/bars\.json.*does not contain a JSON array/s,
+    );
+  });
+
+  it.each([
+    ['a non-object entry', 'not-a-bar', /entry 1 is not an object/],
+    ['a missing osm_id', { ...VALID, osm_id: undefined }, /entry 1 has no "osm_id" string/],
+    ['an empty osm_id', { ...VALID, osm_id: '' }, /entry 1 has no "osm_id" string/],
+    ['a missing name', { ...VALID, name: undefined }, /has no "name" string/],
+    ['a numeric address', { ...VALID, address: 7 }, /neither a string nor null/],
+    ['a NaN lat', { ...VALID, lat: 'x' }, /no finite "lat"\/"lon"/],
+    ['a fractional cell_index', { ...VALID, cell_index: 1.5 }, /"cell_index"/],
+    ['a negative cell_index', { ...VALID, cell_index: -1 }, /"cell_index"/],
+    ['a foreign source', { ...VALID, source: 'community' }, /expected "osm"/],
+  ])('rejects %s, naming the offending entry', (_label, entry, pattern) => {
+    expect(() => parseBarsFile([VALID, entry], 'bars.json')).toThrow(pattern);
+  });
+
+  // The index in the message is the index in the file, not in some filtered
+  // subset — an operator opening bars.json has to be able to go straight to it.
+  it('reports the index of the offending entry, not of the first entry', () => {
+    expect(() => parseBarsFile([VALID, VALID, { ...VALID, name: '' }], 'bars.json')).toThrow(
+      /entry 2 /,
+    );
   });
 });

@@ -59,6 +59,7 @@ import {
   buildBarsQuery,
   diffBars,
   osmElementsToBars,
+  parseBarsFile,
   parseBarsPayload,
   type Bar,
   type BarDiff,
@@ -215,8 +216,9 @@ function loadPreviousBars(path: string): Bar[] | undefined {
     });
   }
 
+  let json: unknown;
   try {
-    return JSON.parse(raw) as Bar[];
+    json = JSON.parse(raw);
   } catch (err) {
     throw new Error(
       `Existing "${path}" is not valid JSON, so no diff can be computed against it: ` +
@@ -224,6 +226,12 @@ function loadPreviousBars(path: string): Bar[] | undefined {
       { cause: err },
     );
   }
+
+  // Shape-checked rather than cast: this file is written by this script but
+  // read back on a later run, possibly after a hand edit, and `diffBars`
+  // takes `Bar[]` on trust. See `parseBarsFile`'s own note for what the cast
+  // used to produce instead of a diagnosis.
+  return parseBarsFile(json, path);
 }
 
 function printDiffReport(diff: BarDiff): void {

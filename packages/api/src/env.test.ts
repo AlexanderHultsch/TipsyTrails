@@ -214,3 +214,46 @@ describe('loadEnv', () => {
     expect(message).toContain('DATABASE_PATH');
   });
 });
+
+// Review block R2 (boundaries). Both variables were shape-validated but not
+// meaning-validated: an API_PORT of 3000.5 and a PUBLIC_ORIGIN of ftp://…
+// both parsed cleanly and failed later, somewhere else, without naming
+// themselves. Each case below is one that used to get past loadEnv.
+describe('loadEnv checks API_PORT and PUBLIC_ORIGIN for meaning, not only shape', () => {
+  it.each([
+    ['fractional', '3000.5'],
+    ['above the TCP port range', '99999'],
+    ['negative', '-1'],
+    ['zero', '0'],
+  ])('rejects an API_PORT that is %s, naming the variable', (_label, port) => {
+    expect(() => loadEnv({ ...validEnv, API_PORT: port })).toThrow(/API_PORT/);
+  });
+
+  it('rejects a PORT alias that is not a usable port either', () => {
+    expect(() => loadEnv({ ...validEnv, PORT: '70000' })).toThrow(/API_PORT/);
+  });
+
+  it.each([['ftp://tipsytrails.example'], ['javascript:alert(1)'], ['mailto:someone@example.com']])(
+    'rejects PUBLIC_ORIGIN %s, which bare URL syntax accepts',
+    (origin) => {
+      expect(() => loadEnv({ ...validEnv, PUBLIC_ORIGIN: origin })).toThrow(/PUBLIC_ORIGIN/);
+    },
+  );
+
+  // The complement: both tightenings must still accept everything a real
+  // deployment uses, or this is a broken container rather than a check.
+  it.each([
+    ['the production https origin', 'https://tipsytrails.ahultsch.com'],
+    ['a plain-http local origin', 'http://localhost:5173'],
+  ])('still accepts %s', (_label, origin) => {
+    expect(loadEnv({ ...validEnv, PUBLIC_ORIGIN: origin }).PUBLIC_ORIGIN).toBe(origin);
+  });
+
+  it.each([
+    ['the lowest port', '1', 1],
+    ['the highest port', '65535', 65535],
+    ['the ordinary one', '3000', 3000],
+  ])('still accepts %s', (_label, port, expected) => {
+    expect(loadEnv({ ...validEnv, API_PORT: port }).API_PORT).toBe(expected);
+  });
+});

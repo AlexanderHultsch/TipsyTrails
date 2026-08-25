@@ -13,8 +13,23 @@ function emptyToUndefined(value: string | undefined): string | undefined {
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   API_HOST: z.string().default('0.0.0.0'),
-  API_PORT: z.coerce.number().default(3000),
-  PUBLIC_ORIGIN: z.url(),
+  // Constrained to a real TCP port, not merely "a number": `app.listen`
+  // (server.ts) is what a fractional, negative or over-65535 value actually
+  // fails on, several steps later and as a RangeError about a value the
+  // operator never typed in that form. Same reasoning as SESSION_SECRET's
+  // `.min(32)` — the variable is checked for what it has to mean, not only
+  // for what it has to look like, and the one place that check belongs is
+  // the point the environment is read.
+  API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  // `protocol` as well as URL syntax. Bare `z.url()` accepts `ftp://…` and
+  // `javascript:…`, and a PUBLIC_ORIGIN like that fails three separate
+  // things much later and each in its own confusing way: the session cookie
+  // silently loses its `secure` flag (auth/cookie.ts reads
+  // `startsWith('https:')`), every state-changing request is refused because
+  // no browser will ever send a matching Origin header (http/csrf.ts), and
+  // Web Push turns itself off because `setVapidDetails` rejects the subject
+  // (push/sender.ts). None of those name the variable; this does.
+  PUBLIC_ORIGIN: z.url({ protocol: /^https?$/ }),
   DATABASE_PATH: z.string().min(1),
   SESSION_SECRET: z.string().min(32),
   ADMIN_USER: z.string().optional(),

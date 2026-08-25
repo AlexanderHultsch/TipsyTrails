@@ -605,3 +605,114 @@ describe('fog state offline', () => {
     expect(window.localStorage.getItem('tipsytrails:fog-cache:1')).toBeNull();
   });
 });
+
+// Review block R2 (boundaries). Everything else in this file reads sw.js as
+// text and asserts on the source; the push handler is worth actually running,
+// because what is being checked is a decision it makes about a value, not a
+// line it contains. The file registers listeners and nothing else at load
+// time, so evaluating it against a stub ServiceWorkerGlobalScope is enough to
+// get hold of the handler - `install`/`activate`/`fetch` are registered and
+// never fired here.
+describe("sw.js's push handler against a payload of the wrong shape", () => {
+  interface ShownNotification {
+    title: unknown;
+    options: { body?: unknown };
+  }
+
+  function pushHandlerWithCapture(): {
+    push: (event: unknown) => void;
+    shown: ShownNotification[];
+  } {
+    const shown: ShownNotification[] = [];
+    const listeners = new Map<string, (event: unknown) => void>();
+    const self = {
+      addEventListener: (type: string, handler: (event: unknown) => void) => {
+        listeners.set(type, handler);
+      },
+      skipWaiting: () => undefined,
+      clients: { claim: () => Promise.resolve(), matchAll: () => Promise.resolve([]) },
+      location: { origin: 'https://example.test' },
+      registration: {
+        showNotification: (title: unknown, options: { body?: unknown }) => {
+          shown.push({ title, options });
+          return Promise.resolve();
+        },
+      },
+    };
+    const source = readFileSync(`${WEB_ROOT}/public/sw.js`, 'utf-8');
+    new Function('self', 'caches', source)(self, { open: () => Promise.resolve() });
+
+    const push = listeners.get('push');
+    if (!push) {
+      throw new Error('sw.js registered no push listener');
+    }
+    return { push, shown };
+  }
+
+  function fire(data: unknown): ShownNotification {
+    const { push, shown } = pushHandlerWithCapture();
+    push({
+      data: {
+        json: () => data,
+        text: () => JSON.stringify(data),
+      },
+      waitUntil: () => undefined,
+    });
+    if (shown.length !== 1) {
+      throw new Error(`expected exactly one notification, got ${shown.length}`);
+    }
+    return shown[0];
+  }
+
+  const DEFAULT_TITLE = 'Tipsy Trails';
+  const DEFAULT_BODY = 'Your visit is close to complete.';
+
+  it('shows the real payload when the server sends the shape it is meant to', () => {
+    const shown = fire({ title: 'Almost there', body: 'Your visit to Traube is nearly complete.' });
+    expect(shown.title).toBe('Almost there');
+    expect(shown.options.body).toBe('Your visit to Traube is nearly complete.');
+  });
+
+  // The failure this replaced: `data.title ?? title` passes a number or an
+  // object straight through, and showNotification stringifies whatever it is
+  // handed - a notification reading "[object Object]". These four are the
+  // cases the type check is load-bearing for; reverting it to `?? ` fails
+  // exactly these.
+  it.each([
+    ['an object body', { title: 'Almost there', body: { text: 'nearly done' } }],
+    ['a numeric title and body', { title: 42, body: 7 }],
+    ['an array body', { title: 'Almost there', body: ['nearly', 'done'] }],
+    ['a payload that is JSON null', null],
+  ])('falls back to the default text rather than stringifying %s', (_label, payload) => {
+    const shown = fire(payload);
+    expect(shown.options.body).toBe(DEFAULT_BODY);
+    expect(String(shown.title)).not.toContain('[object');
+  });
+
+  // These two already fell back correctly before the type check, because
+  // reading `.title` off a number or an array yields undefined and `?? ` took
+  // the default. Kept as guards on that path, not as evidence for the check.
+  it.each([
+    ['not an object at all', 42],
+    ['a JSON array', ['Almost there']],
+  ])('also falls back to the defaults for a payload that is %s', (_label, payload) => {
+    const shown = fire(payload);
+    expect(shown.title).toBe(DEFAULT_TITLE);
+    expect(shown.options.body).toBe(DEFAULT_BODY);
+  });
+
+  it('keeps the default title when only the body is a usable string', () => {
+    const shown = fire({ title: null, body: 'Your visit to Traube is nearly complete.' });
+    expect(shown.title).toBe(DEFAULT_TITLE);
+    expect(shown.options.body).toBe('Your visit to Traube is nearly complete.');
+  });
+
+  // A type check and nothing more: an empty string is still a string and
+  // still wins, exactly as `?? ` let it. Rejecting it would be a behaviour
+  // change dressed up as validation.
+  it('still lets an empty string override a default, as it always did', () => {
+    const shown = fire({ title: '', body: '' });
+    expect(shown.title).toBe('');
+    expect(shown.options.body).toBe('');
+  });
+});

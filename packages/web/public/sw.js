@@ -128,6 +128,20 @@ async function cacheFirst(request) {
   return response;
 }
 
+// The payload is written by packages/api/src/maintenance.ts and encrypted to
+// this subscription's keys, so only that server can produce one - but what
+// reaches here is still parsed JSON of unknown shape, and the two defaults
+// below only actually defend the notification if a wrong-shaped payload
+// falls back to them. `?? title` did not: a payload whose `title` is a
+// number or an object is not null or undefined, so it passed straight into
+// showNotification, which stringifies whatever it is given - "[object
+// Object]" as the visible text of a notification. The realistic cause is a
+// server whose payload shape moved on while an old subscription is still
+// live, not an attacker. Checking the type instead means only a string can
+// override a default, and anything else leaves the default standing. It is a
+// type check and nothing more - an empty string is still a string and still
+// wins, exactly as it did before, so no payload that worked has stopped
+// working.
 self.addEventListener('push', (event) => {
   let title = 'Tipsy Trails';
   let body = 'Your visit is close to complete.';
@@ -135,8 +149,12 @@ self.addEventListener('push', (event) => {
   if (event.data) {
     try {
       const data = event.data.json();
-      title = data.title ?? title;
-      body = data.body ?? body;
+      if (typeof data?.title === 'string') {
+        title = data.title;
+      }
+      if (typeof data?.body === 'string') {
+        body = data.body;
+      }
     } catch {
       body = event.data.text();
     }

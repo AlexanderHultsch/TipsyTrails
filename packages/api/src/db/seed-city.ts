@@ -31,10 +31,46 @@ const gridMetaSchema = z.object({
 
 type GridMeta = z.infer<typeof gridMetaSchema>;
 
-function loadGridMeta(seedDir: string, slug: string): GridMeta {
+/**
+ * The one reader of `data/seed/<slug>/grid-meta.json` in this package.
+ * Exported for `fog/district-index.ts`, which reads the same file for its
+ * own half of it (`districts[].index` -> `districts.id`) and used to cast
+ * the parse result instead — a cast that turned a wrongly regenerated file
+ * into `undefined is not iterable` a few lines later rather than a
+ * diagnosis. Two readers of one file with one schema between them, so a
+ * field this schema does not know about cannot reach either of them.
+ *
+ * Failure is an Error naming the path and what was wrong with it: the
+ * operator regenerates this file with `scripts/build-grid.ts`, and a bare
+ * ZodError (or a TypeError from downstream) names neither the file nor the
+ * command that produces it.
+ */
+export function loadGridMeta(seedDir: string, slug: string): GridMeta {
   const path = join(seedDir, slug, 'grid-meta.json');
   const raw = readFileSync(path, 'utf-8');
-  return gridMetaSchema.parse(JSON.parse(raw));
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Regenerate it with scripts/build-grid.ts --city=${slug}.`,
+      { cause: err },
+    );
+  }
+
+  const parsed = gridMetaSchema.safeParse(json);
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('; ');
+    throw new Error(
+      `${path} is not a valid grid-meta.json (${problems}). ` +
+        `Regenerate it with scripts/build-grid.ts --city=${slug}.`,
+    );
+  }
+  return parsed.data;
 }
 
 interface ExistingDistrictRow {
