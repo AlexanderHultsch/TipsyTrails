@@ -3,7 +3,7 @@ import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG, toCell, type GridParams } from '@tipsytrails/shared';
+import { CONFIG, TELEPORT_FIX, toCell, type GridParams } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,14 +14,16 @@ import { seedBars } from '../db/seed-bars.js';
 import { seedCity } from '../db/seed-city.js';
 import { loadEnv } from '../env.js';
 
-// SPEC.md Sections 9.3, 10.1: `POST /api/admin/teleport`.
+// SPEC.md Sections 9.3, 10.1: `/api/admin/teleport` — POST to set the mode,
+// GET to read it, DELETE to leave it.
 //
 // This file is the evidence for the four gates in routes/admin-teleport.ts's
 // header, and each gate has a test that fails on its own if that gate is
-// removed. It also pins the thing the feature must NOT do — the last
-// describe block puts guard-shaped fields into `POST /api/samples` and
-// requires that the public route go on refusing exactly what it refused
-// before them.
+// removed — on all three methods, since the GET and the DELETE stand behind
+// the same registration and the same `requireAdmin`. It also pins the thing
+// the feature must NOT do — the last describe block puts guard-shaped fields
+// into `POST /api/samples` and requires that the public route go on refusing
+// exactly what it refused before them.
 
 const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url));
 
@@ -173,6 +175,22 @@ function teleport(
     url: '/api/admin/teleport',
     ...(cookie === undefined ? {} : { headers: { cookie } }),
     payload: body,
+  });
+}
+
+function readTeleport(cookie: string | undefined): Promise<LightMyRequestResponse> {
+  return injectWithOrigin({
+    method: 'GET',
+    url: '/api/admin/teleport',
+    ...(cookie === undefined ? {} : { headers: { cookie } }),
+  });
+}
+
+function clearTeleport(cookie: string | undefined): Promise<LightMyRequestResponse> {
+  return injectWithOrigin({
+    method: 'DELETE',
+    url: '/api/admin/teleport',
+    ...(cookie === undefined ? {} : { headers: { cookie } }),
   });
 }
 
@@ -536,6 +554,251 @@ describe('lastAccepted after a teleport', () => {
 
     expect(checkIn.statusCode).toBe(200);
     expect(checkIn.json().status).toBe('pending');
+  });
+});
+
+// ── Teleport as a mode: GET and DELETE ──────────────────────────────────
+// SPEC.md Section 9.3. The POST above moves the server's idea of where the
+// admin is; these two are what let the client find out and get back. Every
+// gate the POST carries applies here too, except the ranking exclusion,
+// which guards the POST alone — see the route's header for why putting it on
+// the DELETE would strand an admin in a position they are not at.
+describe('the teleport mode — reading it and leaving it', () => {
+  describe('gate 2 — neither method exists without ADMIN_TELEPORT_ENABLED', () => {
+    it.each([
+      ['absent', 'absent'],
+      ['explicitly false', 'false'],
+    ] as const)('answers 404 to GET and DELETE when the variable is %s', async (_l, value) => {
+      startApp(value);
+      const cookie = await registerExcludedAdmin('boss');
+
+      expect((await readTeleport(cookie)).statusCode).toBe(404);
+      expect((await clearTeleport(cookie)).statusCode).toBe(404);
+    });
+  });
+
+  describe('gate 1 — requireAdmin, on both of them', () => {
+    it('answers 401 to an anonymous caller', async () => {
+      expect((await readTeleport(undefined)).statusCode).toBe(401);
+      expect((await clearTeleport(undefined)).statusCode).toBe(401);
+    });
+
+    // Without requireAdmin the GET would answer 200 `{ position: null }` to
+    // any signed-in account, which confirms the route exists on this
+    // deployment — exactly what gate 2's 404 withholds.
+    it('answers 403 to a signed-in non-admin, on both of them', async () => {
+      const cookie = await registerUser('regular');
+      excludeFromRankings('regular');
+
+      const read = await readTeleport(cookie);
+      const clear = await clearTeleport(cookie);
+
+      expect(read.statusCode).toBe(403);
+      expect(read.json().code).toBe('forbidden');
+      expect(clear.statusCode).toBe(403);
+      expect(clear.json().code).toBe('forbidden');
+    });
+  });
+
+  describe('GET — the caller reads their own mode', () => {
+    it('answers null before any teleport', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      const response = await readTeleport(cookie);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ position: null });
+    });
+
+    it('answers the point the last teleport landed on', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      await teleport(cookie, SCHLOSS);
+
+      expect((await readTeleport(cookie)).json()).toEqual({ position: SCHLOSS });
+    });
+
+    // "Until the admin teleports somewhere else": a second teleport replaces
+    // the first rather than stacking or being refused.
+    it('follows a second teleport rather than keeping the first', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      await teleport(cookie, SCHLOSS);
+      await teleport(cookie, FAR_POINT);
+
+      expect((await readTeleport(cookie)).json().position).toEqual(FAR_POINT);
+    });
+
+    // One Map keyed by user id, and this is what says so: an admin reads
+    // their own mode and never another account's.
+    it('answers per caller, not per server', async () => {
+      const one = await registerExcludedAdmin('boss');
+      const two = await registerExcludedAdmin('deputy');
+
+      await teleport(one, SCHLOSS);
+      await teleport(two, FAR_POINT);
+
+      expect((await readTeleport(one)).json().position).toEqual(SCHLOSS);
+      expect((await readTeleport(two)).json().position).toEqual(FAR_POINT);
+    });
+
+    it('is untouched by a teleport that was refused', async () => {
+      const cookie = await registerAdmin('boss');
+
+      // Gate 3 refuses this one: the account still counts in the rankings.
+      expect((await teleport(cookie, SCHLOSS)).statusCode).toBe(422);
+      expect((await readTeleport(cookie)).json().position).toBeNull();
+
+      excludeFromRankings('boss');
+      await teleport(cookie, SCHLOSS);
+      // ...and a later refusal does not move the mode either.
+      expect((await teleport(cookie, OUTSIDE_CITY)).statusCode).toBe(422);
+      expect((await readTeleport(cookie)).json().position).toEqual(SCHLOSS);
+    });
+  });
+
+  describe('DELETE — getting back to reality is never refused', () => {
+    it('clears the mode', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      await teleport(cookie, SCHLOSS);
+      const response = await clearTeleport(cookie);
+
+      expect(response.statusCode).toBe(200);
+      expect((await readTeleport(cookie)).json().position).toBeNull();
+    });
+
+    // The exclusion precondition guards the POST and must not guard this:
+    // an admin whose flag was cleared while they were teleported would
+    // otherwise be stuck asserting a position they are not at.
+    it('is allowed for an admin who is no longer excluded from the rankings', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+      await teleport(cookie, SCHLOSS);
+      db.prepare('UPDATE users SET excluded_from_rankings = 0 WHERE username = ?').run('boss');
+
+      // The POST is refused in that state, which is what makes this pair
+      // meaningful rather than two spellings of the same thing.
+      expect((await teleport(cookie, FAR_POINT)).statusCode).toBe(422);
+
+      const response = await clearTeleport(cookie);
+
+      expect(response.statusCode).toBe(200);
+      expect((await readTeleport(cookie)).json().position).toBeNull();
+    });
+
+    it('is a no-op rather than an error for an admin who never teleported', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      const response = await clearTeleport(cookie);
+
+      expect(response.statusCode).toBe(200);
+      expect((await readTeleport(cookie)).json().position).toBeNull();
+    });
+
+    // ── The half that is easy to miss ──────────────────────────────────
+    // Leaving the destination in `lastAccepted` would make the returning
+    // admin's first real fix a several-hundred-km/h jump, refused at Section
+    // 7.2 step 4 and refused SILENTLY: their app would simply stop working.
+    it("drops lastAccepted, so the returning admin's next real sample is accepted", async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      await teleport(cookie, FAR_POINT);
+      const revealedByTeleport = revealedCellsOf('boss');
+      await clearTeleport(cookie);
+
+      // 3 km from where the teleport left them, in the same instant: an
+      // implied speed of Infinity. With `lastAccepted` dropped there is no
+      // reference point at all, which Section 7.2 already defines as passing
+      // the first sample unconditionally — the API-restart case, reused.
+      const response = await postSamples(cookie, [goodSample()]);
+
+      expect(response.json().newCells).toBeGreaterThan(0);
+      expect(revealedCellsOf('boss')).toBeGreaterThan(revealedByTeleport);
+    });
+
+    // The control for the test above, and the reason it is not merely
+    // asserting that samples work: the identical sample while the teleport
+    // still stands is refused, exactly as Section 9.3 says it should be.
+    it('and that same sample is refused while the teleport still stands', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+
+      await teleport(cookie, FAR_POINT);
+      const response = await postSamples(cookie, [goodSample()]);
+
+      expect(response.json().newCells).toBe(0);
+    });
+
+    // The cost, stated rather than hidden: check-in reads the same map, so
+    // between leaving the mode and the first real fix the server genuinely
+    // does not know where the admin is and says so. True after a restart
+    // too, and the correct answer in both cases.
+    it('leaves check-in with no recent position until a real sample arrives', async () => {
+      const cookie = await registerExcludedAdmin('boss');
+      const moved = await teleport(cookie, FAR_POINT);
+      const barId = moved.json().newBars[0].id as number;
+
+      await clearTeleport(cookie);
+      const checkIn = await injectWithOrigin({
+        method: 'POST',
+        url: '/api/visits',
+        headers: { cookie },
+        payload: { barId },
+      });
+
+      expect(checkIn.statusCode).toBe(422);
+      expect(checkIn.json().code).toBe('no_recent_sample');
+    });
+
+    it('clears only the caller, not every teleported admin', async () => {
+      const one = await registerExcludedAdmin('boss');
+      const two = await registerExcludedAdmin('deputy');
+      await teleport(one, SCHLOSS);
+      await teleport(two, FAR_POINT);
+
+      await clearTeleport(one);
+
+      expect((await readTeleport(one)).json().position).toBeNull();
+      expect((await readTeleport(two)).json().position).toEqual(FAR_POINT);
+    });
+  });
+});
+
+// ── The client's own samples, while the mode stands ─────────────────────
+// SPEC.md Section 7.2: with a teleport on, the browser stops watching GPS
+// and posts the teleported point on the ordinary cadence instead
+// (packages/web/src/tracking/useSampleTracking.ts). It goes through
+// `POST /api/samples` with EVERY guard on and needs no bypass, which is what
+// lets that route stay exactly as it was. This is the proof of that claim
+// from the server's side.
+describe('a sample from the teleported point itself, through the public route', () => {
+  // `TELEPORT_FIX` is the pair the client sends, imported rather than
+  // retyped: if the two ever diverge, they diverge here first.
+  it('is accepted with the ordinary guards on, because it implies zero speed', async () => {
+    const cookie = await registerExcludedAdmin('boss');
+
+    const moved = await teleport(cookie, FAR_POINT);
+    const barId = moved.json().newBars[0].id as number;
+    const checkIn = await injectWithOrigin({
+      method: 'POST',
+      url: '/api/visits',
+      headers: { cookie },
+      payload: { barId },
+    });
+    expect(checkIn.statusCode).toBe(200);
+
+    // Exactly what the client posts while teleported: the same point, the
+    // same accuracy and speed the route synthesises, at the present instant.
+    const response = await postSamples(cookie, [
+      { ...FAR_POINT, ...TELEPORT_FIX, timestamp: Date.now() },
+    ]);
+
+    // Only an ACCEPTED sample touches a pending visit (Section 7.5 steps
+    // 3-4), so a second on-site sample is the evidence the guards passed it.
+    // The reveal cannot be the evidence here: the teleport already cleared
+    // the fog around this point.
+    expect(response.json().visitUpdates).toHaveLength(1);
+    expect(response.json().visitUpdates[0].onsiteSamples).toBe(2);
+    expect(response.json().tooFastToReveal).toBe(false);
   });
 });
 

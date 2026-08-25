@@ -36,6 +36,7 @@ export {
   onsiteRadiusM,
 } from './visits.js';
 export type { OnsiteCandidate } from './visits.js';
+export { TELEPORT_FIX } from './teleport.js';
 export { compareBarsByName } from './bars.js';
 export type { BarListEntry } from './bars.js';
 export { findConflictingBar, levenshteinRatio, normalizeBarName } from './suggest.js';

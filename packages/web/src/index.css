@@ -1290,6 +1290,63 @@ button:focus-visible,
    overflows, so there is one scrolling box here and not two.
    components/PendingVisitBanner.tsx scrolls the confirmation's buttons into
    view when it opens, so reaching them never depends on noticing this. */
+/* SPEC.md Sections 8.3/9.3: the admin teleport indicator, and the control
+   that leaves the mode. Row 1 of the overlay grid, beside the pending-visit
+   banner and styled like it - a bar that claims the top band rather than a
+   thing positioned against the map, which is what keeps it off every other
+   overlay without an offset chosen to miss them.
+
+   Ink and paper only. Section 8.1 keeps the accent for the player's own
+   position and for active states; a mode indicator is chrome reporting a
+   state, and the words are what make it unmissable. Slightly more opaque
+   than the plates the wordmark and the attribution sit on, for the reason
+   .pending-visit-banner is: a full-width bar of running text over fog and
+   road lines is not the same reading problem as a two-word mark.
+
+   The control inside it is an ordinary .button.button--secondary, so
+   Section 8.2's 44px minimum target and the focus ring come from that class
+   rather than being restated here. */
+.map-teleport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(244, 239, 230, 0.95);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+}
+
+/* Takes the width when both fit on one line and wraps whole rather than
+   letting the control drop to a line of its own at every phone width. */
+.map-teleport__text {
+  flex: 1 1 14rem;
+}
+
+.map-teleport__title {
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Named rather than styled as `.map-teleport__text p`, which would also
+   claim the error paragraph below it and would out-specify the title above
+   whatever the order of the two rules. */
+.map-teleport__detail {
+  font-size: 0.9375rem;
+  margin: 0.125rem 0 0;
+}
+
+.map-teleport__error {
+  margin: 0.5rem 0 0;
+}
+
+.map-teleport__leave {
+  flex: none;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
 .pending-visit-banner {
   padding: 0.75rem 1rem;
   background: rgba(244, 239, 230, 0.95);

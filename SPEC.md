@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.41
+**Version:** 1.42
 **Status:** Built and deployed; see _Status_ at the end of this front matter
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -886,6 +886,12 @@ Server-side validation, in order:
 
 The previous accepted position used by step 4 is held in memory only (Section 10.2). After an API restart the guard has no reference point and passes the first sample of each user unconditionally. This is an accepted degradation, not a bug to work around by persisting positions — that would violate C4.
 
+**While an admin teleport stands, this client watches nothing.** The teleported point (Section 9.3) _is_ the position: the map screen does not call `watchPosition` at all, and reports that point as the position everything else on the screen reads — the own-position marker, the nearby-bars panel, the check-in offer. One value, so none of them can disagree about where the player is, and no battery is spent on fixes that would be discarded.
+
+It keeps posting on the ordinary cadence from that point, through `POST /api/samples` with every gate above applied. **That path needs no bypass and must not be given one.** The server's previous accepted position is already the teleported point, so a sample from the same point implies zero speed and passes step 4 on its own terms; the accuracy and speed those samples carry are the same pair the teleport route synthesises for itself, so a check-in the client offers is one the server accepts. Section 10.1's single rule — `POST /api/samples` has no bypass parameter — is untouched by any of this.
+
+A teleport is not a way to sample from two places at once: the phone's real position is not watched, queued or posted while the mode is on, and the mode ends with an explicit request (Section 9.3) rather than with the next fix.
+
 ### 7.3 Fog of war
 
 This is the longest section in the document and the most heavily cited. It runs: the reveal rule; what the map tells the player and what it deliberately does not; the renderer; the layer order; the edge; the density; the roads and district borders; the canvas fallback.
@@ -1358,13 +1364,19 @@ How translucent is decided by the worst ground and not by taste. **Bare fog is n
 
 They were both 0.85 until v1.40, which the owner called "too much … the logo needs to be visible but I think it can be done with less". He also said he did not care whether the attribution is visible; that half is declined, because Section 10.5 is a licence obligation whose word is *legible* and not a design preference. Quiet is available to it. Absent is not.
 
-**No map overlay may obscure another.** The map screen carries eight overlays anchored to its edges — tracking icons, locate button, pending-visit banner, bar sheet, nearby-bars panel, notices, toasts, attribution — with Section 8.4's tab bar fixed below them, outside the overlay layout and clearing it rather than competing with it.
+**An admin who is teleported is told so on the map, and the way out is beside the words.** While the mode of Section 9.3 stands, the map screen carries a bar across its top band saying that this is a test position and not GPS, and a control that leaves the mode. An admin who forgets files bugs against a phantom, so the indicator is not optional and not subtle; it is ink on paper like every other piece of chrome here, because Section 8.1 keeps the accent for the player's own position and for active states and a mode indicator is neither.
+
+**Leaving teleport is a different action from recentring, so it is a different control.** The locate button is not given a second meaning, and three separate reasons each settle it: that button is shared with the picker on Suggest a bar, which has no teleport to leave; it is disabled whenever there is no position, and leaving teleport must never be refused for a condition of its own let alone for someone else's; and recentring is a free, idempotent camera move while leaving the mode is a server request that can fail and has to say so. Two actions that can disagree about whether they worked cannot share one button.
+
+What the two do share is the move. The owner asked for "the button to zoom back on the actual position", and at the moment of the tap there is no actual position to go to — the mode has just been left and the next real fix has not arrived. So the map goes to that first real fix, at `MAP_DEFAULT_ZOOM`, by making the same move the locate control makes rather than a second copy of it, once per leave.
+
+**No map overlay may obscure another.** The map screen carries ten overlays anchored to its edges — wordmark, tracking icons, locate button, pending-visit banner, teleport banner, bar sheet, nearby-bars panel, notices, toasts, attribution — with Section 8.4's tab bar fixed below them, outside the overlay layout and clearing it rather than competing with it.
 
 A control anchored to an edge must yield to any bar occupying that same edge: the locate button clears whatever occupies the bottom, the tracking icons clear the banner along the top, and each does so whether or not the bar it yields to is currently present. That last phrase means the guarantee holds in both states, not that empty space is reserved — with no banner the controls sit at the edge, and they move down when one appears.
 
-This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed, which is the sentence proving its own point: the ninth overlay is exactly what a list of hand-tuned offsets cannot survive.
+This section said "eight" until v1.19, listing the set as it stood before the bar sheet of Section 7.5 existed, which is the sentence proving its own point: the ninth overlay is exactly what a list of hand-tuned offsets cannot survive. It then said "eight" again for four more versions, because v1.38's chrome wordmark went onto the map without anybody counting it — proving the point a second time, this time about the list rather than about the layout.
 
-The requirement is therefore the rule and never the individual fixes. Nine independently positioned overlays that agree by coincidence are not a layout. What the screen needs is one container laying its edges out as bands that claim their own space, so that a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
+The requirement is therefore the rule and never the individual fixes. Ten independently positioned overlays that agree by coincidence are not a layout. What the screen needs is one container laying its edges out as bands that claim their own space, so that a control cannot be placed on a bar and an overlay added tomorrow goes into a band rather than on top of everything.
 
 Two things follow that are worth stating because they are easy to lose. The container must let pointer events through to the map and take them back only on the overlays themselves, or the map stops responding to drags. And the bottom safe-area inset belongs to the layout, applied once, rather than being repeated by every child that happens to sit at that edge.
 
@@ -1510,7 +1522,9 @@ The community duplicate guard (Section 11.3) does **not** apply to admin create 
 | POST | `/api/admin/bars` | Create bar directly |
 | GET | `/api/admin/users` | User list with stats, including `excludedFromRankings` |
 | PATCH | `/api/admin/users/:id` | Set or clear `excluded_from_rankings` (Sections 5.3, 7.8) — the only writable field of a user |
-| POST | `/api/admin/teleport` | Move the calling admin's own position to a point, running the sample pipeline with the speed guards off. **Registered only when `ADMIN_TELEPORT_ENABLED=true`** (Section 4.3); otherwise the path does not exist |
+| POST | `/api/admin/teleport` | Move the calling admin's own position to a point, running the sample pipeline with the speed guards off, and stay there. **Registered only when `ADMIN_TELEPORT_ENABLED=true`** (Section 4.3); otherwise the path does not exist |
+| GET | `/api/admin/teleport` | Where the caller is currently teleported to, or `null`. Same registration gate |
+| DELETE | `/api/admin/teleport` | Leave the mode, and drop the caller's previous accepted position with it. Same registration gate |
 
 Editing a bar's position recomputes `cell_index` and `district_id`. Existing discoveries are not revoked.
 
@@ -1528,9 +1542,25 @@ The screen shows the flag as well as setting it: an excluded account is marked i
 
 **Two guards are off and no others.** Section 7.2's teleport guard (`SAMPLE_TELEPORT_SPEED_KMH`) and Section 7.3's reveal-speed gate (`FOG_MAX_SPEED_KMH`) are skipped. Accuracy, clock skew, staleness and the active city's bounding box all still apply. The bounding box in particular is **not** bypassed: there is no fog grid outside Karlsruhe, so a teleport out there would test nothing. Unlike a GPS sample, which Section 5.1 says is silently ignored, a person who tapped a map is told — the route answers `422 outside_city`, the same way the admin create/move-a-bar handlers do.
 
-**`lastAccepted` holds the destination afterwards**, written by the shared pipeline rather than by anything special here. It has to: that map is what the *next* real sample is compared against, so leaving the pre-teleport position in it would make the admin's next genuine sample look like a 300 km/h jump and get it dropped — the feature would break the ordinary sampling it exists to exercise. Clearing it instead would break check-in, which reads the same map (Section 7.5 step 2). A consequence, stated rather than hidden: after teleporting away from where the phone actually is, the next genuine sample from the real location *is* refused by the guard, which is the guard working. Teleport back.
+**`lastAccepted` holds the destination afterwards**, written by the shared pipeline rather than by anything special here. It has to: that map is what the *next* real sample is compared against, so leaving the pre-teleport position in it would make the admin's next genuine sample look like a 300 km/h jump and get it dropped — the feature would break the ordinary sampling it exists to exercise. Clearing it instead would break check-in, which reads the same map (Section 7.5 step 2). A consequence, stated rather than hidden: while the mode stands, a genuine sample from the phone's real location *is* refused by the guard, which is the guard working. That is why leaving the mode is an operation and not a wait.
 
 The four gates that stand between a request and any of this are in Section 10.1.
+
+#### Teleport is a mode, not a one-shot
+
+The first version moved the server's idea of the admin's position and left the browser watching real GPS. The result was that fog cleared at the destination while the map marker, the nearby-bars panel and the check-in offer all stayed at the phone — so **the check-in flow could not be reached at the destination at all**, which is the thing the feature exists to test — and every real sample was refused for speed, silently, for as long as the phone was far from the destination.
+
+The requirement is therefore the owner's: *"we need to stay at the selected teleported position until the admin teleports somewhere else or presses the button to zoom back on the actual position."* Three operations on the one path deliver it, and all three stand behind the registration gate and `requireAdmin`:
+
+- **Set** — the `POST` above. Keeps the exclusion precondition, keeps firing the synthetic sample so fog clears immediately, and now also records the destination as the caller's teleported position. A second teleport replaces the first.
+- **Read** — the `GET`. Answers the caller's own teleported position or `null`, and nobody else's. It is on the admin route and deliberately **not** on `GET /api/auth/me` or any other route every player calls: a field that is null for everyone but the owner advertises the feature to people who cannot use it, which is the opposite of gate 2's purpose.
+- **Clear** — the `DELETE`. **No exclusion precondition on this one.** Getting back to reality must never be refused, including when the flag was cleared while the admin was teleported; a mode that could not be left would strand the app asserting a position the admin is not at.
+
+**The clear drops the caller's `lastAccepted` entry as well, and that is the half that is easy to miss.** It holds the teleport destination. Leave it and the returning admin's first real fix implies a jump of however far they teleported, is refused at Section 7.2 step 4, and is refused *silently* — their app simply stops working, sample after sample. Dropping the entry puts them in exactly the state Section 7.2 already defines for an API restart, where the guard has no reference point and passes the first sample unconditionally; that existing behaviour is reused rather than an exception being carved into the guard, and `POST /api/samples` is untouched. The cost is the mirror of that restart: check-in answers `no_recent_sample` until the first real fix arrives, because the server genuinely does not know where the admin is.
+
+**A teleport asserts `accuracy: 0`, and that has a consequence worth stating once.** It is the strictest choice available and it is deliberate — a synthesised position declares no measurement error, and `onsiteRadiusM` widens the on-site radius with reported accuracy, so a teleport buys the tightest radius rather than a generous one. The client's samples while the mode stands carry the same pair, so the two agree. But the on-site radius that visit progress uses (Section 7.5 steps 3-4) is `onsiteRadiusM(accuracy)`, i.e. `BAR_ONSITE_RADIUS_M` exactly, while check-in judged against the previous accepted position uses the most-generous radius (`BAR_ONSITE_RADIUS_M + BAR_ACCURACY_TOLERANCE_M`). A teleport landing between those two distances of a bar can therefore check in and then never accrue a single on-site sample, and the visit expires instead of completing. Teleport onto the bar, not merely near it.
+
+**The state is held in memory and never in the database.** Constraint C4 and Section 10.2 forbid persisting a position, and a teleported point is a position; Section 7.2 already pre-empts this workaround for the previous-accepted-position map beside it. What that buys is what the owner needs for a twenty-minute mastering test: the mode is the server's, so it survives a page reload and a backgrounded phone. **What it costs is that it does not survive an API restart** — the same degradation `lastAccepted` has always carried. A restart therefore ends the mode, and it does so in two steps rather than one: the next load of the map screen asks, is told `null`, and goes back to real GPS, while a map screen that is *already* open keeps honouring the point it was told about and keeps posting from it — those samples are accepted, because the restart also emptied the previous-accepted-position map and Section 7.2 passes the first sample unconditionally. Leaving the mode from that tab still works and is still worth doing: the `DELETE` clears a mode that is already gone, and clears the entry those samples have since re-seeded. None of this loses data or corrupts anything; it is written down so that a twenty-minute test is not quietly restarted underneath.
 
 **The bar list comes back ordered by name, and stays that way on screen.** The order is a
 locale-aware, case-insensitive collation of German place names — umlauts belong where a reader
@@ -1631,6 +1661,9 @@ FogProgress   { revealedCells, playableCells, districts: { id, revealedCells }[]
 | `GET /api/push/vapid-public-key` | `{ publicKey: string \| null }` |
 | `GET /api/admin/bars` | `{ bars: AdminBar[] }` where `AdminBar` is `{ id, cityId, districtId, name, address, lat, lon, source, submittedBy: number\|null, status: 'active'\|'hidden', createdAt }` |
 | `GET /api/admin/users` | `{ users: AdminUser[] }` where `AdminUser` is `{ id, username, isAdmin, isAnonymous, mustChangePassword, createdAt, lastSeenAt: number\|null, areaRevealedCells, areaPercent, barsMastered, badgeCount }` |
+| `POST /api/admin/teleport` | Exactly `POST /api/samples`'s body, deliberately — the admin screen renders what happened with the fields the map already understands |
+| `GET /api/admin/teleport` | `{ position: { lat, lon } \| null }` — an object with a nullable field, not a bare `null` body, so there is one shape to parse either way |
+| `DELETE /api/admin/teleport` | `{ ok: true }` |
 
 **`GET /api/fog`'s wire format.** The mask is the response body as
 `application/octet-stream`; `FogProgress` travels as JSON in an `X-Fog-Progress` response header,
@@ -1680,6 +1713,8 @@ Each gate is separately mutation-tested: removing any one of them fails a specif
 ### 10.2 Data minimisation
 
 Raw positions are **never persisted**. Samples are processed in memory to derive: revealed cells, bar discoveries, visit sample timestamps. The last accepted position per user is held in memory only, for the teleport guard, and discarded on restart.
+
+The admin teleport's own state (Section 9.3) is the second position this server holds and is held the same way: in memory, keyed by user id, discarded on restart. A synthetic position is a position, so C4 covers it exactly as it covers a real one — there is no table, no column and no migration for it, and the survival it does have across a reload comes from being the server's rather than from being stored.
 
 Stored per user: username, hashes, avatar seed, fog bitmask, per-day reveal counts, discovered bar IDs, visit records (bar + timestamps), badges, push subscription. Nothing else.
 
@@ -2045,6 +2080,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 
 A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
 
+- **v1.42** — Teleport becomes a mode the client honours instead of a one-shot it never hears about: `GET` and `DELETE` join the `POST` on `/api/admin/teleport` behind the same registration gate and the same `requireAdmin`, the clear carries no exclusion precondition and drops the caller's last accepted position with the mode, and the map screen stops watching GPS and reports the teleported point as the position while one stands — posting from it on the ordinary cadence through an unchanged `POST /api/samples`. The map says so in a bar across its top band and carries the way out beside the words. The state is in memory beside the previous-accepted-position map: it survives a reload, not a restart. Sections 7.2, 8.3, 9.3, 9.6, 10.2.
 - **v1.41** — `users.excluded_from_rankings` (migration 003) takes an account out of the leaderboard and out of the badge race without taking it out of the game, set from a toggle on the admin user list; and `POST /api/admin/teleport` moves an admin's own position to a point on the map picker, running the shared sample pipeline with the two speed guards off behind four independent gates — `requireAdmin`, the `ADMIN_TELEPORT_ENABLED` variable whose absence means the route is not registered, the exclusion above, and no client-side gate anywhere. `POST /api/samples` keeps exactly the validation it had. Sections 4.3, 5.3, 7.7, 7.8, 9.3, 10.1.
 - **v1.40** — The explorer badge gains a case: a ring with a north-pointing needle, because the bare compass rose it replaced reads as a star at 1.25 rem and the month modifier above it is a star. The More sheet's bug item says "Report a bug on GitHub" and nothing else, with the new-tab warning kept in its accessible name and the GitHub-account line dropped from the screen. The map's wordmark and OSM attribution plates drop from 0.85 to 0.6 and 0.5, measured against the darkest ground the ink style can produce rather than against the fog. Sections 7.7, 8.3, 8.4.
 - **v1.39** — The badge note drops its closing "no fixed score wins one" clause at the owner's direction, on the shelf and in Section 7.7 alike. O15 (fog shimmer) closed: the owner has confirmed the application working in the field, which is the only place it could ever have been confirmed.
@@ -2108,4 +2144,4 @@ Kept only where a future reader might otherwise re-propose the reverted thing an
 
 ---
 
-_End of specification v1.41_
+_End of specification v1.42_

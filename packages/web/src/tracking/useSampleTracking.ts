@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { CONFIG } from '@tipsytrails/shared';
+import { CONFIG, TELEPORT_FIX } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
 import type { Bar, Sample, VisitSummary } from '../api/types.js';
-import { setLastKnownPosition } from './lastKnownPosition.js';
+import { clearLastKnownPosition, setLastKnownPosition } from './lastKnownPosition.js';
 import { computeConnectionStatus, computeGpsStatus } from './status.js';
 import type { ConnectionStatus, GpsStatus } from './status.js';
 
@@ -129,12 +129,35 @@ export interface SampleTrackingState {
   lastPosition: LastAcceptedPosition | null;
 }
 
+// SPEC.md Sections 7.2/9.3: the admin teleport, as this hook sees it.
+//
+// `resolving` is an admin's map screen that has asked GET /api/admin/teleport
+// and has no answer yet, and it is not the same as `off`. The watch must not
+// start during it: a fix that arrives before the answer is a real position
+// posted from a server that believes the account is elsewhere (refused, and
+// silently), and it is the value the map would centre itself on with its
+// one automatic centring. Every non-admin, and every failure of that request
+// including the 404 a server without ADMIN_TELEPORT_ENABLED answers, is
+// `off` and behaves exactly as this hook always has.
+export type TeleportMode =
+  { status: 'resolving' } | { status: 'off' } | { status: 'on'; lat: number; lon: number };
+
 // Section 7.2 + 8.6: watches position via watchPosition while the map
 // screen is in the foreground, batches samples client-side, throttles
 // posts to SAMPLE_MIN_INTERVAL_MS, holds a Screen Wake Lock while running,
 // and queues samples across offline stretches rather than dropping them
 // (Section 12, Phase 8's "never fail silently" habit, applied early).
-export function useSampleTracking(): SampleTrackingState {
+//
+// Section 9.3: while a teleport stands, the teleported point IS the
+// position. The watch is not started, and that one change fixes the map
+// marker, the nearby-bars panel, the check-in offer and the battery drain
+// together, because all four already read `lastPosition` and nothing else.
+// Samples keep being posted on the ordinary cadence from that point, through
+// POST /api/samples with every ordinary guard on: the server's `lastAccepted`
+// is already there, so a sample from the same point implies zero speed and
+// passes. There is no bypass anywhere on that path and there must never be
+// one - Section 10.1 is the whole argument.
+export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
   // In-memory only, deliberately - this is what SPEC.md Section 12's
   // "queued samples survive going offline and are posted on reconnect"
   // actually covers (Phase 8 task brief, part C): a stretch offline while
@@ -175,8 +198,27 @@ export function useSampleTracking(): SampleTrackingState {
   const [visitUpdates, setVisitUpdates] = useState<VisitSummary[]>([]);
   const [visitVersion, setVisitVersion] = useState(0);
   const [lastPosition, setLastPosition] = useState<LastAcceptedPosition | null>(null);
+  // Whether the effect below last ran with a teleport standing, so that
+  // leaving the mode can drop the position it asserted. A ref rather than
+  // state: it is a latch the effect reads and writes, and the effect that
+  // reads it is already re-running for the change that sets it.
+  const wasTeleportedRef = useRef(false);
+
+  // Read out of the mode as three primitives, because the effect keys on
+  // them: an object rebuilt by the map screen on every render would tear the
+  // watch down and rebuild it on every render with it.
+  const teleportStatus = teleport.status;
+  const teleportLat = teleport.status === 'on' ? teleport.lat : null;
+  const teleportLon = teleport.status === 'on' ? teleport.lon : null;
 
   useEffect(() => {
+    // Both null for every non-admin and for every admin who is not
+    // teleported, which is the case this whole effect had before and still
+    // has: one watch, started when the screen is visible.
+    const teleported =
+      teleportLat !== null && teleportLon !== null ? { lat: teleportLat, lon: teleportLon } : null;
+    const resolving = teleportStatus === 'resolving';
+
     function scheduleStaleCheck() {
       if (staleTimeoutRef.current !== null) {
         clearTimeout(staleTimeoutRef.current);
@@ -214,8 +256,13 @@ export function useSampleTracking(): SampleTrackingState {
       scheduleStaleCheck();
     }
 
+    // Section 9.3: the teleported point is the position, so there is nothing
+    // for a watch to report. Guarded here rather than at each of the three
+    // call sites below (mount, visibilitychange, coming back from a hidden
+    // tab), so no path into a watch can be added later that forgets the
+    // mode. `resolving` holds it back for the same reason - see TeleportMode.
     function startWatch() {
-      if (!('geolocation' in navigator) || watchIdRef.current !== null) {
+      if (resolving || teleported || !('geolocation' in navigator) || watchIdRef.current !== null) {
         return;
       }
       watchIdRef.current = navigator.geolocation.watchPosition(
@@ -235,7 +282,12 @@ export function useSampleTracking(): SampleTrackingState {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-      setTrackingActive(false);
+      // While teleported this stays true, and that is not a cosmetic choice.
+      // Section 8.6's third icon reports whether this device is recording a
+      // position at all, and it is: the interval below keeps posting the
+      // teleported point whether the tab is in the foreground or not, so
+      // "paused" would be the false statement here.
+      setTrackingActive(teleported !== null);
     }
 
     function acquireWakeLock() {
@@ -344,6 +396,35 @@ export function useSampleTracking(): SampleTrackingState {
       setIsOnline(false);
     }
 
+    // Section 9.3, the whole client half of the mode. The teleported point
+    // becomes this device's position immediately, without waiting for a
+    // cadence tick, because the map marker, the nearby panel and the
+    // check-in offer all read it and an empty screen for ten seconds is not
+    // a state worth having. `heading: null` because a course is measured
+    // between fixes and nothing here moved; `accuracy` is the server's own
+    // TELEPORT_FIX, so the radius the client offers check-in at is the
+    // radius the server will judge it by.
+    if (teleported) {
+      wasTeleportedRef.current = true;
+      const standingAt: LastAcceptedPosition = {
+        ...teleported,
+        accuracy: TELEPORT_FIX.accuracy,
+        heading: null,
+      };
+      setLastPosition(standingAt);
+      setLastKnownPosition(standingAt);
+      setTrackingActive(true);
+    } else if (wasTeleportedRef.current) {
+      // Leaving the mode. The teleported point is dropped rather than left
+      // standing until the first real fix replaces it: the server has just
+      // forgotten it too (the DELETE drops `lastAccepted`), and a marker
+      // claiming a position neither side believes is exactly the phantom
+      // this feature was filing bugs against.
+      wasTeleportedRef.current = false;
+      setLastPosition(null);
+      clearLastKnownPosition();
+    }
+
     if (document.visibilityState === 'visible') {
       startWatch();
       acquireWakeLock();
@@ -353,6 +434,21 @@ export function useSampleTracking(): SampleTrackingState {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     const flushInterval = setInterval(() => {
+      // The teleported point, on the ordinary cadence and through the
+      // ordinary route. It needs no bypass and must not have one: the
+      // server's `lastAccepted` is already at this point, so the implied
+      // speed is zero and every Section 7.2 gate passes on its own terms.
+      // What these samples buy is Section 7.5's visit progress - mastering
+      // needs on-site samples twenty minutes apart, and a teleport that
+      // posted once could never produce the second one.
+      if (teleported) {
+        queueRef.current.push({
+          ...teleported,
+          ...TELEPORT_FIX,
+          timestamp: Date.now(),
+        });
+        setQueueDepth(queueRef.current.length);
+      }
       void flush();
     }, CONFIG.SAMPLE_MIN_INTERVAL_MS);
 
@@ -367,7 +463,12 @@ export function useSampleTracking(): SampleTrackingState {
       stopWatch();
       releaseWakeLock();
     };
-  }, []);
+    // Deliberately keyed on the teleport mode and nothing else. Entering or
+    // leaving it is the one thing that changes what this hook does, and it
+    // happens at most twice in a session; the queue, the in-flight latch and
+    // the watch id are all refs, so they survive the rebuild. Every other
+    // value this effect closes over is a setter, which React keeps stable.
+  }, [teleportStatus, teleportLat, teleportLon]);
 
   return {
     gpsStatus,

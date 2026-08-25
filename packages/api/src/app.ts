@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { CONFIG } from '@tipsytrails/shared';
+import type { LatLon } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ACTIVE_CITY_SLUG } from './active-city.js';
@@ -143,21 +144,39 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   // SPEC.md Sections 9.3, 10.1: the admin teleport's second gate, and the
   // reason it is expressed as a registration rather than as a check inside
   // the handler. Without `ADMIN_TELEPORT_ENABLED=true` the plugin is never
-  // registered, so `POST /api/admin/teleport` is a route this server does
-  // not have — the SPA fallback below answers 404 — instead of a route that
-  // exists and says no. The code ships inert on a production box, and a
-  // stolen admin session finds nothing to reach.
+  // registered, so `/api/admin/teleport` is a path this server does not have
+  // — the SPA fallback below answers 404 to all three of its methods —
+  // instead of a route that exists and says no. The code ships inert on a
+  // production box, and a stolen admin session finds nothing to reach. It is
+  // also what the map screen reads that 404 as: "not teleported", never an
+  // error (screens/Map.tsx).
   //
   // It shares the one `lastAccepted` map for the same reason fogRoutes and
   // visitsRoutes do: a teleport has to be what the next real sample is
   // compared against, and check-in has to see where the teleport landed.
   if (env.ADMIN_TELEPORT_ENABLED === 'true') {
     app.log.warn(
-      'ADMIN_TELEPORT_ENABLED is set: POST /api/admin/teleport is registered. It moves an ' +
+      'ADMIN_TELEPORT_ENABLED is set: /api/admin/teleport is registered. It moves an ' +
         "admin's position without the speed guards and is intended for testing only; unset the " +
         'variable to remove the route.',
     );
-    app.register(adminTeleportRoutes(lastAccepted));
+    // Teleport as a mode rather than a one-shot (Section 9.3): where each
+    // teleported admin currently stands, so the client can be told to honour
+    // it until they teleport elsewhere or leave the mode.
+    //
+    // In memory and never in the database — constraint C4 and Section 10.2
+    // forbid persisting a position, and Section 7.2 pre-empts the workaround
+    // for the neighbouring map above. A restart is a fresh process and a
+    // fresh Map, so the mode dies with the process exactly as `lastAccepted`
+    // does.
+    //
+    // Declared inside this branch rather than beside `lastAccepted`, and
+    // that is the difference between the two: `lastAccepted` is shared by
+    // three plugins and lives where all three can be handed it, while this
+    // has exactly one consumer and a server that never enabled the feature
+    // then holds no such state at all.
+    const teleported = new Map<number, LatLon>();
+    app.register(adminTeleportRoutes(lastAccepted, teleported));
   }
   app.register(cityRoutes);
   app.register(fogRoutes(lastAccepted));

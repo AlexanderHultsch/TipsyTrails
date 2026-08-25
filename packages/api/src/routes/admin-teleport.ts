@@ -1,4 +1,5 @@
-import { toCell } from '@tipsytrails/shared';
+import { TELEPORT_FIX, toCell } from '@tipsytrails/shared';
+import type { LatLon } from '@tipsytrails/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth/cookie.js';
@@ -14,11 +15,45 @@ import type { AcceptedPosition } from '../last-accepted.js';
 import { isExcludedFromRankings } from '../rankings.js';
 import { processSampleBatch } from './fog.js';
 
-// SPEC.md Sections 9.3 and 10.1: `POST /api/admin/teleport`. Moves the
-// calling admin's own position to a chosen point and runs everything an
-// ordinary sample runs — fog reveal, bar discovery, visit progress — with
-// Section 7.2's teleport guard and Section 7.3's reveal-speed gate off, so
-// the owner can exercise the game without walking Karlsruhe.
+// SPEC.md Sections 9.3 and 10.1: `/api/admin/teleport`. Moves the calling
+// admin's own position to a chosen point and runs everything an ordinary
+// sample runs — fog reveal, bar discovery, visit progress — with Section
+// 7.2's teleport guard and Section 7.3's reveal-speed gate off, so the owner
+// can exercise the game without walking Karlsruhe.
+//
+// ════════════════════════════════════════════════════════════════════
+// Teleport is a MODE, and this route path is the whole of it
+// ════════════════════════════════════════════════════════════════════
+//
+// The first version was a one-shot: it moved the server's idea of where the
+// admin was and the browser never found out. The map marker, the nearby-bars
+// panel and the check-in offer all went on reading real GPS, so fog cleared
+// at the destination and the check-in flow — the thing the feature exists to
+// test — could not be reached there from the UI at all. Worse, every real
+// sample after a teleport was silently refused as a 300 km/h jump for as
+// long as the phone was far from the destination.
+//
+// So the destination is remembered, and three operations share this one path:
+//
+//  - `POST` sets it: the synthetic sample below, plus the destination
+//    recorded as this caller's teleported position.
+//  - `GET` reads the caller's own teleported position, or null. The map
+//    screen asks once on mount and, while an answer stands, stops watching
+//    GPS and reports that point as the player's position instead.
+//  - `DELETE` clears it, and drops this caller's `lastAccepted` entry with
+//    it. See its own comment: that second half is what lets the returning
+//    admin's first real fix be accepted.
+//
+// The state is a `Map<number, LatLon>` created in app.ts and passed in, IN
+// MEMORY AND NEVER IN THE DATABASE. Constraint C4 and Section 10.2 forbid
+// persisting a position, and Section 7.2 already pre-empts exactly this
+// workaround for the neighbouring `lastAccepted` map — "an accepted
+// degradation, not a bug to work around by persisting positions". A
+// teleported point is a position; nothing carves out a synthetic one. What
+// that buys is what the owner actually needs: the mode survives a page
+// reload and a backgrounded phone, because it lives on the server rather
+// than in a tab. What it costs is that it dies with the process, the same
+// degradation `lastAccepted` has always carried (Section 9.3).
 //
 // ════════════════════════════════════════════════════════════════════
 // Why this is a route of its own, and not a flag on POST /api/samples
@@ -53,6 +88,15 @@ import { processSampleBatch } from './fog.js';
 //     teleporting can ever produce a leaderboard place or a badge. It is
 //     checked before the body is even parsed — nothing at all happens for an
 //     account that still counts.
+//
+//     THIS ONE GUARDS THE `POST` AND NOTHING ELSE, and that asymmetry is
+//     deliberate rather than an oversight. It exists to stop a ranked
+//     account acquiring position it did not walk to; reading where the
+//     server already thinks you are acquires nothing, and getting back to
+//     reality least of all. Put it on the `DELETE` and an admin whose
+//     exclusion flag was cleared while they were teleported could never
+//     leave the mode — their app would be stuck asserting a position they
+//     are not at, which is the one failure this feature must not have.
 //  4. All of the above is server-side. The admin screen hides the panel
 //     when it gets a 404 from here, and that is a convenience and not a
 //     control; every one of these tests runs again on every request whatever
@@ -89,7 +133,25 @@ function sendNotExcludedFromRankings(reply: FastifyReply): void {
   });
 }
 
-export function adminTeleportRoutes(lastAccepted: Map<number, AcceptedPosition>) {
+/**
+ * The body `GET /api/admin/teleport` answers with (SPEC.md Section 9.6):
+ * where the caller is currently teleported to, or `null` for "not
+ * teleported". Deliberately an object with a nullable field rather than a
+ * bare `null` body, so the client parses one shape either way.
+ */
+export interface TeleportStateResponse {
+  position: LatLon | null;
+}
+
+export function adminTeleportRoutes(
+  lastAccepted: Map<number, AcceptedPosition>,
+  // The teleport mode itself: the point each teleported admin is currently
+  // standing on as far as this server is concerned. Passed in from app.ts
+  // exactly as `lastAccepted` is, and for the same reason — a Map created
+  // here would be a fresh one per plugin registration, and one written to
+  // disk would violate C4. See the header.
+  teleported: Map<number, LatLon>,
+) {
   return async function adminTeleportRoutesPlugin(app: FastifyInstance): Promise<void> {
     // No rate limiter, matching every other admin route: Section 9.4 records
     // that the admin surface deliberately carries none, `RATE_LIMITS` names
@@ -145,17 +207,16 @@ export function adminTeleportRoutes(lastAccepted: Map<number, AcceptedPosition>)
       // the server asserting a position on the admin's behalf, not the admin
       // handing over a sample with the checks pre-answered.
       //
-      // `accuracy: 0` is not a tuning constant and so is not in config.ts
-      // (CLAUDE.md's rule is about rate limits, radii, thresholds,
-      // tolerances and timeouts): a synthesised position has no measurement
-      // error to declare. It is also the strictest choice available, since
-      // `onsiteRadiusM` widens the check-in radius with reported accuracy —
-      // a teleport buys the tightest radius, never a generous one.
-      //
-      // `speed: null` says the same thing: nothing here was measured moving.
-      // With `skipSpeedGuards` on, neither the sample's speed nor the one
-      // derived from the previous position can refuse the reveal, so the
-      // teleported point reveals fog the way standing there would.
+      // `TELEPORT_FIX` is the accuracy and speed of it — `{ accuracy: 0,
+      // speed: null }`, in `@tipsytrails/shared` rather than here because
+      // the web client synthesises the identical pair while the mode stands
+      // (tracking/useSampleTracking.ts) and the two must not drift; that
+      // module records why neither number belongs in config.ts. `accuracy:
+      // 0` declares no measurement error and buys the tightest check-in
+      // radius, never a generous one; `speed: null` says nothing here was
+      // measured moving, and with `skipSpeedGuards` on neither it nor the
+      // speed derived from the previous position can refuse the reveal, so
+      // the teleported point reveals fog the way standing there would.
       //
       // `timestamp: nowMs` puts the sample at the instant of the request, so
       // the clock-skew and staleness gates (which are NOT bypassed) pass on
@@ -167,10 +228,23 @@ export function adminTeleportRoutes(lastAccepted: Map<number, AcceptedPosition>)
         districtGrid: request.server.grid,
         districtIdByGridIndex: request.server.districtIdByGridIndex,
         lastAccepted,
-        samples: [{ lat, lon, accuracy: 0, speed: null, timestamp: nowMs }],
+        samples: [{ lat, lon, ...TELEPORT_FIX, timestamp: nowMs }],
         nowMs,
         skipSpeedGuards: true,
       });
+
+      // The mode, set last: only a teleport that actually ran the pipeline
+      // becomes the position the client is told to stand on. Everything that
+      // can refuse — the three gates above, a malformed body, a missing city
+      // or grid, a point outside the bounding box — returned before this
+      // line, so a refused request leaves the previous mode (or none)
+      // exactly as it was rather than half-applying.
+      //
+      // A second teleport simply overwrites the first: the owner's
+      // requirement is to stay put "until the admin teleports somewhere else
+      // or presses the button to zoom back on the actual position", which is
+      // this `set` and the `DELETE` below and nothing in between.
+      teleported.set(userId, { lat, lon });
 
       // The same body `POST /api/samples` answers with, deliberately: the
       // admin screen renders what happened using the same fields the map
@@ -182,7 +256,83 @@ export function adminTeleportRoutes(lastAccepted: Map<number, AcceptedPosition>)
       // is the only workable answer: a stale entry would make the admin's
       // next genuine sample look like a 300 km/h jump and be refused, and an
       // empty one would break check-in.
+      //
+      // Nothing about the mode is added to this body, and that is not an
+      // omission: the caller already knows where it asked to be sent, the
+      // `GET` below is what anyone else asks, and Section 9.6 pins this
+      // shape as identical to `POST /api/samples`'s.
       return result;
+    });
+
+    // Read. The map screen calls this once on mount to find out whether it
+    // should be watching GPS at all, so it answers the caller's OWN state
+    // and nobody else's — `request.userId` is the only key it ever looks up.
+    //
+    // It is on this route and deliberately not on `GET /api/auth/me`, which
+    // every player calls on every load: a field that is null for everyone
+    // but the owner advertises the feature's existence to people who cannot
+    // use it, and Section 10.1's second gate is about this code being
+    // invisible on a box that never enabled it.
+    //
+    // `requireAdmin` is not decoration here. Without it this would answer
+    // 200 `{ position: null }` for any signed-in account, which is a
+    // confirmation that the route exists on this deployment — precisely what
+    // gate 2's 404 withholds.
+    //
+    // No exclusion precondition, for the same reason the `DELETE` has none:
+    // reading where the server already thinks you are acquires nothing.
+    app.get('/api/admin/teleport', { preHandler: requireAdmin }, async (request, reply) => {
+      if (request.userId == null) {
+        sendUnauthenticated(reply);
+        return;
+      }
+      const response: TeleportStateResponse = {
+        position: teleported.get(request.userId) ?? null,
+      };
+      return response;
+    });
+
+    // Clear. Getting back to reality must never be refused, so this carries
+    // gates 1, 2 and 4 and nothing else — no exclusion check, no body, no
+    // way for it to answer 422.
+    //
+    // ════════════════════════════════════════════════════════════════
+    // It drops `lastAccepted` too, and that is the load-bearing half
+    // ════════════════════════════════════════════════════════════════
+    //
+    // `lastAccepted` holds the teleport destination (the pipeline put it
+    // there). Leave it and the admin's first real fix after coming home
+    // implies a jump of however far they teleported — hundreds of km/h,
+    // refused at Section 7.2's step 4, and refused silently: their app would
+    // simply stop working, sample after sample, until the entry aged out of
+    // a map that has no ageing. That is the failure this whole operation
+    // exists to prevent, and it is invisible from the outside.
+    //
+    // Deleting the entry puts the user in exactly the state Section 7.2
+    // already defines for an API restart — "the guard has no reference point
+    // and passes the first sample of each user unconditionally" — so the
+    // next real sample re-seeds the map from wherever the phone actually is.
+    // That is an existing, specified behaviour being reused, not an
+    // exception carved into the guard: `processSampleBatch` is untouched and
+    // `POST /api/samples` is untouched.
+    //
+    // The cost is stated rather than hidden: check-in reads the same map and
+    // answers `no_recent_sample` while it is empty (routes/visits.ts), so
+    // for the seconds between leaving teleport and the first real fix the
+    // admin cannot check in. That is true after every restart too, and it is
+    // the correct answer — the server genuinely does not know where they are.
+    //
+    // Both deletes are unconditional, including for a caller who was never
+    // teleported: `Map.delete` on an absent key is a no-op, and a "you were
+    // not teleported" refusal would be a way for this operation to fail.
+    app.delete('/api/admin/teleport', { preHandler: requireAdmin }, async (request, reply) => {
+      if (request.userId == null) {
+        sendUnauthenticated(reply);
+        return;
+      }
+      teleported.delete(request.userId);
+      lastAccepted.delete(request.userId);
+      return { ok: true as const };
     });
   };
 }

@@ -4,6 +4,7 @@ import { Protocol } from 'pmtiles';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { clearAdminTeleport, errorMessage, getAdminTeleport } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { BarSheet } from '../components/BarSheet.js';
 import { BottomNav } from '../components/BottomNav.js';
@@ -25,6 +26,7 @@ import {
   markMasteringExplainerSeen,
 } from '../tracking/masteringExplainer.js';
 import { useSampleTracking } from '../tracking/useSampleTracking.js';
+import type { TeleportMode } from '../tracking/useSampleTracking.js';
 import { useVisits } from '../tracking/useVisits.js';
 
 const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
@@ -182,9 +184,27 @@ export function MapScreen() {
   // state: this is a latch the effect below reads and sets, and a re-render
   // on flipping it would buy nothing.
   const centredOnPlayerRef = useRef(false);
-  const navigate = useNavigate();
+  // Section 9.3: whether an admin teleport stands, and where. Only an admin
+  // ever asks - `useCurrentUser` carries `isAdmin`, this screen is
+  // RequireAuth-guarded so the user is resolved before it mounts, and a
+  // non-admin must never send a failed request for a feature that is not
+  // theirs. Everyone else starts and stays `off`, which is the behaviour
+  // this screen has always had.
+  //
+  // Admins start `resolving` rather than `off` on purpose: see TeleportMode.
   const { user } = useCurrentUser();
-  const trackingState = useSampleTracking();
+  const isAdmin = user?.isAdmin === true;
+  const [teleport, setTeleport] = useState<TeleportMode>(() =>
+    isAdmin ? { status: 'resolving' } : { status: 'off' },
+  );
+  // Set when the admin leaves teleport, consumed by the first real fix that
+  // follows it - the owner's "button to zoom back on the actual position".
+  // A ref, not state, for the same reason centredOnPlayerRef above is one.
+  const recentreOnNextFixRef = useRef(false);
+  const [leavingTeleport, setLeavingTeleport] = useState(false);
+  const [leaveTeleportError, setLeaveTeleportError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const trackingState = useSampleTracking(teleport);
   // Phase 8 task brief, part B (reviewer finding): the fog cache is keyed
   // per user (map/fog/fog-cache.ts) - this screen is RequireAuth-guarded,
   // so `user` is already resolved by the time it mounts, but the `null`
@@ -259,6 +279,65 @@ export function MapScreen() {
     if (success && !hasSeenMasteringExplainer()) {
       markMasteringExplainerSeen();
       navigate('/how-it-works');
+    }
+  }
+
+  // Section 9.3: the map learns the mode once, on mount. Three answers and
+  // only one of them is "teleported":
+  //
+  // - a position: the mode stands, and this screen honours it until it is
+  //   left. It survives a reload and a backgrounded phone precisely because
+  //   the state is the server's and this is a fetch rather than a memory.
+  // - `null`: an admin who is not teleported.
+  // - a failure: `off` as well, and a 404 above all - that is a server
+  //   started without ADMIN_TELEPORT_ENABLED, where the route does not
+  //   exist, which is "not teleported" and not an error to put on a map. A
+  //   network failure lands here too, and the answer is the same for it: the
+  //   app then behaves exactly as it did before this feature existed, which
+  //   is the right way to fail.
+  useEffect(() => {
+    if (!isAdmin) {
+      return;
+    }
+    let cancelled = false;
+    getAdminTeleport()
+      .then((state) => {
+        if (cancelled) {
+          return;
+        }
+        setTeleport(
+          state.position
+            ? { status: 'on', lat: state.position.lat, lon: state.position.lon }
+            : { status: 'off' },
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTeleport({ status: 'off' });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  // Section 9.3: leaving the mode. The server drops both the teleported
+  // position and its `lastAccepted` entry, so the next real fix is accepted
+  // rather than refused as a jump - which is why this is a request and not a
+  // local flag. On failure the mode stays on and the reason is shown: an
+  // admin who was told they were back while the server still had them
+  // teleported would be in the exact state this feature exists to end.
+  async function handleLeaveTeleport() {
+    setLeaveTeleportError(null);
+    setLeavingTeleport(true);
+    try {
+      await clearAdminTeleport();
+      recentreOnNextFixRef.current = true;
+      setTeleport({ status: 'off' });
+    } catch (err) {
+      setLeaveTeleportError(errorMessage(err));
+    } finally {
+      setLeavingTeleport(false);
     }
   }
 
@@ -425,6 +504,24 @@ export function MapScreen() {
     mapInstance.jumpTo({ center: [position.lon, position.lat] });
   }, [mapInstance, city, trackingState.lastPosition]);
 
+  // The other half of "the button to zoom back on the actual position".
+  // Leaving teleport drops the position on both sides, so at the moment of
+  // the tap there is nowhere to fly to; the first real fix afterwards is
+  // what the map goes to, and it goes there by calling the same function the
+  // locate control calls rather than a second copy of that move. One
+  // automatic centring per leave, consumed whether or not the map moved -
+  // the same latch discipline the mount-time centring above keeps.
+  useEffect(() => {
+    if (!mapInstance || !trackingState.lastPosition || !recentreOnNextFixRef.current) {
+      return;
+    }
+    recentreOnNextFixRef.current = false;
+    // A function declaration in this component, so it is in scope by the
+    // time this effect body runs, and it reads only the two values already
+    // in the dependency list below.
+    handleGoToMyLocation();
+  }, [mapInstance, trackingState.lastPosition]);
+
   // Section 8.3's "to my location" control. flyTo, not jumpTo: unlike the
   // automatic centring above this is an explicit request, so the animation
   // is what tells the player where they were taken from. It honours a
@@ -467,6 +564,51 @@ export function MapScreen() {
           them back one level further in. */}
       <div className="map-overlays">
         <div className="map-overlays__top-bars">
+          {/* Section 8.3/9.3: an admin who forgets they are teleported files
+              bugs against a phantom, so while the mode is on the map says so
+              in words at the top of the screen and carries the way out with
+              it. A bar in row 1, not a corner control: it is the one piece of
+              chrome here that must be impossible to miss, and it must not be
+              readable without the control that ends it.
+
+              Ink only (Section 8.1) - the accent is for the player's own
+              position and for active states, and this is neither. It is
+              chrome reporting a state, which is what `role="status"` says.
+
+              THE CONTROL IS ITS OWN AND NOT A MODE ON LocateButton, which
+              recentres a few pixels away. Three reasons, and any one of them
+              settles it: LocateButton is shared with the picker on Suggest a
+              bar (components/LocateButton.tsx), which has no teleport to
+              leave; it is disabled whenever there is no position, and leaving
+              teleport must never be refused for a reason of its own, let
+              alone for someone else's; and recentring is a free, idempotent
+              camera move while this is a server round-trip that can fail and
+              has to say so. Two actions that can disagree about whether they
+              worked cannot share one button. */}
+          {teleport.status === 'on' && (
+            <div className="map-teleport" role="status">
+              <div className="map-teleport__text">
+                <p className="map-teleport__title">Teleported</p>
+                <p className="map-teleport__detail">
+                  This map is showing a test position, not your GPS. Fog, discoveries and visit
+                  progress all count from here.
+                </p>
+                {leaveTeleportError && (
+                  <p className="error-message map-teleport__error" role="alert">
+                    {leaveTeleportError}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="button button--secondary map-teleport__leave"
+                disabled={leavingTeleport}
+                onClick={() => void handleLeaveTeleport()}
+              >
+                Back to my real position
+              </button>
+            </div>
+          )}
           <PendingVisitBanner
             visits={visits.pendingVisits}
             outOfRangeVisitIds={outOfRangeVisitIds}

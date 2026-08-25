@@ -3,6 +3,7 @@ import type { BoundaryFeatureCollection } from './geo-types.js';
 import type {
   AdminBar,
   AdminBarsResponse,
+  AdminTeleportState,
   AdminUser,
   AdminUsersResponse,
   Bar,
@@ -470,6 +471,31 @@ export function adminTeleport(input: { lat: number; lon: number }): Promise<Samp
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+// GET /api/admin/teleport (Sections 9.3/9.6): where the calling admin is
+// currently teleported to, or `{ position: null }`. The map screen asks once
+// on mount, and only when the signed-in user is an admin - a non-admin must
+// never see a failed request for a feature that is not theirs.
+//
+// Like the POST above it answers 404 when the server was started without
+// ADMIN_TELEPORT_ENABLED, and the caller reads that as "not teleported"
+// rather than as an error (screens/Map.tsx). Nothing here decides who may
+// ask; requireAdmin is applied on every request server-side.
+export function getAdminTeleport(): Promise<AdminTeleportState> {
+  return request<AdminTeleportState>('/api/admin/teleport');
+}
+
+// DELETE /api/admin/teleport (Section 9.3): leaves the mode, and drops the
+// server's `lastAccepted` entry with it so the returning admin's first real
+// GPS sample is accepted rather than refused as a 300 km/h jump.
+//
+// It carries no body and cannot be refused for anything but the two gates
+// every method here has - getting back to reality must never depend on a
+// precondition. It is bodyless, so `request` sends no Content-Type: see the
+// note on that function for why that matters.
+export function clearAdminTeleport(): Promise<{ ok: true }> {
+  return request<{ ok: true }>('/api/admin/teleport', { method: 'DELETE' });
 }
 
 // Served by packages/api/src/routes/static-data.ts at

@@ -667,6 +667,17 @@ function TeleportSection() {
             fog, discoveries and visit progress are all real. Only an account excluded from the
             rankings may use it.
           </p>
+          {/* Section 9.3: teleport is a mode, not a one-shot, and the panel
+              that starts it is where that has to be said. The map is where it
+              is left - this screen deliberately does not carry a second
+              control for that, because the state belongs beside the position
+              it is faking and an admin looking at a phantom is looking at the
+              map. */}
+          <p className="admin__note">
+            You stay at that point until you teleport somewhere else or leave teleport from the map,
+            where a banner offers the way back. It survives a reload, because the position is held
+            by the server rather than by this browser.
+          </p>
           {error && (
             <p className="error-message" role="alert">
               {error}

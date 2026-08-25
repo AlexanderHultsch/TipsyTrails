@@ -278,6 +278,20 @@ export interface AdminUsersResponse {
   users: AdminUser[];
 }
 
+// GET /api/admin/teleport response shape (packages/api/src/routes/
+// admin-teleport.ts, Sections 9.3/9.6): where this admin is currently
+// teleported to, or null for "not teleported".
+//
+// An object with a nullable field rather than a bare `null` body, so there
+// is one shape to parse either way. While a position stands it IS the
+// client's position: tracking/useSampleTracking.ts stops watching GPS and
+// reports this point instead, which is what makes the map marker, the
+// nearby-bars panel and the check-in offer agree with what the server
+// believes.
+export interface AdminTeleportState {
+  position: { lat: number; lon: number } | null;
+}
+
 // GET /api/profile/:handle response shape (packages/api/src/routes/profile.ts).
 export interface ProfileResponse {
   userId: number;
