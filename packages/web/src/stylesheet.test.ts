@@ -829,6 +829,105 @@ describe('index.css: scrollbar gutter', () => {
   });
 });
 
+// Three declarations that decide where things sit on a screen, none of which
+// any test in this repository can watch doing its job: jsdom applies no
+// stylesheet and computes no geometry, so what follows is a scan of the text
+// of index.css and nothing more. It proves the declarations are there and
+// cannot vanish unnoticed. It does not prove the district map stops resizing
+// or that the wordmark stops moving - that still needs eyes on a phone.
+describe('index.css: what the content column and the wordmark are allowed to depend on', () => {
+  function bodiesFor(selector: string): string[] {
+    return rules()
+      .filter((rule) => rule.selector.split(',').some((part) => part.trim() === selector))
+      .map((rule) => rule.body);
+  }
+
+  function declares(selector: string, property: string, value: RegExp): boolean {
+    return bodiesFor(selector).some((body) =>
+      new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*${value.source}\\s*(?:;|$)`).test(body),
+    );
+  }
+
+  // .screen is a column flex container and .screen__content has `margin: 0
+  // auto`. Flexbox stretches an item to the line only when "neither of its
+  // cross-axis margins are auto", so those two auto margins mean the column
+  // is *not* stretched: it is sized to fit its content and then centred. Its
+  // width therefore followed the text inside it, and a percentage-width child
+  // - the district and city maps - contributes nothing to that measurement.
+  //
+  // Two field reports came out of that one line: the schematic map shrank the
+  // first time a district was selected, because a 46-character hint was
+  // replaced by a name and a percentage; and the chrome wordmark on /profile,
+  // the one screen that left-aligns its content, sat near the middle of the
+  // screen while the profile loaded and jumped left when it arrived.
+  it('gives the content column a width instead of letting its contents decide one', () => {
+    expect(bodiesFor('.screen__content'), 'no rule targets .screen__content').not.toHaveLength(0);
+    expect(
+      declares('.screen__content', 'width', /100%/),
+      '.screen__content must state `width: 100%`. It is a flex item with auto cross-axis ' +
+        'margins, which suppresses the stretch that would otherwise give it the full ' +
+        'width, so without this it is as wide as whatever text is in it - and every ' +
+        '`width: 100%` child, the district and city maps included, is resized whenever ' +
+        'that text changes.',
+    ).toBe(true);
+    // Still capped and still centred: the width above is what the cap and the
+    // centring were always assumed to be applying to.
+    expect(declares('.screen__content', 'max-width', /32rem/)).toBe(true);
+    expect(declares('.screen__content', 'margin', /0 auto/)).toBe(true);
+  });
+
+  // Section 8.1: one mark, and its position is the mark's own rather than
+  // whichever screen is hosting it. .screen__content centres, .profile is the
+  // only screen that overrides that to `left`, and inheriting from either is
+  // how the same signature ends up in two places in one application.
+  it.each([
+    ['.wordmark--chrome', 'left'],
+    ['.wordmark--hero', 'center'],
+  ])('gives %s an alignment of its own rather than inheriting the screen’s', (selector, value) => {
+    expect(bodiesFor(selector), `no rule targets ${selector}`).not.toHaveLength(0);
+    expect(
+      declares(selector, 'text-align', new RegExp(value)),
+      `${selector} must declare text-align: ${value}. Inherited, it is centred on the ` +
+        'city overview and on the leaderboard and hard left on a profile, and it moves ' +
+        'when a screen that hosts it changes its mind about its own text.',
+    ).toBe(true);
+  });
+
+  // The district panel's first row holds a 46-character hint in one state and
+  // a name plus a percentage in the other. The hint wraps to two lines on
+  // every phone narrower than about 405 px and the selected state never wraps
+  // at all, so the row lost a line on the first selection and the panel - and
+  // the map above it - moved.
+  //
+  // The row therefore stacks both states in one grid cell and hides the
+  // inactive one, which reserves the taller without anyone writing a height
+  // down. A `min-height` in lines would encode today's string at today's font
+  // size; the same hint takes three lines at a 24 px root font on a 320 px
+  // phone. screens/DistrictOverview.tsx keeps the hidden hint rendered, which
+  // App.test.tsx pins; these are the declarations that make it a reservation
+  // rather than an overlap.
+  it('reserves the district panel’s first row for its tallest state', () => {
+    const row = '.district-overview__detail-row--primary';
+    expect(bodiesFor(row), `no rule targets ${row}`).not.toHaveLength(0);
+    expect(
+      declares(row, 'display', /grid/),
+      `${row} must be a grid, or its two states sit side by side instead of stacking`,
+    ).toBe(true);
+    expect(
+      bodiesFor(`${row} > *`).some((body) => /grid-area\s*:\s*1\s*\/\s*1/.test(body)),
+      `${row} > * must place every child in the same cell. Auto-placement puts them in ` +
+        'two rows instead, which makes the panel taller in the selected state rather ' +
+        'than the same height in both.',
+    ).toBe(true);
+    expect(
+      declares('.district-overview__detail-hint--reserved', 'visibility', /hidden/),
+      'the reserved hint must be hidden with `visibility`, not `display: none`: a box ' +
+        'that is not generated reserves no height, which is the whole point of leaving ' +
+        'it in the flow.',
+    ).toBe(true);
+  });
+});
+
 // SPEC.md Section 8.1: the accent colour "is never the only carrier of
 // meaning - active states also change shape, weight, or label", and on a
 // near-monochrome palette that goes double for grey. A badge placeholder

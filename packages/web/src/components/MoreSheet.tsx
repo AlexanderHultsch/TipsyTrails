@@ -1,7 +1,59 @@
 import { useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { useLogout } from '../auth/useLogout.js';
+
+// Section 8.4: where "Report a bug" goes. The issue *form*, not the
+// repository root - a player who taps this has something to say and must land
+// somewhere they can type it, not on a README they then have to navigate out
+// of. The repository is `TipsyTrails`; `Tipsy-Trails` is an old name that
+// survives only as a redirect (Section 4.3), so it is not written here.
+//
+// Copy, not a constant of the specification: this is a URL and a template, so
+// it lives beside the sheet's other strings rather than in
+// packages/shared/src/config.ts, which holds the rate limits, radii and
+// thresholds of Section 0 rule 3.
+const ISSUE_FORM_URL = 'https://github.com/AlexanderHultsch/TipsyTrails/issues/new';
+
+// What a bug report needs and a player will not think to include. Deliberately
+// three short prompts rather than a form: anything longer is a wall of
+// boilerplate to delete on a phone.
+//
+// There is no app version in it, and that is a decision. packages/web has no
+// build-time version to read - its package.json is at 0.0.0 - so a version
+// line here would be a number that means nothing, and a wrong one is worse in
+// a bug report than an absent one.
+//
+// The screen comes from the router rather than from a hard-coded string, so it
+// is the screen the sheet was opened over and cannot go stale.
+
+// The dynamic segments of a path are replaced by their parameter names before
+// the template is built, so `/profile/silke` reports as `/profile/:handle` and
+// `/bars/41` as `/bars/:id`.
+//
+// A GitHub issue is public and permanent, and this body is prefilled rather
+// than typed - a player who never scrolls the field would publish their own
+// handle, or a bar's id, without having decided to. Which *screen* a bug
+// happened on is the whole diagnostic value here; *which* profile or bar is
+// not, and Section 10.1's posture is that the application does not put a
+// player's identity anywhere they did not put it themselves. The player can
+// still add the specific one, in the field, on purpose.
+function maskDynamicSegments(pathname: string): string {
+  return pathname
+    .replace(/^\/profile\/[^/]+/, '/profile/:handle')
+    .replace(/^\/bars\/[^/]+/, '/bars/:id');
+}
+
+function issueUrlFor(screen: string): string {
+  const body = [
+    'What happened:',
+    '',
+    'What I expected:',
+    '',
+    `Screen: ${maskDynamicSegments(screen)}`,
+  ].join('\n');
+  return `${ISSUE_FORM_URL}?body=${encodeURIComponent(body)}`;
+}
 
 // Section 8.4: the secondary destinations the bottom tab bar does not carry,
 // in a sheet the More tab opens.
@@ -23,6 +75,9 @@ export function MoreSheet({ onClose }: { onClose: () => void }) {
   const { user } = useCurrentUser();
   const handleLogout = useLogout();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // The sheet is an overlay on the screen behind it and closes on navigation,
+  // so this is that screen for as long as the item can be tapped.
+  const { pathname } = useLocation();
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -80,6 +135,37 @@ export function MoreSheet({ onClose }: { onClose: () => void }) {
             <Link to="/privacy" onClick={onClose}>
               Privacy
             </Link>
+          </li>
+          {/* The one destination in the sheet that is not in the
+              application. It is an <a> and not a <Link> because there is no
+              route to give the router, and it says so in its own label: a tap
+              that silently swaps the app for a browser tab is a tap a player
+              cannot undo with the back gesture they have. `noopener
+              noreferrer` for the reason every `target="_blank"` needs it - the
+              opened page must not get a handle on this one.
+              `rel="external"` is deliberately not added: it says nothing to a
+              browser or a reader that the label does not already say.
+
+              The second line is the sign-in wall stated before it is hit.
+              GitHub asks for an account to file an issue, and a player who
+              does not have one should find that out here rather than on a
+              login page in a tab they did not ask for.
+
+              It sits with the navigation above rather than in the gap below,
+              which belongs to Log out alone: this is somewhere to go, and the
+              divider's whole job is to keep the item that ends a session
+              apart from the items that do not. */}
+          <li>
+            <a
+              className="more-sheet__external"
+              href={issueUrlFor(pathname)}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={onClose}
+            >
+              <span>Report a bug on GitHub (opens a new tab)</span>
+              <span className="more-sheet__item-note">A GitHub account is required.</span>
+            </a>
           </li>
           {/* Exactly the rule the burger menu applied, unchanged. It is
               cosmetic either way: the real boundary is requireAdmin on the

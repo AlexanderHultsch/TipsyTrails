@@ -145,18 +145,39 @@ export function DistrictOverview() {
             {/* Both rows are always rendered, selected or not: the panel sits
                 directly under a `width: 100%` map, so a height that depended
                 on the selection changed the page height, and with it the
-                scrollbar and the map's own width. See index.css. */}
-            <div className="district-overview__detail-row">
-              {selected ? (
-                <>
+                scrollbar and the map's own width. See index.css.
+
+                The hint is rendered in both states for the same reason one
+                level further down. Reserving the row was not enough: the hint
+                wraps to two lines on a phone and a district name never does,
+                so the row itself was two lines tall before the first tap and
+                one line tall after it. Kept in the flow and hidden rather than
+                swapped out, it is the row's own measure of its tallest state -
+                which is what makes this survive a longer name, a larger font
+                and a narrower screen, where a hard-coded height would not.
+
+                aria-hidden as well as the stylesheet's `visibility: hidden`,
+                which already takes it out of the accessibility tree: this
+                panel is a `role="status"` live region, and the instruction
+                must not be read out again behind the selection it is
+                reserving space for. */}
+            <div className="district-overview__detail-row district-overview__detail-row--primary">
+              <span
+                className={
+                  selected
+                    ? 'district-overview__detail-hint district-overview__detail-hint--reserved'
+                    : 'district-overview__detail-hint'
+                }
+                aria-hidden={selected ? true : undefined}
+              >
+                Tap a district on the map to see its progress.
+              </span>
+              {selected && (
+                <span className="district-overview__detail-selection">
                   <span className="district-overview__detail-name">{selected.properties.name}</span>
                   <span className="district-overview__detail-percent">
                     {(percentByName.get(selected.properties.name) ?? 0).toFixed(1)}%
                   </span>
-                </>
-              ) : (
-                <span className="district-overview__detail-hint">
-                  Tap a district on the map to see its progress.
                 </span>
               )}
             </div>

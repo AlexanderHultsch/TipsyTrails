@@ -598,12 +598,18 @@ describe('App', () => {
       moreButton.click();
     });
 
+    // "Report a bug" carries a second line of its own, so its textContent is
+    // the label and that line run together. It is matched here as the whole
+    // string rather than loosened to a substring: this list is the sheet's
+    // order and its contents, and a note that silently disappeared would be
+    // the kind of change it exists to catch.
     const entries = container.querySelectorAll('.more-sheet__panel a, .more-sheet__panel button');
     expect(Array.from(entries).map((entry) => entry.textContent)).toEqual([
       'Suggest a bar',
       'How mastering works',
       'Settings',
       'Privacy',
+      'Report a bug on GitHub (opens a new tab)A GitHub account is required.',
       'Log out',
     ]);
 
@@ -612,6 +618,110 @@ describe('App', () => {
     });
 
     expect(container.querySelector('.more-sheet__panel')).toBeNull();
+  });
+
+  // Section 8.4's "Report a bug", and every part of it that can go wrong
+  // silently. The repository root would render a README rather than anywhere a
+  // player can type, `Tipsy-Trails` would work today because GitHub redirects
+  // the old name (Section 4.3) and would stop the day the redirect does, and a
+  // `target="_blank"` without `rel` hands the opened page a handle on this
+  // one. None of the four is visible on the screen the item is tapped from.
+  //
+  // Run over two routes because the screen in the template must come from the
+  // router: a hard-coded one passes on whichever route it was written against
+  // and is wrong everywhere else, which is exactly the failure a template
+  // exists to prevent.
+  it.each([['/settings'], ['/how-it-works']])(
+    'points "Report a bug" at the issue form, in a new tab, carrying %s as the screen',
+    async (path) => {
+      stubFetch((url) => {
+        if (url.startsWith('/api/auth/me')) {
+          return stubSignedInUser();
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      await renderApp(path);
+      const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
+      act(() => {
+        moreButton.click();
+      });
+
+      const items = Array.from(
+        container.querySelectorAll<HTMLAnchorElement>('.more-sheet__panel a'),
+      );
+      const report = items.find((item) => item.textContent?.startsWith('Report a bug'));
+      expect(report, 'the More sheet offers no way to report a bug').not.toBeUndefined();
+
+      // Placed with the navigation above the divider and not in the gap
+      // below it, which belongs to Log out alone.
+      expect(items.indexOf(report as HTMLAnchorElement)).toBe(
+        items.findIndex((item) => item.textContent === 'Privacy') + 1,
+      );
+
+      const href = new URL(report?.getAttribute('href') as string);
+      expect(href.host).toBe('github.com');
+      expect(
+        href.pathname,
+        'the link must land on the issue form. The repository root is a README, ' +
+          'which is not somewhere a player with a bug to report can type',
+      ).toBe('/AlexanderHultsch/TipsyTrails/issues/new');
+
+      const body = href.searchParams.get('body') as string;
+      expect(body).toContain('What happened:');
+      expect(body).toContain('What I expected:');
+      expect(body).toContain(`Screen: ${path}`);
+      // packages/web has no build-time version - its package.json is at
+      // 0.0.0 - so a version line here would be a number that means nothing.
+      expect(body).not.toMatch(/version/i);
+    },
+  );
+
+  // Section 10.1: a GitHub issue is public and permanent, and this body is
+  // prefilled rather than typed - so a player who never scrolls the field
+  // would publish their own handle without having decided to. Which screen a
+  // bug happened on is the diagnostic value; which profile is not. Reported
+  // from a profile route because that is the only path in the application
+  // carrying an identity, and it is the one a player is most likely to be
+  // looking at when something looks wrong.
+  it('reports the profile route without the handle in it', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/api/profile/')) {
+        throw new Error('profile fetch is irrelevant to the More sheet');
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/profile/silke');
+    const moreButton = container.querySelector('.bottom-nav button') as HTMLButtonElement;
+    act(() => {
+      moreButton.click();
+    });
+
+    const report = Array.from(
+      container.querySelectorAll<HTMLAnchorElement>('.more-sheet__panel a'),
+    ).find((item) => item.textContent?.startsWith('Report a bug'));
+    const body = new URL(report?.getAttribute('href') as string).searchParams.get('body') as string;
+
+    expect(body).toContain('Screen: /profile/:handle');
+    expect(
+      body,
+      'the prefilled body must not carry the handle the player happens to be looking at',
+    ).not.toContain('silke');
+
+    expect(report?.getAttribute('target')).toBe('_blank');
+    expect(report?.getAttribute('rel')).toContain('noopener');
+    expect(report?.getAttribute('rel')).toContain('noreferrer');
+
+    // Said on the item itself, both halves: that it leaves the app, and
+    // that GitHub will ask for an account a player may not have.
+    expect(report?.textContent).toContain('opens a new tab');
+    expect(report?.querySelector('.more-sheet__item-note')?.textContent).toContain(
+      'GitHub account',
+    );
   });
 
   // Two things the tab list above cannot see, and both survived a mutation
@@ -1498,7 +1608,7 @@ describe('App', () => {
 
       const unselectedRows = rowClasses();
       expect(unselectedRows).toEqual([
-        'district-overview__detail-row',
+        'district-overview__detail-row district-overview__detail-row--primary',
         'district-overview__detail-row',
       ]);
       // The hint is on the first row and the second is empty but present -
@@ -1519,6 +1629,45 @@ describe('App', () => {
         expect(panel().children[0].querySelector('.district-overview__detail-link')).toBeNull();
         expect(panel().children[1].querySelector('.district-overview__detail-link')).not.toBeNull();
       }
+    });
+
+    // Reserving the two rows was not the whole of it, and this is the half
+    // that was missing. What goes into the first row is not the same height
+    // in both states: the hint is 46 characters and wraps to two lines on
+    // every phone narrower than about 405 px, while a district name and a
+    // percentage never wrap. So the row was two lines tall before the first
+    // tap and one line tall after it, and the panel - and everything below
+    // it - moved.
+    //
+    // The fix is to keep the hint in the flow and hide it, so the row is
+    // always as tall as its tallest state without anyone writing that height
+    // down. jsdom applies no stylesheet and lays nothing out, so this cannot
+    // show the panel staying the same height on a screen; what it pins is the
+    // structure the stylesheet needs in order to reserve it - the hint still
+    // rendered while a district is selected, wearing the class that hides it -
+    // and stylesheet.test.ts pins the declarations that do the hiding. The
+    // height itself still needs eyes on a phone.
+    it('keeps the hint rendered while a district is selected, so the row cannot lose a line', async () => {
+      await renderDistricts();
+
+      const hint = () =>
+        panel().querySelector('.district-overview__detail-hint') as HTMLElement | null;
+
+      expect(hint()).not.toBeNull();
+      expect(hint()?.classList.contains('district-overview__detail-hint--reserved')).toBe(false);
+      expect(hint()?.getAttribute('aria-hidden')).toBeNull();
+
+      await tapDistrict(1);
+
+      expect(
+        hint(),
+        "the hint is what measures the row's tallest state; removed on selection, the " +
+          'row loses the second line it wraps to on a phone and the panel shrinks',
+      ).not.toBeNull();
+      expect(hint()?.classList.contains('district-overview__detail-hint--reserved')).toBe(true);
+      // The panel is a role="status" live region. The reserved hint is there
+      // to occupy space and must not be announced behind the selection.
+      expect(hint()?.getAttribute('aria-hidden')).toBe('true');
     });
 
     it('keeps the full list, with every district and its percentage, inside a collapsed <details>', async () => {

@@ -168,7 +168,39 @@ button:focus-visible,
   padding-bottom: calc(2rem + var(--bottom-nav-space));
 }
 
+/* The content column: as wide as the screen allows, capped, and centred.
+   `width: 100%` is not the redundant line it looks like, and leaving it out
+   is what produced two separate field reports.
+
+   .screen above is `display: flex; flex-direction: column`, so this is a flex
+   item and its width is its *cross* size. A flex item is normally stretched
+   to the line - which would give the full width this rule wants - but
+   Flexbox's stretch step applies only when "neither of its cross-axis margins
+   are auto", and `margin: 0 auto` makes both of them auto. So the column was
+   not stretched at all: it was sized to fit its content, capped at 32rem, and
+   then centred by those same auto margins. Its width therefore followed
+   whatever text happened to be inside it, and a percentage-width child
+   (.district-overview__map, .city-overview__map) contributes nothing to that
+   measurement, so the map took its size from the prose beside it.
+
+   Two consequences, both reported as bugs:
+
+   - Selecting a district on /districts swapped a 46-character hint for a name
+     and a percentage, which is a much narrower run of text. The column shrank
+     to the shorter content and the schematic map shrank with it, on the first
+     tap and only the first.
+   - On /profile the column was as wide as "Loading profile…" while the
+     profile was in flight and as wide as the loaded profile afterwards. That
+     screen is the one that overrides the centring below to `text-align: left`,
+     so its chrome wordmark sat against the left edge of a narrow centred box -
+     near the middle of the screen - and jumped left the moment the content
+     arrived and widened the box.
+
+   Stated as a width rather than fixed by removing the auto margins, because
+   the margins are also what centres the column and `justify-content` on the
+   parent cannot: this is the cross axis. */
 .screen__content {
+  width: 100%;
   max-width: 32rem;
   margin: 0 auto;
   text-align: center;
@@ -355,6 +387,11 @@ button:focus-visible,
   font-size: clamp(1.5rem, 7.5vw, 2.75rem);
   letter-spacing: 0.18em;
   line-height: 1.15;
+  /* Centred because the hero mark is centred, not because the two screens
+     that carry it happen to inherit .screen__content's centring. Same
+     argument as the chrome mark below: the position is the wordmark's, so a
+     screen that later aligns its own content differently cannot move it. */
+  text-align: center;
   /* .wordmark zeroes the margin an <h1> would otherwise bring, so the gap
      under it is stated once here and both screens that carry a hero wordmark
      get the same one. */
@@ -370,6 +407,20 @@ button:focus-visible,
   letter-spacing: 0.18em;
   line-height: 1.2;
   margin-bottom: 0.5rem;
+  /* The mark's position belongs to the mark, not to whichever screen is
+     hosting it. It used to be inherited: .screen__content centres, .profile
+     overrides that to `left`, and .profile is the only screen that does - so
+     the same signature sat centred on the city overview and on the
+     leaderboard and hard left on a profile, which is the "collection of
+     separate screens" the single wordmark of Section 8.1 exists against.
+     Left, everywhere, stated here once.
+
+     This has no effect on the map's corner mark, and the reason is worth
+     recording so nobody removes it as dead: there the wordmark is a flex item
+     of .map-overlays__controls--top, so its box is shrink-to-fit around a
+     single `white-space: nowrap` line. text-align distributes leftover space
+     inside a line box and that box has none, in any of the three values. */
+  text-align: left;
 }
 
 /* Section 8.3's start screen. `relative` so the backdrop below has this to be
@@ -645,6 +696,32 @@ button:focus-visible,
 
 .more-sheet__items a:hover {
   background: var(--color-border);
+}
+
+/* The one item in the sheet that leaves the application (Section 8.4's
+   "Report a bug"). It carries a second line saying a GitHub account is
+   needed, so it stacks where every other item is a single centred line -
+   scoped through .more-sheet__items so it outranks that rule's
+   `align-items: center`, which would otherwise centre the two lines
+   horizontally.
+
+   The 44 px minimum of Section 8.2 is inherited from the rule above and is
+   a floor, not a height: two lines are taller than that and the padding
+   still applies. */
+.more-sheet__items .more-sheet__external {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.125rem;
+}
+
+/* Secondary to the label above it, at the size and weight the two badge
+   notes already use for the same job. Ink drawn back rather than a colour of
+   its own (Section 8.1), and 0.75 keeps it at 7.1:1 on paper - well clear of
+   Section 8.1's 4.5:1 floor for body text. */
+.more-sheet__item-note {
+  font-size: 0.875rem;
+  opacity: 0.75;
 }
 
 .more-sheet__divider {
@@ -1704,6 +1781,50 @@ button:focus-visible,
   justify-content: space-between;
   gap: 1rem;
   min-height: 1.5em;
+}
+
+/* The reservation above stopped at the row: both rows were always there, but
+   what went *into* the first one was not the same height in both states. The
+   hint is 46 characters and wraps to two lines on every phone narrower than
+   about 405 px; a district name and a percentage never wrap at all. So the
+   panel was two lines shorter after the first selection, which moved
+   everything below it up.
+
+   The first row therefore stacks its two states in one grid cell instead of
+   choosing between them: the hint is rendered in both states
+   (screens/DistrictOverview.tsx) and merely hidden once something is
+   selected, so the cell is always as tall as the taller of the two and as
+   wide as the wider. A `min-height` in lines would have been the obvious fix
+   and is the wrong one - it encodes today's string at today's font size, and
+   the same hint takes three lines at a 24 px root font on a 320 px phone.
+   Reserving the real thing survives a longer name, a larger font and a
+   narrower screen without anyone recomputing anything.
+
+   `visibility: hidden` and not `display: none`, because a box that is not
+   generated reserves nothing; it is also what keeps the hidden hint out of
+   the accessibility tree, so the `role="status"` panel announces the
+   selection and not the instruction beneath it. */
+.district-overview__detail-row--primary {
+  display: grid;
+  align-items: center;
+}
+
+.district-overview__detail-row--primary > * {
+  grid-area: 1 / 1;
+}
+
+.district-overview__detail-hint--reserved {
+  visibility: hidden;
+}
+
+/* The name and the percentage share the cell with the hint, so they need
+   their own row box to spread themselves along - the grid cell above is a
+   stack, not the flex row the base rule provides. */
+.district-overview__detail-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 /* Never broken across two lines - the longest names here are hyphenated
