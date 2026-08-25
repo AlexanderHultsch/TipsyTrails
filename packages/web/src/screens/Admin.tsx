@@ -11,11 +11,15 @@ import {
   getPendingVisits,
   updateAdminBar,
 } from '../api/client.js';
-import type { AdminBar, AdminUser, VisitSummary } from '../api/types.js';
+import type { AdminBar, AdminUser, BarSource, VisitSummary } from '../api/types.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { isVisitAlreadyGone } from '../tracking/useVisits.js';
 
-type SourceFilter = 'all' | 'osm' | 'community' | 'admin';
+// The bar sources the API can actually report, plus the no-filter option -
+// built from `BarSource` rather than retyped, so a fourth source added to the
+// server's vocabulary is a compile error in SOURCE_FILTERS below rather than
+// a filter button nobody ever adds.
+type SourceFilter = 'all' | BarSource;
 
 const SOURCE_FILTERS: { value: SourceFilter; label: string }[] = [
   { value: 'all', label: 'All' },

@@ -2,7 +2,7 @@ import { compareBarsByName } from '@tipsytrails/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth/cookie.js';
-import { sendBarNotFound } from './bars.js';
+import { sendBarNotFound, type BarSource, type BarStatus } from './bars.js';
 import { loadActiveCity, loadCityById, resolveCellAndDistrict, toGridParams } from './fog.js';
 
 // SPEC.md Section 9.3, Phase 7 step 2: the admin area. Every route here sits
@@ -21,10 +21,10 @@ interface BarRow {
   lat: number;
   lon: number;
   cell_index: number;
-  source: string;
+  source: BarSource;
   osm_id: string | null;
   submitted_by: number | null;
-  status: string;
+  status: BarStatus;
   created_at: number;
 }
 
@@ -36,9 +36,9 @@ interface AdminBarSummary {
   address: string | null;
   lat: number;
   lon: number;
-  source: string;
+  source: BarSource;
   submittedBy: number | null;
-  status: string;
+  status: BarStatus;
   createdAt: number;
 }
 

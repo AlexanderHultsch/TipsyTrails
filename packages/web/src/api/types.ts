@@ -36,6 +36,22 @@ export interface SamplesResponse {
   tooFastToReveal: boolean;
 }
 
+// The closed vocabularies the bar and visit shapes below carry, mirroring
+// packages/api/src/routes/bars.ts's `BarSource`/`BarStatus` and
+// routes/visits.ts's `VisitStatus` - the same hand-kept mirror every other
+// type in this file is, for the same reason (packages/web does not depend on
+// packages/api, so the shapes are declared twice on purpose; see the note on
+// BadgeKind below, which mirrors the server's own the same way).
+//
+// Written out rather than left as `string`: the server can only ever send
+// one of these - each is a SQL literal or a zod enum on that side - and a
+// `string` here would let a screen compare a bar's source against a value
+// the API will never produce and get silent `false` forever instead of a
+// compile error.
+export type BarSource = 'osm' | 'community' | 'admin';
+export type BarStatus = 'active' | 'hidden';
+export type VisitStatus = 'pending' | 'completed' | 'expired' | 'cancelled';
+
 // GET /api/bars, GET /api/bars/:id, and the `newBars` field above all share
 // this shape - packages/api/src/routes/bars.ts's `toBarSummary` (reused by
 // routes/fog.ts for `newBars`) is the one place a `bars` row becomes
@@ -47,7 +63,7 @@ export interface Bar {
   address: string | null;
   lat: number;
   lon: number;
-  source: string;
+  source: BarSource;
   discoveredAt: number;
   // Section 5.7: whether *the requesting user* has at least one completed
   // visit at this bar. Not a property of the bar - the same bar comes back
@@ -109,7 +125,7 @@ export interface VisitSummary {
   onsiteSamples: number;
   confirmedS: number;
   remainingS: number;
-  status: string;
+  status: VisitStatus;
 }
 
 export interface PendingVisitsResponse {
@@ -128,13 +144,17 @@ export interface VapidPublicKeyResponse {
 // 7.6's area-explored figures, city-wide and per district - the same
 // revealed/playable pair the fog mask itself is scored against, already
 // turned into a percent server-side so this is never recomputed here.
-export interface CityProgress {
+// Named for readability, not exported: like CityMeta's and FogProgress's own
+// `districts` above, these two are only ever reached through the response
+// type below, and this module names a sub-shape only where something has to
+// write the name down.
+interface CityProgress {
   revealedCells: number;
   playableCells: number;
   percent: number;
 }
 
-export interface DistrictProgress {
+interface DistrictProgress {
   id: number;
   name: string;
   revealedCells: number;
@@ -173,6 +193,20 @@ export interface BadgeProgress {
   value: number;
 }
 
+// GET /api/leaderboard's two query vocabularies, mirroring that route's own
+// `z.enum(['area', 'bars'])` and `z.enum(['all', 'week', 'month'])`. Named
+// here rather than written out at each of the three places in this package
+// that needed them (this file, api/client.ts's `getLeaderboard`,
+// screens/Leaderboard.tsx's toggles), which is three chances for the toggle
+// row and the request to disagree about what the server accepts.
+//
+// `LeaderboardPeriod` is deliberately NOT `BadgePeriod`: a badge period is
+// week/month/year (Section 7.7) and a leaderboard period is all/week/month
+// (Section 7.8). They overlap on two members and are not the same set, so
+// they keep separate names.
+export type LeaderboardMetric = 'area' | 'bars';
+export type LeaderboardPeriod = 'all' | 'week' | 'month';
+
 // GET /api/leaderboard response shape (packages/api/src/routes/leaderboard.ts).
 export interface LeaderboardEntry {
   rank: number;
@@ -185,8 +219,8 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardResponse {
-  metric: 'area' | 'bars';
-  period: 'all' | 'week' | 'month';
+  metric: LeaderboardMetric;
+  period: LeaderboardPeriod;
   page: number;
   pageSize: number;
   totalUsers: number;
@@ -206,9 +240,9 @@ export interface AdminBar {
   address: string | null;
   lat: number;
   lon: number;
-  source: string;
+  source: BarSource;
   submittedBy: number | null;
-  status: string;
+  status: BarStatus;
   createdAt: number;
 }
 

@@ -15,7 +15,10 @@ import { DISTRICT_BORDER_PAINT } from '../ink-style.js';
 export const DISTRICT_BORDERS_SOURCE_ID = 'district-borders';
 export const DISTRICT_BORDERS_LAYER_ID = 'district-borders';
 
-export interface DistrictBordersOptions {
+// The constructor bag, contextually typed at the one call site, so it is not
+// surface. The two layer/source ids above are, because teardown and the map
+// screen's tests both name them.
+interface DistrictBordersOptions {
   map: MaplibreMap;
   boundaries: BoundaryFeatureCollection;
 }
@@ -55,9 +58,11 @@ export class DistrictBorders {
       type: 'geojson',
       // The fetched collection is the app's own BoundaryFeature shape
       // (api/geo-types.ts), which is a GeoJSON FeatureCollection with a
-      // narrower `properties` than the GeoJSON types express. MapLibre only
-      // ever reads the geometry here.
-      data: this.boundaries as unknown as GeoJSON.FeatureCollection,
+      // narrower `properties` than the GeoJSON types express. It satisfies
+      // `GeoJSON.FeatureCollection` structurally and is passed as-is; see
+      // `BoundaryFeatureProperties` for why that only holds while it is a
+      // type alias and not an interface.
+      data: this.boundaries,
     });
 
     // **No `beforeId`, and that is the whole ordering argument.** Section 7.3

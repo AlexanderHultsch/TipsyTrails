@@ -13,6 +13,19 @@ import type { AcceptedPosition } from './fog.js';
 // read/write the same `visits` rows through the same `@tipsytrails/shared`
 // `visits.ts` rules this file uses.
 
+// The closed vocabulary `visits.status` holds, per 001_init.sql's own
+// comment on the column (`-- 'pending' | 'completed' | 'expired' |
+// 'cancelled'`). SQLite carries no CHECK constraint for it, so the union is
+// enforced here instead, and it is complete: 'pending' is written by the
+// check-in INSERT below, 'cancelled' by the cancel handler below, 'expired'
+// by `expireVisit` below / maintenance.ts's sweep / routes/fog.ts's late
+// sample, and 'completed' by routes/fog.ts alone — every one of them a SQL
+// literal, with nothing else in the codebase writing the column at all.
+// routes/fog.ts's in-flight `VisitProgress.status` already spells out the
+// three of these a sample batch can produce; this is the same vocabulary
+// from the persisted side.
+type VisitStatus = 'pending' | 'completed' | 'expired' | 'cancelled';
+
 interface VisitRow {
   id: number;
   bar_id: number;
@@ -21,7 +34,7 @@ interface VisitRow {
   last_sample_at: number;
   onsite_samples: number;
   confirmed_s: number;
-  status: string;
+  status: VisitStatus;
 }
 
 // The client-facing shape of a visit: enough for Section 7.5's persistent
@@ -36,7 +49,7 @@ export interface VisitSummary {
   onsiteSamples: number;
   confirmedS: number;
   remainingS: number;
-  status: string;
+  status: VisitStatus;
 }
 
 export function toVisitSummary(row: VisitRow): VisitSummary {

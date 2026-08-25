@@ -21,7 +21,9 @@ export function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuf
   return bytes;
 }
 
-export interface PushSubscriptionPayload {
+// Internal: what `toSubscriptionPayload` returns, handed straight to
+// api/client.ts's subscribePush without ever being held under this name.
+interface PushSubscriptionPayload {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 }

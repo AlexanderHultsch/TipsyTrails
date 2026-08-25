@@ -12,11 +12,14 @@ declare module 'fastify' {
   }
 }
 
-export function isSecureOrigin(env: Env): boolean {
+function isSecureOrigin(env: Env): boolean {
   return env.PUBLIC_ORIGIN.startsWith('https:');
 }
 
-export function sessionCookieOptions(env: Env): CookieSerializeOptions {
+// Internal to this module: setSessionCookie below is the only way a session
+// cookie is ever written, so the option set it writes with is not something
+// a route should be able to reach for and set half of.
+function sessionCookieOptions(env: Env): CookieSerializeOptions {
   return {
     httpOnly: true,
     sameSite: 'lax',

@@ -3,7 +3,9 @@ import { CONFIG } from '@tipsytrails/shared';
 export type GpsStatus = 'good' | 'fair' | 'poor';
 export type ConnectionStatus = 'online' | 'offline' | 'syncing';
 
-export interface GpsFix {
+// Internal: `computeGpsStatus`'s argument, which its caller satisfies with a
+// value it already holds rather than by naming this type.
+interface GpsFix {
   accuracy: number;
   receivedAt: number;
 }

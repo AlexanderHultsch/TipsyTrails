@@ -20,13 +20,17 @@ export type BadgeKind = keyof typeof CONFIG.BADGE_THRESHOLDS;
 
 const BADGE_PERIODS: readonly BadgePeriod[] = ['week', 'month', 'year'];
 
-export interface BadgeAward {
+// Both internal: they only ever appear as what `evaluateBadges` and
+// `runBadgeCatchUp` return, and every caller (the scheduler below, the
+// startup catch-up, the tests) reads that result inline rather than naming
+// its type.
+interface BadgeAward {
   userId: number;
   kind: BadgeKind;
   value: number;
 }
 
-export interface BadgeEvaluationResult {
+interface BadgeEvaluationResult {
   period: BadgePeriod;
   periodKey: string;
   awarded: BadgeAward[];
@@ -305,10 +309,18 @@ export function currentBadgeProgress(
   ];
 }
 
+// `kind` and `period` are the closed vocabularies 001_init.sql documents
+// beside those columns (`-- 'explorer' | 'barfly'`, `-- 'week' | 'month' |
+// 'year'`) and `awardCandidates` above is the only writer of either — it
+// takes them as `BadgeKind` and `BadgePeriod`, so nothing else can ever get
+// into the table. Declared as those unions here rather than as `string` plus
+// an `as` cast in the mapper below: `db.prepare<…, BadgeQueryRow>` is an
+// unchecked assertion about every column anyway, so the cast bought no
+// safety and only hid where the claim was being made.
 interface BadgeQueryRow {
   user_id: number;
-  kind: string;
-  period: string;
+  kind: BadgeKind;
+  period: BadgePeriod;
   period_key: string;
   value: number;
   awarded_at: number;
@@ -337,8 +349,8 @@ export function badgesByUser(
   for (const row of rows) {
     const list = result.get(row.user_id) ?? [];
     list.push({
-      kind: row.kind as BadgeKind,
-      period: row.period as BadgePeriod,
+      kind: row.kind,
+      period: row.period,
       periodKey: row.period_key,
       value: row.value,
       awardedAt: row.awarded_at,

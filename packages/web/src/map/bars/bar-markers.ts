@@ -30,7 +30,9 @@ const COMMUNITY_MARK_SVG =
   '<circle cx="19" cy="5" r="4"/>' +
   '</svg>';
 
-export interface BarMarkersOptions {
+// The constructor bag, contextually typed from the one `new BarMarkers({…})`
+// call site, so it is not surface.
+interface BarMarkersOptions {
   map: MaplibreMap;
   onSelect: (bar: Bar) => void;
 }

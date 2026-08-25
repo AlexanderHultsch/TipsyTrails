@@ -9,9 +9,11 @@ import { SERVICE_WORKER_URL } from '../sw/register.js';
 // service worker; see that file's own comment), so the URL now lives in
 // sw/register.ts, the one place main.tsx also registers it from.
 
-export type PushPermission = NotificationPermission | 'unsupported';
+// Both internal - see tracking/useVisits.ts's UseVisitsResult for the same
+// reasoning: the hook's result is destructured, never named.
+type PushPermission = NotificationPermission | 'unsupported';
 
-export interface UsePushSubscriptionResult {
+interface UsePushSubscriptionResult {
   permission: PushPermission;
   subscribed: boolean;
   working: boolean;

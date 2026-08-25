@@ -348,7 +348,9 @@ function createFogTexture(
   return texture;
 }
 
-export interface WebGLFogLayerOptions {
+// The constructor bag, contextually typed at the one call site, so it is not
+// surface.
+interface WebGLFogLayerOptions {
   id: string;
   grid: GridSize;
   gridParams: GridParams;

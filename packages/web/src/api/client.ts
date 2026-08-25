@@ -5,10 +5,14 @@ import type {
   AdminBarsResponse,
   AdminUsersResponse,
   Bar,
+  BarSource,
   BarsResponse,
+  BarStatus,
   CityMeta,
   FogMaskResponse,
   FogProgress,
+  LeaderboardMetric,
+  LeaderboardPeriod,
   LeaderboardResponse,
   PendingVisitsResponse,
   ProfileResponse,
@@ -302,8 +306,8 @@ export function getProgress(): Promise<ProgressResponse> {
 // defaults them too (routes/leaderboard.ts's zod schema), but the screen
 // always has a concrete metric/period/page in state by the time it fetches.
 export function getLeaderboard(input: {
-  metric: 'area' | 'bars';
-  period: 'all' | 'week' | 'month';
+  metric: LeaderboardMetric;
+  period: LeaderboardPeriod;
   page: number;
 }): Promise<LeaderboardResponse> {
   const params = new URLSearchParams({
@@ -367,7 +371,7 @@ export function deleteAccount(input: { password: string }): Promise<{ ok: true }
 // GET /api/admin/bars (Section 9.3): every bar including hidden ones,
 // optionally filtered by source - mirrors the server's own optional query
 // param rather than always sending it.
-export function getAdminBars(input?: { source?: string }): Promise<AdminBarsResponse> {
+export function getAdminBars(input?: { source?: BarSource }): Promise<AdminBarsResponse> {
   const query = input?.source ? `?source=${encodeURIComponent(input.source)}` : '';
   return request<AdminBarsResponse>(`/api/admin/bars${query}`);
 }
@@ -395,7 +399,7 @@ export function updateAdminBar(
     address: string | null;
     lat: number;
     lon: number;
-    status: 'active' | 'hidden';
+    status: BarStatus;
   }>,
 ): Promise<AdminBar> {
   return request<AdminBar>(`/api/admin/bars/${id}`, {

@@ -21,6 +21,26 @@ import { loadActiveCity, resolveCellAndDistrict, toGridParams } from './fog.js';
 // (three routes sharing `lastAccepted`) or `fog.ts` (the fog/sample/progress
 // trio) do.
 
+// The two closed vocabularies the `bars` table's TEXT columns hold, written
+// out as unions rather than left as `string`. 001_init.sql documents both in
+// a comment beside the column (`-- 'osm' | 'community' | 'admin'`,
+// `-- 'active' | 'hidden'`) but SQLite carries no CHECK constraint for
+// either, so this is where the vocabulary is actually enforced: every writer
+// in the codebase is one of a handful of places, and each writes a literal —
+// 'osm' from db/seed-bars.ts (a `z.literal('osm')` in the seed schema),
+// 'community' from the suggest handler below, 'admin' from routes/admin.ts's
+// create handler, `status` 'active' at every INSERT and thereafter only from
+// routes/admin.ts's `z.enum(['active', 'hidden'])`. Declared here, beside
+// the bar shapes this module owns, and imported by routes/admin.ts so the
+// admin surface cannot invent a fourth source or a third status.
+//
+// Note this makes the row types below assert a narrower type than SQLite can
+// guarantee — but `db.prepare<…, DiscoveredBarRow>` is already an unchecked
+// assertion about every column's type, so a union costs nothing a `string`
+// did not already cost, and it buys an exhaustive check at every use.
+export type BarSource = 'osm' | 'community' | 'admin';
+export type BarStatus = 'active' | 'hidden';
+
 export interface DiscoveredBarRow {
   id: number;
   district_id: number | null;
@@ -28,7 +48,7 @@ export interface DiscoveredBarRow {
   address: string | null;
   lat: number;
   lon: number;
-  source: string;
+  source: BarSource;
   discovered_at: number;
   // SPEC.md Section 5.7: 1 when the discovering user has at least one
   // `visits` row at this bar with `status = 'completed'`, 0 otherwise —
@@ -46,7 +66,7 @@ export interface BarSummary {
   address: string | null;
   lat: number;
   lon: number;
-  source: string;
+  source: BarSource;
   discoveredAt: number;
   // SPEC.md Section 5.7: "A bar is mastered by a user if at least one
   // `visits` row exists with `status='completed'`. Mastering is permanent

@@ -24,12 +24,17 @@ import maplibregl from 'maplibre-gl';
 import { CONFIG, cellCenterXY, gridMapBounds } from '@tipsytrails/shared';
 import type { GridParams, LatLon } from '@tipsytrails/shared';
 
-export interface MercatorPoint {
+// Internal: mercator space is this module's own working space and nothing
+// outside it holds a point in those units.
+interface MercatorPoint {
   x: number;
   y: number;
 }
 
-export interface GridQuadCorner {
+// Internal: the elements of what `gridQuadCorners` returns, which its one
+// caller (webgl-fog-layer.ts) reads field by field into a vertex buffer
+// without naming the type.
+interface GridQuadCorner {
   merc: MercatorPoint;
   u: number;
   v: number;
@@ -48,7 +53,7 @@ export interface LngLatBox {
  * module needs no value import of the class and a test can hand it a plain
  * object.
  */
-export interface LngLatBoundsLike {
+interface LngLatBoundsLike {
   getWest(): number;
   getSouth(): number;
   getEast(): number;

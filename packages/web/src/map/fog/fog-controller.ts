@@ -25,7 +25,9 @@ function defaultPrefersReducedMotion(): boolean {
     : false;
 }
 
-export interface FogControllerOptions {
+// The constructor bag, contextually typed at the one call site, so it is not
+// surface.
+interface FogControllerOptions {
   map: MaplibreMap;
   grid: GridSize;
   gridParams: GridParams;

@@ -5,7 +5,12 @@ function emptyToUndefined(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export const envSchema = z.object({
+// Internal: `loadEnv` below is the only supported way to turn a process
+// environment into an `Env`, because it also applies the PORT/DB_PATH
+// aliases and the empty-string normalisation the schema itself knows
+// nothing about. Parsing against this schema directly would silently skip
+// all of that, so it is not offered.
+const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: z.coerce.number().default(3000),

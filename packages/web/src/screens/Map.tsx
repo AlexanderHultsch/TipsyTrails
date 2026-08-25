@@ -480,12 +480,12 @@ export function MapScreen() {
             child takes the opposite end and the indicator does not move a
             pixel from the corner it has always been in. Which is also why the
             wordmark is second in the markup and not first.
-            "Auf der Map klein und elegant" - the chrome prominence, a member
-            of the overlay grid like everything else on this screen rather than
-            something absolutely positioned on top of it (Section 8.3). It is a
-            mark and never a control: index.css gives it back the
-            pointer-events this row's children otherwise take, so it cannot eat
-            a drag in the corner it sits in. */}
+            The owner asked for it "small and elegant on the map" - the chrome
+            prominence, a member of the overlay grid like everything else on
+            this screen rather than something absolutely positioned on top of
+            it (Section 8.3). It is a mark and never a control: index.css
+            gives it back the pointer-events this row's children otherwise
+            take, so it cannot eat a drag in the corner it sits in. */}
         <div className="map-overlays__controls map-overlays__controls--top">
           <TrackingIndicator state={trackingState} />
           <Wordmark prominence="chrome" />

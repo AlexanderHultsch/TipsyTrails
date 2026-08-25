@@ -86,7 +86,10 @@ export function toGridParams(city: CityRow): GridParams {
 // does rather than writing a third copy"). Order matches the code this was
 // lifted from: outside-city is checked before grid availability, since a
 // position outside the grid never needs the district lookup at all.
-export type CellDistrictResult =
+//
+// The union itself is internal - both call sites switch on `status` on the
+// value the function hands back, and neither writes the name down.
+type CellDistrictResult =
   | { status: 'ok'; cellIndex: number; districtId: number | null }
   | { status: 'outside_city' }
   | { status: 'grid_unavailable' };

@@ -32,7 +32,10 @@ function keyFor(userId: number): string {
   return `${FOG_CACHE_PREFIX}${userId}`;
 }
 
-export interface CachedFogState {
+// Internal: what `loadFogState` returns, read inline by the one caller
+// (map/fog/useFogLayer.ts). `StoredFogState` below is its on-disk twin - the
+// mask base64-encoded, since localStorage holds strings.
+interface CachedFogState {
   gridWidth: number;
   gridHeight: number;
   cellSizeM: number;

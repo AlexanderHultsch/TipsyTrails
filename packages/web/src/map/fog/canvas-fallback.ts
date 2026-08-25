@@ -45,7 +45,9 @@ import type { GridSize } from './grid-texture.js';
 const FALLBACK_FOG_OPACITY = CONFIG.FOG_MAX_OPACITY - CONFIG.FOG_DENSITY_VARIATION / 2;
 const FOG_CSS_COLOR = `rgba(199, 194, 182, ${FALLBACK_FOG_OPACITY})`;
 
-export interface CanvasFogFallbackOptions {
+// The constructor bag, contextually typed at the one call site, so it is not
+// surface.
+interface CanvasFogFallbackOptions {
   map: MaplibreMap;
   grid: GridSize;
   gridParams: GridParams;

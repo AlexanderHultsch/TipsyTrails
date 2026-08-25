@@ -37,7 +37,10 @@ const OWN_POSITION_MARKER_SVG =
   '<circle cx="12" cy="12" r="4.5"/>' +
   '</svg>';
 
-export interface OwnPositionMarkerOptions {
+// The constructor bag, contextually typed at the one call site, so it is not
+// surface. `OwnPositionMarkerPosition` below is the one that is: setPosition
+// takes it and the map screen's own state is shaped to satisfy it.
+interface OwnPositionMarkerOptions {
   map: MaplibreMap;
 }
 

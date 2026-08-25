@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { ApiError, getLeaderboard } from '../api/client.js';
-import type { LeaderboardResponse } from '../api/types.js';
+import type { LeaderboardMetric, LeaderboardPeriod, LeaderboardResponse } from '../api/types.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { Wordmark } from '../components/Wordmark.js';
 
-type Metric = 'area' | 'bars';
-type Period = 'all' | 'week' | 'month';
+type Metric = LeaderboardMetric;
+type Period = LeaderboardPeriod;
 
 const METRICS: { value: Metric; label: string }[] = [
   { value: 'area', label: 'Area' },

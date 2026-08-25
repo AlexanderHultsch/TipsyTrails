@@ -25,8 +25,12 @@
  * How loud this instance is. `hero` is the wordmark as the subject of the
  * screen (the start screen, the landing screen); `chrome` is the wordmark as
  * the application's signature on a screen that is about something else.
+ *
+ * Internal: every call site writes the prominence as a string literal in
+ * JSX and is contextually typed from the prop below, so the name is never
+ * needed outside this file.
  */
-export type WordmarkProminence = 'hero' | 'chrome';
+type WordmarkProminence = 'hero' | 'chrome';
 
 const WORDMARK_TEXT = 'Tipsy Trails';
 

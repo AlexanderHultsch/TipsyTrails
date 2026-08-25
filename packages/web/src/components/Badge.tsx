@@ -102,7 +102,14 @@ export function Badge({
 // rank, a standing, a share of a target, or any mark that moves as the
 // player's own value moves. See `unearnedBadgeTypes` for why that last one is
 // a rule about the data and not about this component.
-export function BadgePlaceholder({
+//
+// Not exported, and that is deliberate rather than an oversight: which
+// badges a player has *not* got is `unearnedBadgeTypes`' answer to give, and
+// BadgeShelf below is the only thing that asks it. A screen reaching for
+// this component directly would be drawing a "not yet earned" glyph from
+// some list of its own, which is exactly the drift Section 7.7's rule about
+// never publishing a threshold or a standing is guarding against.
+function BadgePlaceholder({
   kind,
   period,
   className,

@@ -95,7 +95,22 @@ function usernameFromRequest(request: FastifyRequest): string {
   return '';
 }
 
-interface UserRow {
+// The user record as every endpoint that answers with one sends it, and the
+// row it is projected from. This module owns both because `GET
+// /api/auth/me` is the canonical "who am I" answer and register/login return
+// the same body; routes/account.ts imports them for `PATCH /api/settings`,
+// which answers with the updated user, rather than keeping the second
+// identical copy of all three it used to (same precedent as routes/admin.ts
+// importing `sendBarNotFound` from routes/bars.ts). Two copies of a
+// client-facing shape is exactly the thing that drifts, and the web client's
+// own mirror of it (packages/web/src/api/types.ts's `User`) already has to
+// be kept in step by hand across the package boundary — there is no reason
+// to have a third to keep in step inside this one.
+//
+// `password_hash` and `security_answer_hash` are deliberately absent from
+// both: neither ever leaves the server (Section 10.2), and the only place
+// that needs the hash asks for it explicitly via `UserRowWithHash` below.
+export interface UserRow {
   id: number;
   username: string;
   avatar_seed: string;
@@ -108,6 +123,9 @@ interface UserRowWithHash extends UserRow {
   password_hash: string;
 }
 
+// Not exported for the same reason the other result shapes in this package
+// are not: every consumer gets it back from `toPublicUser` and sends it on,
+// never holding it under its own name.
 interface PublicUser {
   id: number;
   username: string;
@@ -117,7 +135,7 @@ interface PublicUser {
   mustChangePassword: boolean;
 }
 
-function toPublicUser(row: UserRow): PublicUser {
+export function toPublicUser(row: UserRow): PublicUser {
   return {
     id: row.id,
     username: row.username,

@@ -2,35 +2,11 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth, SESSION_COOKIE_NAME } from '../auth/cookie.js';
 import { verifyPassword } from '../auth/password.js';
-
-interface UserRow {
-  id: number;
-  username: string;
-  avatar_seed: string;
-  is_admin: number;
-  is_anonymous: number;
-  must_change_password: number;
-}
-
-interface PublicUser {
-  id: number;
-  username: string;
-  avatarSeed: string;
-  isAdmin: boolean;
-  isAnonymous: boolean;
-  mustChangePassword: boolean;
-}
-
-function toPublicUser(row: UserRow): PublicUser {
-  return {
-    id: row.id,
-    username: row.username,
-    avatarSeed: row.avatar_seed,
-    isAdmin: Boolean(row.is_admin),
-    isAnonymous: Boolean(row.is_anonymous),
-    mustChangePassword: Boolean(row.must_change_password),
-  };
-}
+// `PATCH /api/settings` answers with the same user body `GET /api/auth/me`,
+// register and login do, so it uses that module's projection rather than a
+// second identical copy of the row shape, the public shape and the mapper —
+// see routes/auth.ts's own comment on them.
+import { toPublicUser, type UserRow } from './auth.js';
 
 const settingsSchema = z.object({
   isAnonymous: z.boolean(),

@@ -18,7 +18,11 @@ export interface VapidConfig {
   subject: string;
 }
 
-export type VapidResolution =
+// Internal: `resolveVapidConfig` is what callers reach for, and app.ts
+// switches on the `status` of what it returns without ever naming the union.
+// `VapidConfig` above stays exported - push/sender.ts takes one as an
+// argument and so has to be able to write the name down.
+type VapidResolution =
   | { status: 'misconfigured'; missing: string[] }
   | { status: 'enabled'; config: VapidConfig }
   // The key file (Section 5.9) exists but could not be read/parsed, or a

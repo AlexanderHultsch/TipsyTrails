@@ -14,7 +14,9 @@ interface PendingVisitRow {
   last_sample_at: number;
 }
 
-export interface MaintenanceTickResult {
+// Internal: what `runMaintenanceTick` resolves to, read inline by the
+// scheduler below and by every test rather than named anywhere.
+interface MaintenanceTickResult {
   expiredVisits: number;
   purgedSessions: number;
   // Pending visits for which `push_sent_at` was set this tick — set whether
@@ -38,7 +40,10 @@ interface SubscriptionRow {
   auth: string;
 }
 
-export interface MaintenanceOptions {
+// Internal for the same reason: `runMaintenanceTick`'s third argument is
+// always written as an object literal at the call site and contextually
+// typed from here.
+interface MaintenanceOptions {
   // null (the default) means push is disabled — app.ts resolves this once
   // at boot from the VAPID_* env vars (push/config.ts) and only ever hands
   // a non-null sender to the real scheduler below; tests hand in a fake

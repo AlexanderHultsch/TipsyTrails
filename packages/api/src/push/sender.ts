@@ -10,7 +10,12 @@ import type { VapidConfig } from './config.js';
 // can stand in without a browser, a push service, or a device — none of
 // which this sandbox has (task Section E).
 
-export interface PushSubscriptionKeys {
+// Internal: it is only ever the argument of `PushSender.send` below, and
+// both implementations (the real one here, the test fake) write that method
+// as an object-literal member or through `PushSender['send']`, so neither
+// has to name it. `PushSender` and `PushSendOutcome` stay exported - the
+// seam itself is what maintenance.ts and its tests depend on.
+interface PushSubscriptionKeys {
   endpoint: string;
   p256dh: string;
   auth: string;

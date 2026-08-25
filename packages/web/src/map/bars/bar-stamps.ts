@@ -78,7 +78,9 @@ function defaultPrefersReducedMotion(): boolean {
     : false;
 }
 
-export interface BarStampsOptions {
+// The constructor bag, contextually typed from the one `new BarStamps({…})`
+// call site, so it is not surface.
+interface BarStampsOptions {
   map: MaplibreMap;
   /** Injectable so a test can force either branch - see map/fog/fog-controller.ts. */
   prefersReducedMotion?: () => boolean;

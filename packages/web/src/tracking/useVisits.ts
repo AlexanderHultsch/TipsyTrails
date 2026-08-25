@@ -20,7 +20,9 @@ import {
 import type { Bar, VisitSummary } from '../api/types.js';
 import type { LastAcceptedPosition } from './useSampleTracking.js';
 
-export interface UseVisitsResult {
+// Internal: hook results are destructured at the one call site, never held
+// under their type name, so this describes `useVisits` without being surface.
+interface UseVisitsResult {
   pendingVisits: VisitSummary[];
   checkInCandidates: OnsiteCandidate<Bar>[];
   outOfRangeVisits: VisitSummary[];

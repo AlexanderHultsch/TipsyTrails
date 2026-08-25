@@ -1,9 +1,14 @@
 import { CONFIG } from '@tipsytrails/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
-export type RateLimitName = keyof typeof CONFIG.RATE_LIMITS;
+// Both internal: `createRateLimiter` below is this module's whole surface,
+// and a call site names its limit with a string literal and its options with
+// an object literal, so neither type is ever written out elsewhere. Keeping
+// `RateLimitName` tied to CONFIG.RATE_LIMITS is still what makes an unknown
+// limit name a compile error at every call site.
+type RateLimitName = keyof typeof CONFIG.RATE_LIMITS;
 
-export interface RateLimitOptions {
+interface RateLimitOptions {
   // Required (and only meaningful) for limits configured with `by: 'username'`:
   // the caller-supplied username isn't on the request the way `request.ip` or
   // `request.userId` are, so the route must say where to find it.

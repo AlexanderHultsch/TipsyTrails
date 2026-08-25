@@ -4,18 +4,30 @@
 // a FeatureCollection of Polygon/MultiPolygon boundaries with the same
 // property set - so one type covers all three.
 
-export interface BoundaryFeatureProperties {
+// A type alias rather than an interface, and that is load-bearing rather
+// than a style choice. MapLibre wants a `GeoJSON.FeatureCollection`, whose
+// `properties` is `GeoJsonProperties` - an index-signature type. TypeScript
+// gives an object *type alias* an implicit index signature but never gives
+// an interface one, so declaring this as an interface is precisely what
+// used to make `BoundaryFeatureCollection` structurally incompatible with
+// GeoJSON and force a double cast at the one place that hands it to the map
+// (map/districts/district-borders.ts). As an alias the collection satisfies
+// `GeoJSON.FeatureCollection` on its own and the cast is gone.
+type BoundaryFeatureProperties = {
   osm_id: number;
   name: string;
   admin_level: number;
-}
+};
 
-export interface PolygonGeometry {
+// The two members of BoundaryGeometry below. Not exported: every consumer
+// (geo/geojson-path.ts, the overview screens) works on the union and
+// narrows it by `type`, so neither member is ever named on its own.
+interface PolygonGeometry {
   type: 'Polygon';
   coordinates: number[][][];
 }
 
-export interface MultiPolygonGeometry {
+interface MultiPolygonGeometry {
   type: 'MultiPolygon';
   coordinates: number[][][][];
 }

@@ -13,14 +13,19 @@ export interface LonLat {
   readonly lat: number;
 }
 
-export interface BoundingBox {
+// Internal to this module: a bounding box only ever comes out of
+// `computeBoundingBox` and goes straight into `createProjector`, and a
+// viewport is always written as an object literal at the call site, so
+// neither name is needed outside. `LonLat` and `Project` are the two that
+// callers do write down, and those stay exported.
+interface BoundingBox {
   readonly minLon: number;
   readonly minLat: number;
   readonly maxLon: number;
   readonly maxLat: number;
 }
 
-export interface Viewport {
+interface Viewport {
   readonly width: number;
   readonly height: number;
   /** Empty margin kept on every side, in the same units as width/height. */
