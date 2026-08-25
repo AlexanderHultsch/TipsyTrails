@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.32
+**Version:** 1.33
 **Status:** Draft — ready for implementation
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -81,6 +81,8 @@ Progress is measured as **percentage of area explored** (per district and city-w
 
 `better-sqlite3` is a native module. The API Dockerfile must either use the published arm64 prebuild or install build tools in a build stage that does not ship in the final image. A build that silently compiles from source on every `docker compose build` is a defect.
 
+**`packages/api` and `packages/web` resolve `@tipsytrails/shared` through a gitignored `dist`, so the shared build has to run before anything reads it.** The root `package.json` runs it as `pretest` and `pretypecheck` as well as `prepare`. Without that, a signature-preserving change to a shared rule leaves `pnpm typecheck` at zero errors and the suite green, because both were reading the *previous* build off disk. One gap is accepted rather than closed: a single package's tests invoked directly (`pnpm --filter @tipsytrails/api test`) bypass both hooks and can still read a stale `dist`. The four root commands — `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test` — are the authoritative ones for exactly this reason.
+
 ---
 
 ## 4. Architecture
@@ -116,7 +118,7 @@ Cache aggressively at the Cloudflare edge so the Pi handles almost no repeat tra
 | `/assets/*` (hashed) | `public, max-age=31536000, immutable` | Vite content hashing |
 | `/tiles/karlsruhe.<version>.pmtiles` | `public, max-age=2592000` | Range requests must be allowed; 9.4 MB measured for Karlsruhe, fetched in small ranges |
 | `/static/districts.json` | `public, max-age=86400` | District polygons, simplified |
-| `/index.html`, `/manifest.json`, `/sw.js` | `public, max-age=0, must-revalidate` | The service worker controls the whole app shell (Section 15, v1.9); pinned the same as the shell document rather than left to an intermediary |
+| `/index.html`, `/manifest.json`, `/sw.js` | `public, max-age=0, must-revalidate` | The service worker controls the whole app shell (Section 4.1, below); pinned the same as the shell document rather than left to an intermediary |
 | `/icons/*` | `public, max-age=86400` | Referenced from the manifest, not content-hashed, changes rarely — same reasoning as `/static/districts.json` above, not the shell's must-revalidate treatment |
 | `/api/*` | `private, no-store` | Never cached |
 
@@ -130,6 +132,8 @@ Range requests on the tile path are not an optimisation; they are mandatory. PMT
 Which component sets the `Cache-Control` value in the table above depends on the deployment (Section 4.3). In the standalone two-container path, Caddy sets it when serving the file from disk, as the diagram in Section 4 shows. In the single-container deployment that actually runs on the Pi (v1.2.2), there is no Caddy in front of the API; the API sets `Cache-Control: public, max-age=2592000` itself on `/tiles/*` responses, the same way it already sets headers for hashed assets and `index.html` in `packages/api/src/app.ts`. The value is unchanged either way — only who applies it differs. The Cloudflare Cache Rule below is edge configuration and is required in both deployments regardless of which origin component sets the header.
 
 Client-side: district polygons, grid metadata, and the bar catalogue are cached in IndexedDB with an ETag-based revalidation on app start.
+
+**There is exactly one service worker, and it owns both jobs.** A scope can have only one; registering a second silently replaces the first, and which one wins depends on load order rather than on anything readable in the source. So the offline shell (Phase 8) and Web Push (Phase 5) live in a single `packages/web/public/sw.js`, and both registration sites — the eager registration on app start and `usePushSubscription`'s `enable()` — import one `SERVICE_WORKER_URL` constant rather than each naming a filename, so a second competing URL cannot be reintroduced by one call site drifting from the other. Its fetch handler **never** intercepts `/api/*`: those responses are `private, no-store`, and a cached one on a shared device is a privacy problem, not a cache hit.
 
 ### 4.2 Repository structure
 
@@ -428,6 +432,8 @@ The partial unique index makes a second pending visit at the same bar impossible
 
 A bar is **mastered** by a user if at least one `visits` row exists with `status='completed'`. Mastering is permanent and cannot be lost.
 
+**Hiding a bar removes it from play; it never revokes what was earned at it.** `GET /api/bars` and `GET /api/bars/:id` filter to `bars.status = 'active'`, as do the discovery query in `POST /api/samples` and the check-in query — a bar an admin hides disappears from every player's map, including players who had already discovered it. The leaderboard and badge queries deliberately do **not** filter on `bars.status`: mastering is a completed visit, and an admin hiding a bar afterwards must not silently take a badge or a rank away. That asymmetry is a rule, not an oversight.
+
 **Every bar the API hands a client carries that answer, for the caller and for nobody else.** `GET /api/bars`, `GET /api/bars/:id` and `POST /api/samples`'s `newBars` all return the same bar shape (Section 9.2), and it has a `mastered` boolean on it — because the client draws the state (Section 8.1's cocktail glass) and cannot derive it: nothing else the client holds says anything about visits. The flag is per user and never a property of the bar, so the same bar is `true` in one caller's response and `false` in another's at the same instant.
 
 Two things about how it is computed are decisions rather than implementation detail, and they are here because getting either wrong produces a bug no single-user test can see. It is computed from **the `bar_discoveries` row's own `user_id`** — the same row that makes an undiscovered bar unreachable at all — rather than from a user identity supplied separately, so a query cannot come to report one user's bars with another user's mastery. And it is expressed so that the existing `idx_visits_user_status` index answers it **once per request rather than once per bar**: that index is on `(user_id, status)` and carries no `bar_id`, so a per-bar existence check walks every completed visit the caller has, and the cost of the whole request becomes discovered bars × completed visits. Measured on a player with 500 discovered bars and 600 completed visits that is 15 ms against 0.4 ms without the flag; asked once per request it is 0.6 ms. No index is added for this — the one Section 5.7 already defines covers the shape that asks the question once.
@@ -522,17 +528,28 @@ A consequence worth stating: cells outside every district are revealable (the fo
 
 ### 7.1 Constants
 
-All of these live in `packages/shared/src/config.ts`.
+All of these live in `packages/shared/src/config.ts`, and that file is authoritative: the block below reproduces every key it exports, with the file's own comments reduced to one line each. A constant named anywhere else in this document is defined here or nowhere.
 
 ```ts
 export const CONFIG = {
   FOG_REVEAL_RADIUS_M: 100,
   FOG_MAX_SPEED_KMH: 30,          // above this, no reveal
   FOG_MAX_ACCURACY_M: 200,        // samples worse than this are discarded entirely
+  FOG_REVEAL_ANIMATION_MS: 600,   // see 7.3; the bar stamp waits this out
+  FOG_MAX_OPACITY: 0.96,          // alpha of the DENSEST fog and the ceiling on every fragment
+  FOG_DENSITY_VARIATION: 0.12,    // how far below that ceiling the noise may thin it (floor 0.84)
+  FOG_DENSITY_NOISE_CELLS: 24,    // period of the coarsest density octave, in grid cells
+  FOG_VIEWPORT_PADDING_RATIO: 0.15, // margin around the viewport for the fog quad — NOT the pan limit
+  FOG_EDGE_BLUR_RADIUS_CELLS: 1,  // box-blur radius r on the binary mask
+  FOG_EDGE_ALPHA_HALF_WIDTH: 0.1, // alpha = smoothstep(0.5 - h, 0.5 + h, blurred); edge is 2(2r+1)h cells
 
   BAR_DISCOVERY_RADIUS_M: 100,
   BAR_ONSITE_RADIUS_M: 30,
   BAR_ACCURACY_TOLERANCE_M: 20,   // added to on-site radius, capped by accuracy
+
+  BAR_STAMP_DURATION_MS: 1600,    // one stamp's life — animation and DOM timer read the same number
+  BAR_STAMP_STAGGER_MS: 500,      // gap between two stamps of one batch
+  BAR_STAMP_MAX_PER_BATCH: 3,     // caps the animation only, never the announcement or the markers
 
   VISIT_REQUIRED_MS: 20 * 60 * 1000,
   VISIT_EXPIRY_MS: 6 * 60 * 60 * 1000,
@@ -554,10 +571,21 @@ export const CONFIG = {
 
   SUGGEST_DUPLICATE_RADIUS_M: 25,
   SUGGEST_NAME_SIMILARITY: 0.85,  // normalized Levenshtein ratio, see 11.3
+  IMPORT_DUPLICATE_RADIUS_M: 40,  // import-side collapse radius, see 11.1 — measured, not chosen
 
   LEADERBOARD_PAGE_SIZE: 50,
   MAINTENANCE_INTERVAL_MS: 60 * 1000,  // see 7.9
   BADGE_EVAL_INTERVAL_MS: 60 * 60 * 1000,  // see 7.9
+
+  // Switching a brand-new database to WAL needs an exclusive lock and does not
+  // go through SQLite's busy handler, so two processes opening the same fresh
+  // file at once collide — see 4.3.
+  DB_WAL_RETRY_BUDGET_MS: 5000,
+  DB_WAL_RETRY_INTERVAL_MS: 50,
+
+  USERNAME_MIN_LENGTH: 3,         // Section 5.3
+  USERNAME_MAX_LENGTH: 20,        // Section 5.3
+  PASSWORD_MIN_LENGTH: 8,         // not stated elsewhere in this document; chosen by the auth route
 
   RATE_LIMITS: {
     auth:            { limit: 10, windowMs: 60 * 1000,          by: 'ip' },
@@ -583,6 +611,15 @@ export const CONFIG = {
     barfly:   { week: 1,    month: 2,    year: 3 },
   },
 
+  // Map camera limits. Zoom 10 keeps the whole city in view and never leaves
+  // the area the extract covers (built for zoom 0–14); zoom 18 overzooms that
+  // last level deliberately, which is what makes 50 m cells legible up close.
+  MAP_MIN_ZOOM: 10,
+  MAP_MAX_ZOOM: 18,
+  MAP_BOUNDS_PADDING_RATIO: 0.2,  // margin around the playable grid for the pan limit
+  MAP_DEFAULT_ZOOM: 16,           // opening view AND "to my location" — see 8.3
+  MAP_FIT_PADDING_PX: 24,         // margin when "Open on the map" fits a district's box — see 8.3
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json',  // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;
@@ -593,6 +630,7 @@ export const DERIVED = {
   VISIT_EXPIRY_S:   CONFIG.VISIT_EXPIRY_MS / 1000,
   VISIT_PUSH_AFTER_S: CONFIG.VISIT_PUSH_AFTER_MS / 1000,
   SESSION_TTL_S:    CONFIG.SESSION_TTL_DAYS * 86400,
+  SESSION_REFRESH_THRESHOLD_S: CONFIG.SESSION_REFRESH_THRESHOLD_DAYS * 86400,
 } as const;
 ```
 
@@ -719,7 +757,7 @@ There is deliberately **no periodic refetch** beside it. While the screen is vis
 
 **The confirmation must be reachable.** The banner occupies a bounded, scrollable row of the map's overlay layout (Section 8.3), and the confirmation is the tallest thing it renders. With two pending visits on a phone this is not hypothetical — it was photographed: the banner filling the upper half of the screen with its own scrollbar, and the second visit's cancel control cut off mid-glyph at the row's edge. Opening the confirmation therefore scrolls its buttons into view rather than trusting them to be on screen, and the banner is capped at the row's height so that it keeps a visible bottom edge instead of appearing to end mid-sentence. A control below a clip the player cannot see is indistinguishable from a control that does not work.
 
-**Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — it would require either background tracking (impossible, Section 7.2) or punishing users whose phone slept. See O9.
+**Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — it would require either background tracking (impossible, Section 7.2) or punishing users whose phone slept. Revisit only if abuse is observed.
 
 **Transparency requirements — these are product requirements, not suggestions.** The mechanic must be legible at every moment:
 - An active pending visit is shown persistently at the top of the screen: bar name, confirmed time, remaining time. **The confirmed figure is the server's `confirmed_s` for that visit** — the elapsed time between check-in and the most recent accepted on-site sample, as Section 5.7 defines it — and the remaining time is derived from it as `VISIT_REQUIRED_S - confirmed_s`, floored at zero. It is not the wall-clock time since check-in. The two agree only while the player is standing at the bar with the app open, and diverge the moment they walk away, at which point the wall clock asserts a presence that never happened: a visit checked into two hours ago and abandoned reads as two hours confirmed with nothing remaining — a banner claiming a complete visit that cannot complete.
@@ -770,6 +808,14 @@ Public, ranked by two switchable metrics: area explored (%) and bars mastered. A
 
 Ties are broken by earliest achievement, then by `users.id`, so ordering is stable across requests. Paged at `LEADERBOARD_PAGE_SIZE`.
 
+**"Earliest achievement" needs a definition, because a running total has no single instant it was achieved.** The normative reading, applied identically in `packages/api/src/badges.ts` and `routes/leaderboard.ts`, is *the instant a user's value last rose to what it now is*:
+
+- all-time area — `fog_state.updated_at`, since the mask's last write is the last time `revealed_cells` changed;
+- week/month area — the latest day among those summed into the period total;
+- bars, any period — the completion that pushed the user's mastered-bar count to its current total.
+
+A user who never scored on a metric has no achievement instant at all and falls through to the `users.id` tie-break, exactly as a genuine tie does. This tie-break orders a *listing* only; it takes no part in awarding a badge (Section 7.7).
+
 Users with `is_anonymous = 1` appear as `Player #{id}` with a neutral avatar. They remain ranked and their statistics are still recorded — only the display identity is masked. The setting is toggleable at any time and takes effect immediately.
 
 ### 7.9 Scheduled work
@@ -783,7 +829,9 @@ Everything periodic runs inside the API process — no cron container, no extern
 
 Because the tick is cheap and idempotent, a missed tick after a restart is self-healing. Pending-visit status is additionally evaluated lazily on read, so `GET /api/visits/pending` never returns a visit that should already have expired even if the tick has not run.
 
-**Badge evaluation**, at the period boundaries in Section 7.7. On boot the job checks whether the most recently closed period of each kind has been evaluated and runs it if not, so a Pi that was off at 04:00 still awards badges.
+The tick **never reads the clock**; it takes `nowS` as a parameter and every statement inside it works against that one time. That is what makes it a pass over current state rather than a step forward from the last run — the property the self-healing above depends on — and what makes it drivable across hours in a test without faking timers. It is asynchronous, because push dispatch is network I/O and the tick owns it. `purgeExpiredSessions` takes the same `nowS` for the same reason, and exists as one statement with one caller rather than a second copy of an auth-critical `DELETE`.
+
+**Badge evaluation**, at the period boundaries in Section 7.7. On boot the job checks whether the most recently closed period of each kind has been evaluated and runs it if not, so a Pi that was off at 04:00 still awards badges. Between boots the same catch-up entry point runs every `BADGE_EVAL_INTERVAL_MS` (hourly). Hourly is enough to satisfy "shortly after each period closes" — periods only close at 04:00 Europe/Berlin — and it needs no cron parser or precise-boundary scheduling, because the entry point is idempotent and already knows from the `UNIQUE` constraint whether a period was evaluated, so re-running it over a period it has already covered costs nothing.
 
 ---
 
@@ -942,6 +990,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/tiles/<filename>` | Serves the PMTiles extract (Section 4.3), with HTTP range support — must answer `206` to a ranged request. Unauthenticated, `Cache-Control: public, max-age=2592000` (Section 4.1) — the one path under the API's control that is deliberately not `private, no-store`. Answers with a clear error under `/tiles/*` if the extract is missing (Section 13.2) |
+| GET | `/static/<slug>/<filename>` | Serves the committed per-city seed files from `SEED_DIR` — `city.geojson`, `districts.geojson`, `neighbours.geojson` (Section 11.4). Unauthenticated; read by the city and district overviews, the map's district-boundary layer (7.3) and the start screen's backdrop (8.3) |
 | GET | `/api/health` | `{"status":"ok"}` — unauthenticated, used by Phase 0 and by Docker's healthcheck |
 | GET | `/api/city` | Active city metadata + grid parameters |
 | GET | `/api/fog` | Raw fog mask (`application/octet-stream`) + per-district revealed counts; Caddy applies the transport encoding |
@@ -952,7 +1001,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/visits/pending` | Active pending visits |
 | POST | `/api/visits` | `{ barId }` → creates or returns the pending visit |
 | POST | `/api/visits/:id/cancel` | Ends the caller's own pending visit, moving it to `cancelled` (Sections 5.7, 7.5). Reaches nothing but a pending visit belonging to the caller. Not a `DELETE`: the row survives as a cancelled record. The visit is named by id because a player may hold several pending visits at once |
-| GET | `/api/progress` | City + per-district progress, bars mastered |
+| GET | `/api/progress` | City + per-district progress: `{ city: { revealedCells, playableCells, percent }, districts: [{ id, name, revealedCells, playableCells, percent }] }`. It carries **no** `barsMastered` field — Section 7.6 defines that figure but no route returns it city-wide. See O17 |
 | GET | `/api/leaderboard` | `?metric=area\|bars&period=all\|week\|month&page=` |
 | GET | `/api/profile/:handle` | Public profile + badges — see 9.5 |
 | PATCH | `/api/settings` | `{ isAnonymous }` |
@@ -966,6 +1015,10 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 ### 9.3 Admin
 
 All require `is_admin`. Prefix `/api/admin`.
+
+A logged-in non-admin gets **403**, not 404 — the deliberate opposite of Section 9.5's bar rules. There, hiding a bar's existence is the point; here only the authority to act is secret, and the existence of `/api/admin/*` is not.
+
+The community duplicate guard (Section 11.3) does **not** apply to admin create or admin edit. The admin is trusted to know what they are doing, including adding a second bar with a name close to an existing one; Section 11.3 specifies the guard for submissions only.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -982,14 +1035,24 @@ locale-aware, case-insensitive collation of German place names — umlauts belon
 looks for them, not after `Z` — with equal names broken by `id`, since the data really does
 contain two bars of the same name and the order must not reshuffle between requests. It is not
 a SQL `COLLATE NOCASE`: SQLite's built-in collation folds ASCII `A`–`Z` and compares everything
-else by code point, which files every umlaut-initial name at the end of the list. The one
-comparator lives in `packages/shared/src/bars.ts` so the API and the Admin screen cannot drift
-apart about it, and the screen re-applies it when a bar is created or renamed, rather than
-appending the new one at the bottom and leaving the renamed one in its old slot until a reload.
+else by code point, which files every umlaut-initial name at the end of the list. It is
+`Intl.Collator` with the **locale pinned to German**, not left to resolve — the UI is English
+(C9) but the data is German place names, and an unpinned locale resolves to the container's on
+the server and to the admin's browser language on the client, so the same list could come back
+ordered two ways depending on who was looking. A second city would want this per city, alongside
+the other per-city facts. The one comparator lives in `packages/shared/src/bars.ts` so the API
+and the Admin screen cannot drift apart about it, and the screen re-applies it when a bar is
+created or renamed, rather than appending the new one at the bottom and leaving the renamed one
+in its old slot until a reload.
+
+The user list on the same screen is ordered by `users.id` and is deliberately left that way:
+ordering usernames raises questions this document has not answered (anonymity, admins first).
 
 ### 9.4 Rate limits
 
 Per the `RATE_LIMITS` block in Section 7.1, enforced with an in-memory token bucket. Exceeding returns 429 with a `Retry-After` header.
+
+**The admin surface carries no rate limit, deliberately.** `RATE_LIMITS` names none for it, every admin route sits behind `requireAdmin`, and the admin account is the trust boundary these limits exist to protect in the first place. Recorded so the absence is not read as a gap.
 
 **The client IP must be taken from the trusted proxy header, not the socket.** Behind Cloudflare Tunnel every request reaches the API from `cloudflared`, so socket-based limiting would put all users in one bucket and make the per-IP limits meaningless. The Caddy instance immediately in front of the API sets `X-Forwarded-For` — this repository's own in the standalone two-container path, the platform's own single Caddy instance in front of the single container that runs on the Pi (Section 4.3, v1.2.2). For the standalone path that Caddy is the only proxy between the client and the API, so `trustProxy: 1` — trusting exactly one hop — is correct there.
 
@@ -1006,8 +1069,17 @@ Buckets are in memory and reset on restart — acceptable at this scale, and sta
 | `GET /api/bars/:id` | Identical 404 for "does not exist" and "not discovered by you". A 403 confirms existence and defeats Section 7.4. |
 | `GET /api/auth/reset/question` | Always 200 with a question. For an unknown username, return a deterministic decoy derived from an HMAC of the username under the server secret, so the response is stable across attempts and indistinguishable from a real one. Rate-limited per username and per IP. |
 | `POST /api/auth/login`, `POST /api/auth/reset` | One generic failure message; never distinguish unknown username from wrong password or wrong answer. |
-| `GET /api/profile/:handle` | Accepts a username or a `player-{id}` handle. If the user is anonymous, the username form returns 404 and only the handle form resolves, masked. |
+| `GET /api/profile/:handle` | Accepts a username or a `player-{id}` handle. If the user is anonymous, the username form returns 404 and only the handle form resolves, masked. The `player-{id}` form resolves for **every** user, anonymous or not — what this rule protects is the path from a *known username* to a profile, and Section 7.8's leaderboard already shows masked and unmasked rows side by side, so which numeric ids belong to real accounts is public there by design. Unknown user, anonymous-by-username and malformed handle all answer one byte-identical 404. |
 | Any error | No stack traces, no SQL text, no internal identifiers. A stable `code` string plus a human message. |
+
+**The `{ code, message }` envelope has two documented exceptions, and a client must tolerate all three shapes.** Every route handler answers with `{ code, message }`. Two paths do not, and both are live behaviour rather than defects to be tidied away:
+
+- The SPA fallback handler (`packages/api/src/app.ts`) answers an unmatched non-`GET` request, or any unmatched `/api/*` request, with Fastify's own `{ message, error, statusCode }` — **no `code`**. Every unmatched `GET` outside `/api` returns `index.html` instead, because the SPA owns client-side routing.
+- Fastify's JSON body parser rejects a malformed or empty-but-declared body before any handler runs, with a fourth shape of its own (Section 7.5 records the empty-body case, which is why a bodyless request must not set `Content-Type: application/json`).
+
+The client therefore reads `code` and `message` defensively and falls back to `unknown_error` plus a generic sentence when either is absent (`packages/web/src/api/client.ts`).
+
+**`code` is uniform; the wording of `message` is not a contract.** The same `code` can carry more than one message — `invalid_request` is answered with "The request body is invalid." almost everywhere and with "The request query is invalid." by `GET /api/leaderboard` — and one route answers with the wording that does not match what it validated: `GET /api/admin/bars` parses `request.query` and replies "The request body is invalid.". That reply is what the endpoint sends today and is deliberately preserved; changing it is a behaviour change. Nothing may branch on message text.
 
 ---
 
@@ -1033,11 +1105,21 @@ Raw positions are **never persisted**. Samples are processed in memory to derive
 
 Stored per user: username, hashes, avatar seed, fog bitmask, per-day reveal counts, discovered bar IDs, visit records (bar + timestamps), badges, push subscription. Nothing else.
 
-The per-day reveal counts (Section 5.5) are an addition over v1.1. They record *how much* was revealed on a day, never *where*, and are therefore consistent with C4. State this in the privacy page.
+The per-day reveal counts (Section 5.5) record *how much* was revealed on a day, never *where*, and are therefore consistent with C4. State this in the privacy page.
+
+**A client-side cache of the fog mask is location history and is treated as such.** The mask says where a person has walked, which is exactly what this section keeps out of the database in raw form. Its `localStorage` entry is therefore keyed by user id and cleared on logout. Unkeyed, the next account to sign in on a shared device — offline, before a single request completes — would be shown the previous account's revealed fog. The precedent that made the unkeyed version look reasonable is the one-flag "has seen the mastering explainer" entry, and the difference is the whole point: one records that somebody read a screen, the other records where they went.
 
 ### 10.3 Privacy notice
 
 A short, project-specific privacy page at `/privacy`, in English, covering: what is collected, that location is processed but not stored as a trail, retention, the anonymity setting, and account deletion. It links to the main privacy policy on `ahultsch.com` for everything else. **No separate legal notice (Impressum)** — link to the one on the main site.
+
+Three things this page must get right, because each is a claim of *absence* and nothing forces a claim of absence to be re-checked when the code beneath it changes:
+
+- **OpenStreetMap is the source the map data came from, not a service the app talks to.** Tiles are served by this app's own `/tiles/*` route; the browser never contacts OSM.
+- **Two outside services do see live traffic and must be named**: Cloudflare, which tunnels every request including position samples (C1, Section 4), and the browser vendor's own push service — Google, Apple or Mozilla depending on the browser — which carries the subscription and each reminder when push is on.
+- **Deletion is immediate in the database but not in backups.** C7's existing Pi backup job means a routine backup can still hold a copy until it cycles out; say so rather than claiming unqualified immediate removal.
+
+The per-day reveal counters feed both the badge job (7.7) and the leaderboard's week/month filters (7.8); the page says both.
 
 ### 10.4 Age gate
 
@@ -1097,11 +1179,18 @@ Submitted bars go live **immediately** for all users, with `source = 'community'
 
 **Duplicate guard.** Reject if an active bar exists within `SUGGEST_DUPLICATE_RADIUS_M` whose name is similar. Similarity is a normalized Levenshtein ratio ≥ `SUGGEST_NAME_SIMILARITY`, computed after normalising both names: lowercase, strip diacritics, strip punctuation, collapse whitespace, and drop leading articles and common suffixes (`bar`, `pub`, `kneipe`, `cafe`). The rejection names the conflicting bar so the user understands why.
 
+Four details of that rule are normative rather than left to the implementer, because each has a wrong answer that looks right:
+
+- The ratio is `1 - distance / max(len a, len b)`, with `a === b` short-circuiting to 1 before any division — which is also what keeps two empty strings from dividing by zero.
+- The order of normalisation steps is the literal sequence listed above, including that the leading article is dropped *before* the trailing suffix is checked.
+- The leading-article set covers **English and German** definite and indefinite articles. This is a German-city app with English UI copy, so both languages reach the data.
+- A name can normalise to nothing — "The Bar" loses its article and then its whole remaining content is the trailing suffix. Both sides of the comparison guard against the empty string, because without that guard two such names compare as identical and block each other, and an empty string matches every other name that also normalises away.
+
 A submitting user immediately gets a `bar_discoveries` row for their own submission — they are demonstrably standing there.
 
 ### 11.4 City data pipeline
 
-`import-osm-bars.ts` (11.1) is not the only script that has to reach outside the repository for OSM data — the district boundaries and the tile extract do too, and `build-grid.ts` (5.2) turns their output into the grid. None of these can run inside the implementing agent's sandbox: the sandbox has no route to Overpass or Geofabrik, the OSM data hosts. They are run by the project owner on his own machine, and their output is committed or released the same way as every other artefact (Section 13.1). Nothing at runtime depends on those hosts, and a v1 rebuild without network access to them is still possible from the committed output.
+`import-osm-bars.ts` (11.1) is not the only script that has to reach outside the repository for OSM data — the district boundaries and the tile extract do too, and `build-grid.ts` (5.2) turns their output into the grid. The three that reach the network — `fetch-boundaries.ts`, `extract-tiles.sh`, `import-osm-bars.ts` — cannot run inside the implementing agent's sandbox, which has no route to Overpass or Geofabrik, the OSM data hosts; they are run by the project owner on his own machine. `build-grid.ts` is offline and runs anywhere. Every one of their outputs is committed or released the same way as any other artefact (Section 13.1). Nothing at runtime depends on those hosts, and a v1 rebuild without network access to them is still possible from the committed output.
 
 Because C10 already requires the data model to be multi-city capable, there is no reason for this pipeline to be Karlsruhe-specific and generalised later. It is city-parameterised from the start.
 
@@ -1114,7 +1203,7 @@ Because C10 already requires the data model to be multi-city capable, there is n
 | `osm_admin_filter` | `fetch-boundaries.ts` — the Overpass filter (admin level, name, regional key) that identifies the city relation |
 | `bounding_box` | `fetch-boundaries.ts`, `extract-tiles.sh` |
 | `cell_size_m` | `build-grid.ts`; `cities.cell_size_m` |
-| `geofabrik_region` | `extract-tiles.sh` |
+| `geofabrik_region` | `extract-tiles.sh` — stores the **full** Geofabrik path (`europe/germany/baden-wuerttemberg`), which is what the download URL and the script's reachability probe need. Planetiler's `--area` takes only the **last segment** (`baden-wuerttemberg`) and resolves the full URL itself. Both forms are used, each where it works |
 | `tiles_filename` | `extract-tiles.sh`; `CONFIG.TILES_FILENAME` |
 
 Every script takes a single `--city=<slug>` argument and reads everything else from this file. Adding a second city is adding a second JSON file, not a code change. This file is also what seeds the `cities` row from Section 5.1 — the seeding step reads it directly, the same way it already reads `grid-meta.json` for `playable_cells` (Section 5.2). Script parameters and the database row are therefore derived from one source and cannot drift apart.
@@ -1125,7 +1214,7 @@ Every script takes a single `--city=<slug>` argument and reads everything else f
 |---|---|---|
 | `scripts/fetch-boundaries.ts` | City outline, district polygons, and neighbouring municipalities as GeoJSON, into `data/seed/<slug>/` | Yes — Overpass |
 | `scripts/extract-tiles.sh` | The PMTiles extract, into `data/tiles/` | Yes — Geofabrik; also needs Java |
-| `scripts/build-grid.ts` | The cell grid (`grid.bin`, `grid-meta.json`), per Section 5.2 | No — offline. Belongs to Phase 3; not yet built |
+| `scripts/build-grid.ts` | The cell grid (`grid.bin`, `grid-meta.json`), per Section 5.2 | No — offline, and its output is committed |
 | `scripts/import-osm-bars.ts` | `data/seed/<slug>/bars.json`, per Section 11.1 | Yes — Overpass |
 
 `import-osm-bars.ts` joins this chain unchanged in behaviour — it still runs once, locally, offline from the running app (11.1) — except that it now also takes `--city` and reads its Overpass filter and output path from the city config instead of having Karlsruhe hard-coded.
@@ -1170,7 +1259,7 @@ Registration, login, logout, sessions, security-question password reset, forced 
 - [ ] Registration is rejected without the 18+ confirmation
 - [ ] Password reset works end to end via the security question, and invalidates existing sessions
 - [ ] An unknown username returns a stable decoy security question, indistinguishable from a real one
-- [ ] The seeded admin is forced through a password change before any other screen is reachable
+- [ ] The seeded admin signs in **without** a forced password change (`must_change_password = 0`, Section 5.3), and an account that does carry the flag is confined to `/api/auth/me`, `/api/auth/change-password` and `/api/auth/logout` until it clears it
 - [ ] Passwords and security answers are argon2id hashes in the database — verified by inspection
 - [ ] Session cookie is `httpOnly`, `Secure`, `SameSite=Lax`
 - [ ] Rate limits on auth endpoints return 429 when exceeded, **and two different client IPs have independent buckets through the tunnel** (Section 9.4)
@@ -1322,7 +1411,7 @@ The repository is public. Everything required to build, run, and self-host the p
 
 The tile extract was estimated at 30–80 MB when this section was written. Karlsruhe's, built for the Section 6.2 bounding box at zoom 0–14, measures **9.4 MB** — the first time the figure was measured rather than assumed. GitHub's 100 MB hard limit and 50 MB warning are therefore not the binding constraint they were taken to be.
 
-It is nonetheless published as a **GitHub Release asset**, not a tracked file. Every regeneration produces a new file under a new versioned name (Section 4.1), so committing them would accumulate binaries in history that no revision ever needs again, and the extract is ODbL-derived rather than MIT (13.1, 13.3). Keeping it out of the tree also keeps clones small for anyone who only wants the code. The premise changed; the decision stands, and the reasons above are the ones that carry it. `scripts/extract-tiles.sh` is meant to regenerate it from a public Geofabrik extract so the artefact is reproducible without the release — that script does not exist yet, and Karlsruhe's extract was produced by invoking `planetiler` by hand.
+It is nonetheless published as a **GitHub Release asset**, not a tracked file. Every regeneration produces a new file under a new versioned name (Section 4.1), so committing them would accumulate binaries in history that no revision ever needs again, and the extract is ODbL-derived rather than MIT (13.1, 13.3). Keeping it out of the tree also keeps clones small for anyone who only wants the code. The premise changed; the decision stands, and the reasons above are the ones that carry it. `scripts/extract-tiles.sh` regenerates it from a public Geofabrik extract, so the artefact is reproducible without the release; it needs Java and network access to Geofabrik, and it is run by the owner rather than by the implementing agent (Section 11.4).
 
 `docker compose up` fails with a clear, actionable error if the tiles file is absent, naming both the download URL and the regeneration script. The expected filename comes from `CONFIG.TILES_FILENAME`, so a regenerated extract is published under a new versioned name and the edge cache is bypassed automatically (Section 4.1). This holds for the standalone two-container path (Section 4), where Compose can check for the file before anything else starts.
 
@@ -1346,1191 +1435,88 @@ These are consequences to design around, not reasons to reconsider:
 4. **Secret scanning.** GitHub secret scanning and push protection are enabled on the repository. Any secret that ever lands in history must be rotated, not merely deleted.
 
 ---
-
 ## 14. Open Items
 
-| # | Item | Status |
-|---|---|---|
-| O1 | Explorer thresholds set to 0.1% / 0.3% / 2.0% as activity floors. At a 100 m reveal radius, 0.1% of Karlsruhe's playable area is roughly 900 m of previously unexplored walking (verified: ~69 cells ≈ 865 m of a 200 m-wide corridor). Lower them if real use shows active players being excluded. | Resolved |
-| O8 | Barfly thresholds set to 1 / 2 / 3 bars. Same intent: a floor, not a target. | Resolved |
-| O9 | Check-in can be satisfied by leaving and returning within the window (Section 7.5). Accepted for v1; revisit only if abuse is observed. | Resolved |
-| O2 | No pictorial logo yet. The wordmark is the mark: since v1.32 it is a defined component with two prominences rather than the placeholder heading this item described, set in the existing serif in capitals with wide tracking (Section 8.1), and it is on every main screen. What is still deferred is only a *drawn* mark to stand beside or instead of it. Anything that arrives has to satisfy the same four rules the wordmark does, and one of them narrows the field sharply: it may not be a downloaded font, because Section 8.2 declines to add a third family. An SVG in the ink style of the map symbols is the shape a future answer would take. | Deferred |
-| O3 | Cell size may move from 50 m to 25 m after real-world testing. At 25 m the grid is 834 × 686 = 572,124 cells: mask ~70 KiB, texture ~559 KiB, `grid.bin` ~1.1 MB — all still viable, but the fog-state migration is real work. Grid rebuild path is stubbed, not implemented. | Deferred |
-| O4 | Native iOS wrapper (Capacitor) for true background tracking — the only route to background reveal. | Out of scope for v1 |
-| O5 | Additional cities. The data model supports them; no admin flow for adding one exists. | Out of scope for v1 |
-| O6 | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. | Documented, not built |
-| O7 | Friends, shared sessions, and social features. | Out of scope for v1 |
-| O10 | Section 9.4's `trustProxy` hop count for the Pi deployment is unverified — Cloudflare's edge and `cloudflared` may together add entries to `X-Forwarded-For` before Caddy ever sees the request, and neither this repository nor the platform's settles the real count; nor does either settle whether the platform's Caddy configures `trusted_proxies` or a `header_up` override that would change what the header holds by the time the API reads it. Verify by logging the raw header from one real external request against the running deployment and counting the entries, and by reading the platform `Caddyfile`'s global options, then set `trustProxy` to match. | Open — needs verification on the Pi |
-| O11 | The bar import covers `amenity` in bar\|pub\|biergarten\|nightclub (`packages/shared/src/bars.ts:84`) and produced 170 bars, but the owner reports well-known venues missing. Cause not established: venues tagged differently in OSM (cocktail bars are often `amenity=cafe`, some are `amenity=restaurant` with `bar=yes`), venues absent from OSM altogether, or venues outside the municipal boundary the import clips to. Needs concrete examples before any filter change — widening to `amenity=cafe` would pull in every café in the city. | Open |
-| O12 | `estimateCellPixelSize` in `packages/web/src/map/fog/canvas-fallback.ts` measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart but the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback (no WebGL2), so it is invisible on most devices, which is why nothing caught it. Found while extending the fog quad; not fixed there because it is unrelated to that change. | Open |
-| O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a MapLibre style layer and is inserted at the ordering point Section 7.3 fixes, so the road and water layers above it stay crisp and everything below it is hidden. The 2D canvas fallback (`packages/web/src/map/fog/canvas-fallback.ts`) is a `<canvas>` appended to the map container — a DOM overlay above the whole map, not a style layer — so it cannot be interleaved with the vector layers at all. On a device without WebGL2 the fog therefore covers everything uniformly, roads and water included, and the entire base map keeps showing through it at one minus the fallback's flat alpha (the middle of the WebGL path's density range since v1.28, Section 7.3). Closing this means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it ("do not attempt feature parity"). Accepted for now; revisit only if a real player turns out to be on that path. | Open |
-| O14 | An **expired** visit is never removed from the pending banner while the map screen stays open. Narrowed in v1.24, not closed. The banner now refetches `GET /api/visits/pending` whenever the document becomes visible (Section 7.5), which covers the case the field report actually described — a backgrounded PWA resumed hours later — and the case a `visibilitychange` cannot reach is now the whole of it: a screen that stays *continuously visible* for `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` still reports only the visits its sample touched. On a phone that means six hours of an unlocked, foregrounded, out-of-range device; on a desktop tab left open it is ordinary. Closing the remainder still means either a periodic refetch or the sample response reporting the visits it expired; the first was considered and rejected in v1.24 (Section 7.5 says why), which leaves the second. The banner can no longer be *stuck* on such a visit in any case — cancelling one answers 404, and a 404 removes it (Section 7.5). | Open — narrowed |
-| O15 | The fog flickering the owner saw on a tilted map (v1.25) is unexplained. Pitch is now unreachable (Section 8.3), which removes the trigger he found, but not necessarily the mechanism. Two candidate causes were ruled out by inspection: the fog quad does not stop covering the screen under pitch (`getBounds`' horizon clamp in maplibre-gl 4.7.1 only engages past ~69° for the default field of view, and the camera capped at 60° before this change), and the quad's UVs — linear in latitude across vertices placed in mercator — deviate by under 0.4 m at any pitch that was reachable, against a 50 m cell. What is left is GPU-side and cannot be observed in this repository's tests (jsdom has no WebGL2): the fog texture is `LINEAR` with no mipmaps, and the fragment shader is `precision mediump float` while sampling a ±1-texel blur kernel in UV space. Both degrade wherever one screen pixel covers several cells, which a pitched view produced in its far half — and which zooming out towards `MAP_MIN_ZOOM` produces on a flat map too, where a 50 m cell is well under a pixel. **Half of this was acted on in v1.28 and half was assessed and declined.** The precision was wrong on its own terms, independently of the shimmer: one texel of the 417 × 343 grid is 0.0024 of UV, and `mediump` — fp16 on the GPUs this runs on — resolves about 0.001 near UV 1.0, so a ±1-texel blur offset was barely two representable steps and the ±1.5-texel noise warp quantised to a handful of positions, both of them moving as the camera moves. The shader is now `precision highp float` with a `highp` sampler; GLSL ES 3.00 requires `highp` in the fragment stage, so WebGL2 being available is already the guarantee it compiles, and it costs nothing on any GPU this reaches. Mipmaps were assessed and are **not** the right fix: the mask is binary and the shader already blurs it explicitly at a radius Section 7.3 fixes, so a mip chain would add a second, zoom-dependent blur that widens the edge by an amount no constant controls; `texSubImage2D` does not update mip levels, so every reveal would have to regenerate the whole chain, at frame rate through the 600 ms reveal animation, against a spec that requires reveals to touch only the changed region; and the ±1-texel offsets are in level-0 texels, which stop meaning one texel the moment a coarser level is selected. Item stays **open**: the precision fix is deliberate but unconfirmed — nothing in this repository can execute the shader, so whether the shimmer is gone still needs a real device at low zoom. | Open — narrowed |
-| O16 | `CONFIG.BADGE_THRESHOLDS` reaches the browser, so Section 7.7's promise holds in its literal wording and not in its spirit. The section says the threshold is "never shown to users and no endpoint returns it", and both remain true: nothing renders a threshold, and no route serializes one. But `CONFIG` is a single object literal and `packages/web` imports it as a *value* in eight modules (`api/types.ts`, `TrackingIndicator.tsx`, `map/ink-style.ts`, `map/bars/bar-stamps.ts`, `MapPicker.tsx`, `tracking/useSampleTracking.ts` and two under `map/fog/`), so the whole object is bundled: a production build contains `explorer:{week:.1,month:.3,year:2},barfly:{week:1,month:2,year:3}` in plain text, readable in devtools in seconds. This predates v1.31 and was found by the change that introduced badge placeholders, which deliberately did not make it worse — `packages/shared/src/badges.ts` reads only `Object.keys(CONFIG.BADGE_THRESHOLDS)`, and `api/types.ts` only `keyof typeof`, both of which erase at compile time. Closing it means splitting `CONFIG` into a client-safe half and a server-only half and changing every one of those imports, which is a cross-cutting change and was rightly not folded into a UI block. The exposure is mild — the thresholds are floors, deliberately easy, and a badge goes to the period's best rather than to everyone past the floor, so knowing the number tells a player very little — but the specification should not read as a guarantee it does not enforce. | Open |
-| O17 | The start screen (Section 8.3) reads two integers out of a list of every bar the player has discovered. `GET /api/bars` is the only route that can answer "how many bars have I found" without an API change, so `/app` fetches the whole list on every arrival and uses its length and the count of its `mastered` flags. For a heavy player that is hundreds of rows — name, address, coordinates, district, timestamp — to render two numbers, on the screen every authenticated entry path lands on. It is not a new *kind* of load: the map already fetches exactly this list on every visit, and the response is cheap to produce server-side. The honest fix is a counts endpoint, or those two counts alongside the percentages `GET /api/progress` already returns, which would make the start screen one request instead of two and a small one instead of an unbounded one. Deliberately not done here — that block did not touch the API — and recorded rather than absorbed, because the cost grows with exactly the players who play most. | Open |
+Re-audited against the code at v1.33. Items that were resolved and whose reasoning already lives in the section it concerns have been removed; the numbers of the items that remain are unchanged, because code comments cite them.
 
+| #   | Item                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Status                          |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| O2  | No **drawn** logo. The wordmark (Section 8.1) is the mark and is on every main screen; what is deferred is a pictogram to stand beside or instead of it. It would have to satisfy the wordmark's four rules, and one narrows the field sharply: it may not be a downloaded font (Section 8.2). An SVG in the ink style of the map symbols is the shape a future answer takes.                                                                                                                                                                                                                                                                                                                                                                      | Deferred                        |
+| O3  | `cell_size_m` may move from 50 m to 25 m after real-world testing. At 25 m the grid is 834 × 686 = 572,124 cells: mask ~70 KiB, texture ~559 KiB, `grid.bin` ~1.1 MB — all viable. What is not built is the migration: every existing `fog_state.mask` has to be re-projected onto the new grid and `fog_district_progress` / `fog_daily_progress` recomputed with it, atomically, against a live database. `scripts/rebuild-grid.ts` validates its arguments and then refuses to run, deliberately, rather than silently doing nothing.                                                                                                                                                                                                            | Deferred                        |
+| O4  | Native iOS wrapper (Capacitor) for true background tracking — the only route to background reveal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Out of scope for v1             |
+| O5  | Additional cities. The data model and the pipeline support them; no admin flow for adding one exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Out of scope for v1             |
+| O6  | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. No workflow exists in the repository.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Documented, not built           |
+| O7  | Friends, shared sessions, and social features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Out of scope for v1             |
+| O10 | **`trustProxy` is set to 1 on the Pi without anyone having verified the hop count** (Section 9.4). The chain is browser → Cloudflare edge → Cloudflare Tunnel → `cloudflared` → Caddy → API, and neither repository settles how many of those append to `X-Forwarded-For`; nor does either settle whether the platform's Caddy sets `trusted_proxies` or a `header_up` override that would rewrite the list. Too many trusted hops lets a client fabricate its own bucket; too few reads a proxy's address as the client's. Until it is settled, Section 13.4's "rate limits are load-bearing" is unverified for this deployment. **Remedy:** log the raw header from one real external request and count the entries, *and* read the platform `Caddyfile`'s global options. | Open — needs verification on the Pi |
+| O11 | The owner reports well-known Karlsruhe venues missing from the seed. The import now covers `amenity` in bar/pub/biergarten/nightclub **or** `bar=yes` on any amenity (Section 11.1, widened in v1.20), and the committed seed holds 180 records. Whether anything is still missing has not been re-checked since that widening. Cause unestablished: venues tagged differently again (a cocktail bar as `amenity=cafe` with no `bar=yes`), absent from OSM, or outside the municipal boundary the import clips to. **Needs concrete named examples before any further filter change** — widening to `amenity=cafe` would pull in every café in the city.                                                                                              | Open                            |
+| O12 | `estimateCellPixelSize` (`packages/web/src/map/fog/canvas-fallback.ts`) measures from `origin_lon` — the grid's **west boundary**, cell x = −0.5 — to `cellCenterXY(1, 0)`, a cell **centre** at x = 1. Those are 1.5 cells apart and the result is used as one cell's width, so every revealed-cell hole is drawn about 1.5× too large and cleared area bleeds roughly a quarter of a cell past the grid edge. Affects only the 2D canvas fallback, which is why nothing caught it. **Fix:** measure between two cell centres.                                                                                                                                                                                                                    | Open                            |
+| O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a style layer inserted at the ordering point that section fixes. The 2D canvas fallback is a `<canvas>` appended to the map container — a DOM overlay above the whole map — so it cannot be interleaved with the vector layers at all: without WebGL2 the fog covers roads and water too, and the whole base map shows through at one minus the fallback's flat alpha. Closing it means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it. Accepted; revisit only if a real player turns out to be on that path.                                                                                                     | Open                            |
+| O14 | An **expired** visit is never removed from the pending banner while the map screen stays *continuously visible*. The banner refetches `GET /api/visits/pending` on `visibilitychange` (Section 7.5), which covers the backgrounded-PWA case the field report described; what is left is a screen visible for the whole of `VISIT_EXPIRY_S` with no accepted on-site sample, since `POST /api/samples` reports only the visits its sample touched. Ordinary on a desktop tab, six hours of unlocked phone otherwise. A periodic refetch was considered and rejected (Section 7.5 says why), which leaves one route: the sample response reporting the visits it expired. The banner can no longer be *stuck* — cancelling answers 404 and a 404 removes it. | Open — narrowed                 |
+| O15 | The fog shimmer the owner saw on a tilted map is still unconfirmed as fixed. Pitch is now unreachable (Section 8.3), which removes the trigger but not the mechanism — the same degradation is reachable by zooming out towards `MAP_MIN_ZOOM` on a flat map, where a 50 m cell falls under a screen pixel. Two candidates were ruled out by inspection (the quad does cover a pitched screen; its UVs deviate by under 0.4 m). One was acted on: the shader is `precision highp float` with a `highp` sampler, because at `mediump` a ±1-texel blur offset on this grid was barely two representable steps. Mipmaps were assessed and **declined** — they would add a second zoom-dependent blur over the width Section 7.3 fixes, `texSubImage2D` does not update mip levels, and texel-sized offsets stop meaning one texel at a coarser level. **Nothing here can execute a shader; this needs a real device at low zoom.** | Open — narrowed                 |
+| O16 | `CONFIG.BADGE_THRESHOLDS` reaches the browser in plaintext. Section 7.7's wording holds — nothing renders a threshold and no route returns one — but its spirit does not. `CONFIG` is one object literal and `packages/web` imports it as a *value* in twelve modules (`api/types.ts`, `components/TrackingIndicator.tsx`, `map/ink-style.ts`, `map/MapPicker.tsx`, `map/bars/bar-stamps.ts`, all three under `map/fog/`, `screens/Map.tsx`, `screens/Leaderboard.tsx`, `screens/Privacy.tsx`, `tracking/status.ts`, `tracking/useSampleTracking.ts`), so the whole object is bundled and reads out of devtools in seconds. The exposure is mild — the thresholds are floors and a badge goes to the period's best — but the document should not read as a guarantee it does not enforce. **Fix:** split `CONFIG` into a client-safe half and a server-only half; that touches every one of those imports. | Open                            |
+| O17 | **`GET /api/progress` returns no `barsMastered`, and the start screen pays for it.** Section 7.6 defines a city-wide mastered count and no route returns one, so `/app` (Section 8.3) fetches `GET /api/bars` — every discovered bar, with name, address, coordinates, district and timestamp — to read its length and count its `mastered` flags. Hundreds of rows for two integers, on the screen every authenticated entry path lands on, growing with exactly the players who play most. Both halves close with one change: add `barsMastered` and a discovered count to `GET /api/progress`, which makes the start screen one small request instead of two, one of them unbounded. That is a response-shape change and has not been made. | Open                            |
+| O18 | **Nothing validates an API response on the client.** `request<T>` in `packages/web/src/api/client.ts` returns `body as T` — a cast, not a check — and `packages/web` carries no validation dependency at all, while the server validates every inbound body and query with `zod` at the route boundary (Section 10.1). A response that drifts from `packages/web/src/api/types.ts` therefore reaches React as an assertion the compiler has already believed, and surfaces as an undefined field somewhere far from the fetch. It is the largest remaining hole at a boundary untrusted data crosses. **Fix:** share the zod schemas both sides already imply, and parse in `request` rather than cast. | Open                            |
+| O19 | **The committed seed was never regenerated after the duplicate collapse landed.** Section 11.1's collapse is implemented and tested, but it runs inside `scripts/import-osm-bars.ts`, and `data/seed/karlsruhe/bars.json` still holds the pre-collapse 180 records — including both pairs that rule exists for: Fettschmelze as two nodes 6.2 m apart and Traube as a node and the way around it 25.3 m apart. `packages/api/src/db/seed-bars.ts` seeds that file as it stands, so a fresh deployment still gets two markers an arm's length apart with the same name, and a player can still check into both. **Fix:** re-run the import (owner's machine — it needs Overpass) and commit the 178-record file. | Open                            |
 
 ---
 
 ## 15. Changelog
 
-### v1.32 — the application says its own name, and the screen you land on is worth landing on
-
-Two requests from the owner, and they are one request. "Egal auf welcher Seite man sich befindet, es
-soll sich immer eindeutig nach Tipsy Trails anfühlen" — so the wordmark is now on every main screen,
-in one typography, at two sizes. And "der Startscreen sollte nicht wie ein gewöhnlicher
-Login-/Dashboard-Screen wirken" — so `/app`, which was twenty lines of placeholder reading "Signed in
-as alice", is the screen every authenticated entry path actually lands on: the wordmark, one line
-under it, one way in, the player's own three figures, and a heavily fogged Karlsruhe behind all of
-it. Sections 8.1, 8.2 and 8.3 record what it is.
-
-**The instruction that shaped the whole change is the owner's own caveat, not his headline.** "Nicht
-einfach überall einen großen Tipsy-Trails-Header hinzufügen." A brand that is loud on every screen is
-not a brand, it is noise, and it would have cost the map — the screen the rest of the application
-exists for — a strip of its own height. So the wordmark has exactly two prominences and the quiet one
-is the default: hero on the two screens that are *about* the application, chrome everywhere else. On
-the map that means one small line in the top row of the overlay grid, at the opposite end from the
-status icons, as a second child of a row that already existed — which is why the icon cluster is in
-precisely the corner it has always been in, to the pixel. An overlay grid a mark is allowed to bypass
-is not a grid.
-
-**Two bare headings were the drift, and they are what this replaced.** `AppHome` and `Landing` each
-carried their own `<h1>Tipsy Trails</h1>`. That is not one mark used twice, it is two marks that
-happen to agree today, and it is how "immer dieselbe Typografie" stops being true — silently, one
-screen at a time. There is now one component, and a test scans the source for the name written out as
-an element's whole content anywhere else, so a third copy fails the suite rather than shipping.
-
-**The element it renders as is a decision per screen, and that is not pedantry.** An `<h1>` on every
-screen would make "Tipsy Trails" the title of every page in the application: a reader navigating by
-heading would be told the name of the product instead of the name of the screen they are on, on the
-city overview, on the leaderboard, on someone's profile. So it is the heading only where it is the
-subject — the start screen and the landing screen — and an inert element above the screen's own
-heading everywhere else. Every screen still has exactly one sensible `<h1>`. The map keeps the zero it
-has always had, which is a real gap and is *not* closed by promoting a decorative corner mark to a
-page title.
-
-**The backdrop is the part with a wrong answer that looks right.** "Ein stark vernebelter Ausschnitt
-der Karlsruhe-Karte" reads as "mount MapLibre", and doing that would have put ~250 KB of map library
-and tile reader on the first authenticated paint of the one screen whose whole job is to be quick and
-strong — undoing the code-splitting Section 12 requires, on the worst possible screen. Section 7.3's
-fog would additionally have needed the authenticated binary mask fetch, the heaviest request in the
-game, and WebGL2, which is not guaranteed; decoration must never be the thing that fails. And the fog
-is a mechanic: a decorative second copy of it either duplicates the renderer or drifts from it. What
-is drawn instead is what the city overview already draws — the real boundary from
-`/static/<slug>/city.geojson`, projected and rendered as inline SVG — cropped to the screen and fogged
-with the application's own ink. Real Karlsruhe, no WebGL, no tiles, no session.
-
-**"Degrade to something, never to nothing" is enforced by where the backdrop sits, not by care.** It
-is out of the document flow, so late, never, or unexpected bounds cannot move a word in front of it;
-there is no placeholder to collapse and no spinner to flash; and there is no error message, because a
-failed decoration is not something a player can act on and the entry screen is the worst place in the
-application to say so. The three figures follow the same rule and are all-or-nothing: half a row reads
-as a broken screen where none of it reads as a screen that does not mention them. Their row is
-reserved before they exist, so numbers arriving after the first paint cannot lift the action above
-them out from under a thumb already on its way.
-
-**The backdrop is one translucent layer painted once, and that is a contrast decision.** Overlapping
-translucent paint compounds — a fill under a stroke under a wash means the darkest pixel on the screen
-is nobody's decision — so every feature of the boundary goes into a single path with `evenodd`, at a
-single alpha. The darkest ground the words can sit on is then one computable blend, and the test
-computes it from the stylesheet rather than from a number written beside it: ink over it is 9.5:1,
-against Section 8.1's 4.5:1 floor. The wordmark on the map gets the translucent paper plate the OSM
-attribution and the discovery caption already use, measured the same way against the densest fog
-Section 7.3 produces — 14.3:1 — and on the screens where the ground is plain paper that same fill is
-paper over paper and simply disappears.
-
-**Section 8.2 was describing a plan that was never built, and it is corrected rather than quietly
-fixed.** It has said "both self-hosted, subset to Latin, `font-display: swap`" since v1.1. There is no
-`@font-face` in this repository and never has been: the two families are a Georgia stack and a
-`system-ui` stack. The correction is the right way round — the specification moves to the code, not
-the code to the specification — because a downloaded face is a request on the first paint of the first
-screen a player ever sees, a flash of something else while it arrives, and a brand that never arrives
-on a blocked host. That is also why the wordmark's identity is case, tracking and spacing rather than
-a face of its own, and why adding a third family is now explicitly a decision about the whole
-application rather than a styling detail.
-
-**One cost is recorded rather than absorbed.** The start screen reads two integers out of a list of
-every bar the player has discovered, because `GET /api/bars` is the only route that can answer "how
-many have I found" without an API change, and this block did not touch the API. `GET /api/profile/:handle`
-was the alternative and loses on arithmetic: it has no discovered count, so it could only have replaced
-`GET /api/progress` — two requests either way, and the larger of the two. O17 names the honest fix.
-O2 is narrowed at the same time: the wordmark it called a placeholder is now the mark, and what is
-still deferred is only a drawn one.
-
-**Nothing on this screen animates, and that is deliberate.** An entrance was considered and dropped.
-The one thing worth writing down about it is the trap that was *not* the reason: the global
-`prefers-reduced-motion` rule collapses `animation-duration`, which runs an animation instantly to its
-**last** keyframe — so it is an animation ending hidden that loses its content under that rule (Section
-7.4's stamp, which is why that one drops its animation entirely), and a fade-*in* would have survived
-it perfectly well, since its last keyframe is the visible state. The entrance was dropped because a
-screen that is passed through on the way to the map should be finished the moment it appears, not
-because it could not have been made safe.
-
-### v1.31 — a player can see the badges they have not won, and still cannot see the number
-
-One request from the owner, about the half of the badge system nobody had ever been shown: until a
-player won something, the shelf was one sentence saying they had not. There was nothing to want. The
-profile now draws a placeholder for every badge type the player has never held — the same pictogram,
-the same ring count, greyed and hollow — so the question the owner wanted asked can be asked at all.
-Section 7.7 records what one may and may not carry.
-
-**The request and the specification collided head-on, and the resolution is the owner's own fourth
-bullet.** "Was muss ich tun, um DAS zu bekommen?" reads as a request for a number, and the number is
-exactly what Section 7.7 forbids: the threshold is never shown and no endpoint returns it, and
-neither is a rank or a standing. *Ohne vollständige Informationen* is not a concession in that list
-of four, it is the mechanism — a placeholder that answered the question would end the curiosity it
-exists to create. So nothing was softened. The placeholder says the badge exists, which kind it is
-and which period it belongs to, and stays silent about the rest.
-
-**There is a harder reason than policy, and it is why no progress bar was drawn.** A badge is a
-competition: it goes to the period's highest scorer, and the threshold is only a floor that stops it
-being won by being the least inactive person. "What must I do" therefore has no true numeric answer
-even in principle — it depends on what everyone else does that week. A bar filling toward a floor
-would not merely have leaked a forbidden number, it would have promised a badge for reaching a number
-that does not win one. What the profile says instead is the true answer, in words: it names the two
-activities and states outright that no fixed score wins a badge. A player told nothing at all would
-have assumed a hidden number and gone looking for it.
-
-**One thing the change found and did not fix.** The brief for this work said that importing
-`BADGE_THRESHOLDS` into `packages/web` would be a wrong turn. It is not, because it has already
-happened: `CONFIG` is one object literal and eight modules under `packages/web` import it as a value,
-so the thresholds ship in the bundle and read out of devtools in plain text. Section 7.7's wording
-survives — nothing renders them, no endpoint returns them — but its spirit does not, and the gap was
-there before this change rather than being opened by it. Nothing here made it worse: the catalogue
-reads `Object.keys` and the kind type reads `keyof typeof`, both of which erase at compile time.
-Splitting `CONFIG` in two is a cross-cutting change and belongs to its own task, so it is recorded as
-O16 rather than smuggled into a change about a shelf of glyphs.
-
-**The rule that decided the implementation is the one that sounds like a detail.** No part of a
-placeholder may change as the player's own value changes. If a placeholder brightened, or said
-"nearly", or moved at all once a player crossed the floor, the floor could be read straight off the
-screen by walking until the pixel changed — a leak of the same number by a slower route. The
-placeholder set is therefore keyed on which badges have been *earned* and on nothing else, and that is
-enforced by the shape of the function rather than by a comment: `unearnedBadgeTypes` takes
-`{ kind, period }` and cannot see a value, though every award record passed to it carries one. There
-is a test that renders two players identical in what they have earned and as far apart as the data
-allows in what they are currently worth, and compares the rendered markup rather than the labels, so
-a leak dressed as a class name fails it too.
-
-**Grey is not a distinction, and that is now written down.** Section 8.1 already said the accent
-colour may never be the only carrier of meaning; it said nothing about drawing something back, which
-is the same failure at lower contrast — gone in a black-and-white print, and the weakest signal
-available on a palette that is near-monochrome to begin with. A placeholder is therefore greyed *and*
-hollow *and* dashed: the mark is a wall of ink around an empty middle, which is the state grammar
-Section 8.1 already set for the cocktail glass and is most of the glyph appearing or disappearing,
-and the rings are broken, which is the channel that same section gives district boundaries and for
-the same stated reason. Either shape channel alone survives greyscale. Section 8.1 now generalises
-the rule beyond the accent.
-
-**The names are the part that could have done real harm.** An earned badge announces "Explorer badge,
-week". A placeholder announcing the same words would tell a screen reader user they hold badges they
-do not, which is the single worst outcome available in this change, so the state leads rather than
-trails: "Not yet earned: Explorer badge, week". A listener who stops after the first words is exactly
-the person that failure lands on, and the first words are what settles it.
-
-**A placeholder ends at the first award, and belongs to one player.** Badges recur — explorer/week is
-won again every week someone leads it — so a placeholder keyed on the period *key* would return every
-Monday, show a player a badge they own several of, and blink off whenever the evaluation job ran. It
-is keyed on the type instead: won once, in any period, and it is gone permanently. Awarded badges are
-never revoked, so the earned set only grows and the placeholder set only shrinks; neither can
-flicker. And they are drawn only on the player's own profile. The leaderboard renders a shelf per
-row, where six grey glyphs per row would bury the badges people actually won; another player's
-profile would turn them into an inventory of what that player failed to win, with "three of the six"
-a completion score comparable between players — a standing by another name, which this section
-declines to publish. The shelf takes placeholders as an opt-in that defaults to off, so neither call
-site inherits them by accident.
-
-**The list of badges that exist is derived rather than written out**, in `packages/shared`, from the
-key set of `BADGE_THRESHOLDS` and the three periods. Listing the six pairs by hand would be shorter
-and would type-check forever — a subset of a union is still assignable to it — so a third kind added
-to the configuration would have produced a five-badge catalogue in silence instead of an error. The
-period tuple is now the thing the `BadgePeriod` union is derived *from*, for the same reason: an array
-beside a union is two places to add a fourth period, only one of which fails to compile. No threshold
-value is read anywhere in it, only the names of the keys.
-
-### v1.30 — discovering a bar becomes a moment, and the map stamps it where it happened
-
-One request from the owner, about the one event in this game a player earns by walking and was told
-nothing about: walking into an unknown bar's radius cleared some fog and added a marker among the
-others. It is now a stamp — the map dims a little and the cocktail glass is pressed onto it at the
-bar, captioned "BAR DISCOVERED" with the bar's name, and then it goes away by itself. Section 7.4
-records it.
-
-**The map screen did not know which bars had been discovered, and that was the work.** `POST
-/api/samples` has always answered with `newBars` (Section 9.2), and the client read its *length* and
-threw the bars away: the response bumped `discoveryVersion`, a counter, and a counter can say that
-something was discovered but not what or where. A stamp needs a name and a position, so the sample
-hook now holds the discovered bars themselves beside a version of their own, modelled on the
-`visitUpdates`/`visitVersion` pair already there and for the same reason — the array is what changed
-and the counter is when. Nothing was added to the server; it had already been reporting this for
-four phases.
-
-**Keying it on `discoveryVersion` would have been the bug, and it would have looked correct.** That
-signal has meant "refetch `GET /api/bars`" since v1.29, when mastering a bar was added to it as a
-second reason. A stamp hung on it would fire when a player *masters* a bar — a moment that already
-has its own message on this screen and is not a discovery at all. So the stamp is keyed on what was
-actually discovered, and there is a test that masters a bar and asserts that nothing is stamped,
-announced or dimmed.
-
-**A batch discovers a set of bars and not a bar.** `newBars` is an array, and the case that decides
-the design is not a dense street but a queue draining after an offline stretch: a batch carries up to
-`SAMPLE_MAX_BATCH` samples, which is ten minutes of walking, and ten minutes through the centre can
-discover a dozen bars in one response. They are stamped one after another, `BAR_STAMP_STAGGER_MS`
-apart and overlapping, so a batch reads as one event with several marks in it; `BAR_STAMP_MAX_PER_BATCH`
-caps how many are stamped, and the cap is on the animation alone — every discovered bar is named in
-the announcement and every one of them still gets its marker. Uncapped, the moment becomes something
-to sit through.
-
-**The stamp and the marker are the same glass at the same point, seconds apart, and that had to be
-made deliberate.** The response that reports the discovery is the response that refetches the bar
-list, so the permanent marker arrives while the stamp is still travelling: two identical marks on one
-spot, which is a flicker and not a moment. The marker now gives up its ink for exactly as long as its
-stamp is on screen and takes it back the instant the stamp is removed, so one glass is visible
-throughout. Only the ink: the button keeps its 44 px, its accessible name and its tab position,
-because Section 7.5's check-in has to be reachable at the bar the player is standing in front of,
-including during the second and a half in which they are being told they found it.
-
-**Reduced motion loses the movement and keeps everything the movement was saying**, and Section 8.2
-now says that in general rather than leaving it to be inferred. The blanket rule this specification
-already had is not enough on its own and the reason is worth recording: collapsing every
-`animation-duration` to nothing runs an animation to its *last* keyframe, and this one ends faded
-out — so the global rule alone would have taken the information away and left the setting looking
-respected. The animation is dropped instead of shortened, the resting state underneath it is the
-finished stamp, and a player who asked for less movement gets the mark, the caption, the name and the
-spoken announcement, on the same timer as everyone else.
-
-**And it says it in words, once.** One polite `role="status"` region names every bar the batch
-discovered, in one sentence — the same choice the map's other messages make, and not `role="alert"`:
-a discovery is good news and must not cut off what a screen reader is part-way through. One sentence
-rather than one per bar, because three stamps must not be three interruptions. The caption itself is
-text in the app's own type, upper-cased in CSS, so what is in the document stays an ordinary English
-string.
-
-**Section 8.3 gained a distinction it had been relying on without stating.** Its overlay rule is
-about things anchored to the *screen*, and the bar markers had always been anchored to the *ground* —
-projected from a position, placed against the map, outside the overlay rows. The stamp is the second
-of those, so the line is now written down: what belongs at a place is positioned against the map and
-sits below every overlay, and the layout still decides what may cover what.
-
-### v1.29 — the cocktail glass becomes the mark for a bar, and it says whether that bar is mastered
-
-One request from the owner, about a symbol: the cocktail glass becomes the app's central visual
-system, a full martini glass for a new bar and a nearly empty one for a mastered bar. Two thirds of
-it turned out to be server work, and that is the part worth recording first.
-
-**The client did not know which bars were mastered, and could not have worked it out.** Every bar
-the API hands a client came back with id, district, name, address, position, source and discovery
-time, and nothing about visits — a client holding that list has no way to derive mastering, because
-nothing in it is about visits at all. The bar detail screen's own comment said so outright and
-simply showed no mastered status, which Section 8.3 has required of it since the beginning. So the
-flag was added where the answer lives: Section 5.7 now says that the bar shape the API returns
-carries a `mastered` boolean, computed per calling user, and that the three surfaces returning that
-shape — `GET /api/bars`, `GET /api/bars/:id` and `POST /api/samples`'s `newBars` — all carry it.
-They already shared one row-to-JSON mapper for exactly this reason; they now share the SELECT list
-under it too, so the next field cannot reach two of them and miss the third.
-
-**Per-user is the whole difficulty, and it is invisible to a single-user test.** A flag computed
-per *bar* rather than per *user* passes every test a one-account suite can write, and ships a map
-that tells a player they have mastered bars they have never been to. Two things guard it. The flag
-is computed from the discovery row's own `user_id` — the same row that makes an undiscovered bar
-unreachable — rather than from a user identity handed in separately, and the query compares that
-`user_id` against the parameter as part of the flag itself, so a wrong identity can only ever
-report `false` and can never report somebody else's mastery. And there is now a test with two
-users, different mastery, one bar.
-
-**Cost, which was not free and is now.** `GET /api/bars` returns every discovered bar, so a
-per-bar existence check runs once per row, and `idx_visits_user_status` is on `(user_id, status)`
-with no `bar_id` in it: each check walks every completed visit the caller has and the request
-becomes discovered bars × completed visits. For a player with 500 discovered bars and 600 completed
-visits that is 15 ms against 0.4 ms without the flag — on a Raspberry Pi, several times that. Asked
-once per request as a list the same index answers it in one seek and the request costs 0.6 ms. No
-index was added: the one Section 5.7 already defines covers the shape that asks the question once,
-and adding a second to rescue the shape that asks it five hundred times is paying for the wrong
-query.
-
-**The glass itself is one definition, in three places, differing in shape and never in colour.**
-Section 8.1 records the mark and the four constraints on it. The two states differ by most of the
-bowl's ink — solid for a full glass, a wall around an empty middle with the last of the drink at
-the bottom for a mastered one — because the marker is 22 px and a difference visible only at 3×
-zoom is not a difference, and because Section 8.1 forbids a state that colour alone carries and
-this mark has no colour to spend anyway. It is drawn on the map marker, on the bar sheet the marker
-opens, and on the `/bars/:id` screen, from one set of paths shared between the marker's hand-built
-DOM and the two React surfaces. It is deliberately absent from the nearby-bars panel, which names
-what is in range and carries no per-bar affordance by decision (Section 7.5), and from the admin
-bar list, which is moderation and is not scoped to one player's mastery at all.
-
-**And the marker says it in words.** Its accessible name was the bar's name alone, which is fine
-for a mark that only identifies a place and useless for one whose entire content is a state. It is
-now "*bar* - mastered" or "*bar* - not mastered yet". The community distinction stays where it was,
-as a description rather than part of the name: where a bar came from is supplementary information
-about it, and whether the player has mastered it is what the control is showing.
-
-**And it empties at the moment the visit completes, which it did not at first.** The map's bar
-list refetched on mount and when a bar was discovered, which is what it was built for — and
-mastering a bar changes a bar the player discovered long before, so nothing refetched for it and
-the glass stayed full until the next discovery or the next time the map was opened. That is the
-mark being inert at the one moment it means anything, so it was fixed here rather than filed:
-`discoveryVersion` now also advances when a sample response reports a visit reaching `completed`.
-The signal's name is older than its second reason; what it has always meant is "refetch
-`GET /api/bars`", and both reasons are that. It is deliberately not folded into `visitVersion`,
-which advances on every accepted on-site sample: refetching every bar at sample rate to catch the
-one sample in forty that completes a visit is the trade the wrong way round, and `completed` is
-terminal, so this fires once per bar in a player's whole history.
-
-### v1.28 — the fog stops being a sheet of tracing paper
-
-One report, from the owner, and it is about the inside of the fog rather than its edge: the fog
-looked like an evenly transparent surface laid over the map, and a player is supposed to feel that
-the city has not been explored yet. The edge was made irregular in v1.16 and he is happy with it.
-Everything inside it was a flat wash at one alpha, and one alpha over a whole city is exactly what
-a sheet of tracing paper is.
-
-**The alpha varies now, and `FOG_MAX_OPACITY` changed meaning with it.** It used to be the alpha of
-unrevealed fog, full stop; it is now the alpha of the fog's *densest* patch and the ceiling on every
-fragment, with `FOG_DENSITY_VARIATION` saying how far below it the noise may thin the fog. The
-variation goes downward from the ceiling and never upward, and that is a decision about the
-constant rather than about the look. Three other places already read `FOG_MAX_OPACITY` and every
-one of them wants the same thing from it — the *darkest* ground the fog can put under something
-drawn on top: the road opacity's contrast argument, the status icons' contrast floor, and the
-canvas fallback. A variation that went up, or that straddled a midpoint, would have left all three
-quietly understating their own worst case, and the constant with two readings in one codebase.
-Section 7.3 and the constant's own comment say the new one.
-
-**The unevenness has to come from noise and not from anything a player could recognise.** That was
-the owner's own constraint and it is what fixes the shape of the field rather than being a note
-about taste. A single lattice of value noise reads as a regular grid of blobs at whatever zoom
-makes its period a comfortable fraction of the screen, and doubling the frequency for a second
-lattice puts its corners on the first one's, so the two agree instead of cancelling — the field is
-a few octaves at frequencies that are not whole multiples of each other, each shifted by its own
-offset, with falling amplitude so the coarse shape leads. Bounded from the other side too: every
-extra octave adds finer structure, and structure at cell scale is a texture. `FOG_DENSITY_NOISE_CELLS`
-is the knob for how big the patches are, and the finest feature stays several cells across because
-anything approaching the size of a screen pixel at `MAP_MIN_ZOOM` aliases into shimmer.
-
-**The density is sampled in grid space, and that is the part that would have failed quietly.** The
-noise reads the fog quad's UV, which is built from longitude and latitude against the grid's own
-fixed corners with the camera nowhere in it, so a patch of the city keeps its density as the map
-moves under it. Sampled in anything that travels with the camera the fog would crawl and shimmer
-under every pan — worse than the flat wash, and invisible in a screenshot, which is why the test
-for it asserts on the coordinate rather than on the result. The other property tested that way is
-that the density multiplies into the same product as the edge factor rather than being added beside
-it, so revealed ground stays at alpha zero whatever the density does: a haze on ground the player
-walked for is the opposite of the mechanic. Neither is something a substring in a shader source can
-show, and the shader cannot be executed here at all, so the alpha expression is mirrored in
-TypeScript, tested as arithmetic, and pinned to the shader's own two lines textually.
-
-**The canvas fallback had to be told what to do about it.** Section 7.3 says not to chase the WebGL
-path, and a per-fragment noise field is exactly what that licenses it to skip — but it read
-`FOG_MAX_OPACITY` for its flat fill, and that constant had just stopped meaning what it did. Left
-alone it would have painted itself at the *densest* fog the other renderer produces, which is a
-visible change to a user on that path arriving as a side effect of a change to a path they are not
-on. It paints the middle of the range instead: the same fog as the WebGL path on average, with none
-of its variation.
-
-**And O15's precision half was wrong on its own terms.** Recorded last week as a suspected cause of
-the shimmer the owner attributed to tilt, and half of it turned out not to need the shimmer to
-justify fixing. One texel of the 417 × 343 grid is 0.0024 of UV, and `mediump` — fp16 in practice —
-resolves about 0.001 near UV 1.0, so this shader's ±1-texel blur offsets were barely two
-representable steps apart and its ±1.5-texel noise warp quantised to a handful of positions, both
-of them moving as the camera moves. It is `highp` now, which GLSL ES 3.00 requires in the fragment
-stage and which therefore costs nothing anywhere WebGL2 exists. The mipmap half was assessed and
-declined, with the reasons in O15: a mip chain would add a second zoom-dependent blur on top of the
-one Section 7.3 fixes the width of, `texSubImage2D` does not update mip levels so every reveal would
-regenerate the whole chain, and the shader's texel-sized offsets stop meaning one texel as soon as a
-coarser level is selected. O15 stays open, narrowed: nothing here can run a shader, so whether the
-shimmer is actually gone still wants a real device at low zoom.
-
-**What a human still has to check on the street.** The density varies the *alpha*, and the fog's
-colour sits close to the paper it is drawn over, so almost all of what the variation does is change
-how much of the base map bleeds through — 4% under the densest patch against 16% under the thinnest.
-Over buildings and green areas that is the intended effect and it is clearly visible; over open
-paper, where there is nothing underneath to bleed, two patches of different density look nearly the
-same. If the fog still reads as flat after this, the remaining lever is the fog's colour rather than
-its opacity, and that is a bigger change: the colour is the background three separate contrast
-arguments are measured against.
-
-### v1.27 — the map stops counting cells at the player, a district link shows the district, and the borders come out of the fog
-
-Three from the owner's field notes, and they are all about the map answering the question actually
-being asked.
-
-**"Revealed 1 new area", again and again, and never a bar.** The message fired on every batch that
-cleared a cell, which on a walk is nearly all of them, so a player got a running commentary on the
-one thing the map was already showing them — the fog receding is its own feedback, and the crisp
-edge of v1.14 exists to be exactly that. The unit made it worse rather than better: a 50 m cell is
-not a place, so the number was neither a destination nor a score, and there was nothing to do with
-it. Section 7.3 now states what the map announces and why the count is not in that set — what is
-announced is what the player cannot see for themselves, a bar coming into range or a rule that is
-stopping the reveal, and a count of cells is neither. The client-side field that carried it went
-with it rather than being left as state nothing reads; `revealVersion`, which is what a reveal
-actually drives, is untouched.
-
-**"Open on the map" opened on a street corner.** The district overview's link carried the tapped
-district's centre and the map opened at `MAP_DEFAULT_ZOOM` — street level, the right answer to
-"where am I" and the wrong one to "show me this district", and an unexplored district arrived as a
-handful of streets of fog with none of its shape. The link now carries the district's bounding box
-as well, and the map is built framed on it rather than moved there afterwards, so there is one
-camera move on that path and nothing races the one-time centring on the player.
-
-The three things that bound the framing are in Section 8.3 because each of them is a way this could
-have gone wrong quietly. The zoom limits still apply, so a district too large to fit lands at
-`MAP_MIN_ZOOM` on its box instead of zooming out past the extract. The fit leaves a margin, a
-constant in `config.ts` in screen pixels, because a box fitted edge to edge puts the district's own
-border on the edge of the screen. And the box is validated as defensively as the centre it travels
-with — absent, blank, non-numeric, non-finite, out-of-range, inverted and zero-area boxes are all
-rejected rather than coerced — because it was a URL that put this map on Null Island once, and a
-blank map reports no error. A rejected box falls back to the centre, which stays in the link for
-that reason and because it is what an older link carries.
-
-**The district borders are on the map, above the fog.** He asked for this as an idea to be
-cost-assessed rather than assumed, and the assessment was small: the geometry is the boundary file
-the district overview already draws, so nothing is generated, served or seeded for it — it is that
-file put on the map he actually walks with, as a GeoJSON source and a line layer added at runtime.
-
-Above the fog is the whole request, and it carries the cost Section 7.3 already records for the
-roads: a layer above the fog cannot tell explored ground from unexplored, so the border reads the
-same on both and carries none of that distinction. What the section adds is that being *quiet* is
-not enough to keep it from reading as another street. A road network is continuous, so an unbroken
-line joins it by resemblance however faint it is drawn — the border is dashed, which is the
-cartographic idiom for an administrative boundary and a line the street layers never produce, and
-it is drawn wider than the roads rather than thinner so it reads as a deliberate mark that happens
-to be broken. Its opacity sits below the roads' and above the 3:1 floor Section 8.1 holds non-text
-marks to against the fogged ground, which is the binding background.
-
-Its place in the layer order is fixed by construction rather than by timing, and that is the part
-worth recording. The border layer and the fog are both added at runtime from two independent
-responses; an order that depends on which lands first works on a desk and fails on a phone. The fog
-is only ever inserted before the first above-fog layer of the static style and never appended, and
-the border layer is only ever appended, so the border is above the fog in both arrival orders
-without either side knowing whether the other has mounted.
-
-### v1.26 — the map says when it is too fast to clear, and the check-in radius stops being a street
-
-Two more from the owner, and they are one report told from two ends: *why is nothing happening?*
-One of them makes a control switch off sooner, and the other explains why the map is not clearing.
-Shipping the first alone would have used a fix to manufacture the next confusion, so they ship
-together and their two sentences are written as neighbours.
-
-**The map revealed nothing on a train, and said nothing about it.** Section 7.3's speed rule was
-working exactly as specified — a sample at or above `FOG_MAX_SPEED_KMH` reveals no cells — and the
-client was simply never told, so the mechanic's own rule was indistinguishable from a broken app.
-`POST /api/samples` now answers with `tooFastToReveal` and the map renders it in the notices row of
-its overlay layout (Section 8.3), never as an overlay positioned against the map.
-
-The field is on the response and not computed in the browser, and Section 7.3 records why at
-length: the client holds `position.speed` and could test the threshold itself, which would be a
-second implementation of a rule the server has already applied and free to disagree with the one
-that actually decides. It could not reproduce the case that matters most, either — a fix carrying
-no speed, where the server derives one from the previous accepted sample, a value that lives in the
-server's memory (Section 7.2) and nowhere else. A boolean was chosen over the speed itself: the
-banner has nothing useful to do with a figure, and a derived speed is an estimate over whatever
-interval separated two samples, which a number on screen would overstate.
-
-A batch is several samples and they disagree, so the field needed a defined meaning for a mixed
-one, and it is the **last accepted sample** that decides. The message is present tense, and the
-last accepted sample is the most recent thing known about where the player is; a batch that starts
-on a moving train and ends on the platform reports `false`. That it is not a count of what was
-skipped is stated in Section 7.3 rather than left to be inferred. And every successful post
-replaces the flag, `false` included, so the message clears itself the moment the player slows down
-— a message about a train that outlives the train is the same class of lie as the confirmed-time
-bug of v1.18.
-
-**"Der Check in Radius ist zu groß."** `BAR_ONSITE_RADIUS_M` and `BAR_ACCURACY_TOLERANCE_M` were
-both 50, and since the rule adds them the effective radius reached 100 m — in Karlsruhe's centre
-that is a street of bars, and the player could check into one he was nowhere near. They are now 30
-and 20: 30 m with a good fix, 50 m at worst. The tolerance stays and is not folded into the base
-radius, because removing it makes check-in *impossible* on a poor fix rather than merely harder,
-and a player standing inside the bar being refused is a worse failure than a generous radius.
-
-`BAR_DISCOVERY_RADIUS_M` is untouched at 100 m, and Section 7.5 step 1 now says why the gap is the
-intended shape rather than an inconsistency to be tidied away. Discovery asks "have you been near
-this place", a question about a walk, permanent once answered and generous so that the map fills in
-as the player moves. Check-in asks "are you at *this* bar", which is the question that has to
-separate two neighbours and the whole reason the step is an explicit user action. Narrowing
-discovery to match would hide bars the player walked past; widening check-in to match would put
-the bar next door inside it.
-
-One consequence of the new tolerance is worth recording because it looks like a collision and is
-not. `BAR_ACCURACY_TOLERANCE_M` is now 20, the same number as `GPS_ACCURACY_GOOD_M` (Section 8.6),
-and the coincidence is not new — the old tolerance of 50 sat exactly on `GPS_ACCURACY_FAIR_M`. What
-moved is the point at which the radius stops growing: it now saturates at the top of the *good*
-band instead of the top of the *fair* one, so every fix the indicator does not call good buys the
-same full 20 m. The two scales still tell one story rather than two — the app extends its allowance
-in step with a fix it trusts and refuses to extend further for one it does not — and Section 8.6 is
-left alone, which is the decision rather than an omission. The two constants mean different things
-and must not be unified because they happen to share a value.
-
-### v1.25 — the connection icon measures being behind, and the map stops tilting
-
-Two more from the owner's walk, and they meet in the same place: something that was accurate about
-the wrong quantity.
-
-**The connection icon was almost never green, and the network was fine.** He reported two or three
-items queued and a cycle of online → syncing → online every couple of seconds, and asked whether
-the threshold should go up. Neither: the icon was correct and it was measuring the wrong thing.
-`syncing` was `queueDepth > 0`, and Section 7.2 batches on purpose — a fix a second onto a queue
-emptied every ten seconds means the queue is rarely empty, so a healthy phone reported a backlog
-almost continuously and reported *no* backlog only in the instant after each flush. A higher
-threshold would have said "three requests in the air", which is the same wrong question with a
-bigger number, and would have hidden a genuine three-sample backlog behind it.
-
-Section 8.6 now defines the state by the queue's progress instead of its depth: a sample counts as
-behind once it was already queued when a flush attempt began and is still queued when that attempt
-ends. That is one rule covering both honest cases — a POST that failed and left its batch for the
-next try, and a sample that did not fit in `SAMPLE_MAX_BATCH` and was passed over by the cycle that
-should have carried it — and it is a fact the flush observes rather than a duration or a count, so
-this change adds no constant to `config.ts` and leaves nothing to tune. A sample in the air is not
-behind, and a queue filling and draining on schedule is `online`. Offline still outranks all of it.
-The panel keeps reporting every unsent sample, not only the behind ones, because "how much of my
-walk has not left this phone" is the question the number answers; its wording changed to say that
-waiting samples are what working looks like.
-
-**The map could be tilted, and nothing had ever wanted it to be.** He found the two-finger vertical
-drag by accident and saw the fog misbehave afterwards. Neither map passed any pitch option, so
-MapLibre's defaults applied. Section 8.3 now states that the map's gestures are pan, zoom and
-rotate, and that the camera is capped at pitch 0 — a cap rather than only a disabled handler,
-because there are three routes into a pitched camera and closing one gesture leaves a camera that
-can still hold a pitch set another way; the cap makes the tilted state unreachable and the handlers
-are disabled beside it so a finger does not fight a camera that will not move.
-
-Rotation stays, and the section says why in its own paragraph: the fog quad following a rotated
-viewport, the direction cone drawn at course minus bearing, and the canvas fallback measuring a
-cell as a distance are all deliberate work for a turning map, and removing rotation would undo
-three correct things to fix a problem rotation does not cause.
-
-The fog flickering was **not** explained, and that is recorded rather than quietly closed. Two
-readings were checked and neither survives: the fog quad does not stop covering the screen under
-pitch — MapLibre's `getBounds` horizon clamp only engages past about 69°, and the default cap is
-60 — and the quad's UVs, which are linear in latitude across vertices placed in mercator, are off
-by under half a metre at any reachable pitch, against a 50 m cell. What remains are two
-GPU-side effects that a pitched view amplifies but does not own — a non-mipmapped fog texture
-sampled far into the distance, and the shader's `mediump` precision across a quad that grows with
-the camera's bounds — and either would still be reachable by zooming out to `MAP_MIN_ZOOM` on a
-flat map. Locking the pitch removes the trigger the owner found, not the mechanism, so this stays
-open in Section 14 for a device that can be looked at.
-
-### v1.24 — cancelling works, and one venue stops being two bars
-
-Three findings from the owner's first real field test, and the two that matter share a shape: the
-app holding a state the server does not hold.
-
-**Cancel did not work at all, even hours later**, and the cause turned out to be one line in the
-web client that had nothing to do with visits. `request()` set
-`Content-Type: application/json` on every call it made, whether or not it had anything to send.
-Fastify's JSON body parser rejects a request that declares that content type and then sends zero
-bytes, with a 400 before any route handler runs — and the screenshot the owner sent renders that
-exact sentence inside the banner. `POST /api/visits/:id/cancel` carries no body, so it had never
-once succeeded, for anyone, since the day it shipped; `POST /api/visits` carries `{barId}`, which
-is why checking in always worked and hid the pattern. Two more bodyless calls were dead the same
-way: logging out, and deleting a bar from the admin screen.
-
-Worth recording is *why nothing caught it*. Every test in the web package stubs `fetch`, so no
-client call in this repository had ever had a real body parser behind it, and every route test
-built its request by hand rather than the way the client does. The regression test that matters is
-therefore in `packages/api`, not `packages/web`: a bodyless cancel injected into a real Fastify
-instance, plus its mirror image asserting that the same request with the header is a 400 and
-saying why.
-
-The reading of the mechanic that the fix was originally designed around still stands, and shipped
-beside it, because a cancel button that visibly does nothing is indistinguishable to a player
-whatever the cause. Section 7.5 now states what the banner is *not allowed to do*: hold a visit
-the server does not agree is pending. A 404 from cancel means the visit is not pending, which is
-what the player asked for, so the row goes and nothing is reported. And the banner refetches when
-the screen returns to the foreground, because an installed PWA is backgrounded rather than
-unmounted and "I closed Safari, came back, and was still checked in" describes a screen that never
-asked again. A periodic refetch was considered and rejected on the argument written into Section
-7.5; O14 is narrowed by this rather than closed, and says what is left.
-
-One more, and this one is layout rather than state: the banner is a bounded scrollable row, and
-the second screenshot shows its second cancel control cut off mid-glyph by the map beneath it.
-Opening a confirmation now scrolls its buttons into view, and the banner is capped at its row so
-that it keeps a visible bottom edge rather than appearing to end mid-sentence.
-
-**He also checked into "the same bar" twice, after which the app was unusable.** Not a race and
-not an index failure: `bars.json` holds two venues twice each. Fettschmelze is two OSM nodes six
-metres apart with the same name and the same address; Traube is a node and a way 25.3 metres
-apart. Two rows means two ids, so Section 5.7's partial unique index was working exactly as
-specified — it only ever stopped a second pending visit at the *same* id, and the player standing
-in front of one building saw two markers an arm's length apart and checked into both.
-
-Section 11.1 now collapses near-identical venues at import time, and the rule it collapses by is
-not a new one: it is Section 11.3's community-submission duplicate guard, same radius, same
-similarity threshold, same normalisation, one implementation shared by both. Which of a pair
-survives is a total order over the two records — address, then element type, then the lower OSM id
-— so the import is reproducible and the survivor is the better record rather than whichever one
-Overpass listed first. Over the committed seed this collapses 180 bars to 179.
-
-**Traube is why the radius is a constant of its own.** The import guard began by reusing Section
-11.3's submission radius outright, and that missed the very pair the field test got stuck in: its
-two records are 25.34 m apart against a 25 m radius — thirty-four centimetres. Widening the shared
-constant was rejected, because it would have loosened what a player is allowed to submit in order
-to fix what the importer reads. The two now have separate radii, 40 m for the import and 25 m for
-submissions, and the choice was measured rather than argued: in the whole seed only two pairs clear
-the similarity threshold within 60 m, and both are one venue mapped twice. The import collapses
-180 records to 178.
-
-Sharing the rule cost the import script its no-build-step property, and that trade is recorded in
-Section 11.1 rather than worked around: the alternative was a second similarity function and a
-second copy of a radius, which is the thing Section 0's rule 3 exists to prevent.
-
-Independent of all of it, the admin screen grows a list of the signed-in admin's *own* pending
-visits with a cancel control — no new endpoint, no reach into anyone else's data. It exists
-because the owner had visits he could not clear and the map's banner was the only place that could
-clear them, and a second door costs almost nothing.
-
-### v1.23 — the app pads around the device's safe areas
-
-Reported from a phone with a screenshot: the tab bar of v1.22 sat too low, hard against the
-bottom of an iPhone. The bar's `--bottom-nav-inset` token was already correct and had been since
-the day it was written — `env(safe-area-inset-bottom, 0px)` — and it was resolving to `0px` on
-every device, because `index.html`'s viewport meta tag never carried `viewport-fit=cover`.
-Without it iOS reports no safe area at all rather than reporting the wrong one, so the token was
-a correct expression of a number the browser was never going to supply.
-
-That is the whole fix, and it has a counterpart that had to come with it: `viewport-fit=cover`
-makes the *top* edge-to-edge as well, so the notch and status-bar row became a second strip every
-screen has to clear. Section 8.2 now states both as one rule — one named token per inset,
-declared once in `:root`, read by name everywhere else — and the stylesheet's tests enforce it
-from both ends: exactly one rule may name `env()` for each inset, and the two places that must
-read the top token actually do. The map's top controls row is one of them, and not obviously so:
-the map screen is `position: fixed; inset: 0`, so that row sits at the physical top edge of the
-device rather than inside a page with its own padding.
-
-Worth recording because it is the second time this shape of defect has appeared here: a token
-being right is not the same as anything supplying it a value, nor as anything reading it. The
-v1.22 work checked that the bar reserved space and that nothing double-counted the inset; neither
-check could see that the inset was zero.
-
-### v1.22 — the burger menu becomes a bottom tab bar
-
-The owner's redesign, and the first change in this document to reverse one of its own explicit
-refusals. Section 8.4 said "No bottom tab bar, no other persistent chrome — the map should own
-the screen." It now specifies exactly that bar. The old rule was a defensible reading of a
-map-first app rather than a mistake; what changed is the judgement that a flat eleven-item
-dropdown behind an icon made every destination equally hidden, where five tabs make the app's
-structure visible without being opened. The map still owns everything above the bar.
-
-Five tabs — Cities, Map, Ranks, Profile, More — with Map in the middle carrying the primary
-weight, and the secondary destinations behind a More sheet that has no URL and no history entry.
-"Ranks" renames the destination and not merely the tab: a tab leading to a page headed
-something else is a navigation defect, not a shorter label. The route `/leaderboard` is
-unchanged, because renaming it would break existing links for nothing a reader can see.
-
-One consequence had to be designed rather than discovered. The bar is signed-in chrome — Profile
-needs the player's own handle, Log out needs a session — so it cannot render for a signed-out
-reader, and `/privacy` is the one route outside the auth gate that a signed-out reader is sent
-to. The burger menu had been that reader's only way back, incidentally rather than by design, and
-in the installed PWA there is no browser chrome behind it. That screen now carries its own back
-link when there is no user, and a test pins it: removing the old menu without this would have
-walled a reader into the privacy page with no way out.
-
-Section 8.3's overlay count drops from nine to eight — the burger menu was one of them — and the
-tab bar sits below the overlay layout rather than inside it, so Section 10.5's attribution stays
-persistently visible above the bar rather than behind it. The bottom safe-area inset moved with
-the bar: it is declared once, as a token, and everything that has to clear the bar reads that
-token rather than repeating `env()` and double-counting the gap.
-
-### v1.21 — the admin bar list is alphabetical, in German
-
-The owner asked for one thing: "Können wir die Bars im Admin panel alphabetisch sortieren?" The
-list came back in insertion order, which for 180 imported bars is the order Overpass happened to
-answer in — findable only by scrolling.
-
-The obvious fix, `ORDER BY name COLLATE NOCASE`, is the wrong one, and quietly so. SQLite's
-built-in NOCASE collation folds ASCII `A`–`Z` and nothing else, so everything outside that range
-falls back to code-point order: `Ä` is U+00C4 and `Z` is U+005A, and every umlaut-initial name
-would pile up after the Zs on a German city's data. A test with `Alpha`/`Beta`/`Charlie` in its
-fixture cannot tell that implementation from a correct one, which is why the fixtures added here
-carry umlauts and lower-case initials — `Bärenstüble` and `Bergbräustube` are real names from
-the seed file, `uBu` is the real lower-case one, and the umlaut-initial cases are synthetic
-because the current import happens to have produced none — and why the ordering moved out of
-SQL into `Intl.Collator`, the ICU collation Node and the browsers already ship.
-The locale is pinned to German rather than left to resolve: the UI is English (C9) but the data
-is German place names, and an unpinned locale would resolve to the container's on the server and
-to the admin's browser language on the client, so the same list could be ordered two ways
-depending on who was looking. A second city would want this per-city, alongside the other
-per-city facts — an observation for whoever adds one, not something built now.
-
-Sorting the server alone would have fixed the list until the first edit. `screens/Admin.tsx`
-appends a created bar and replaces an edited one in place, so a new bar sat at the bottom and a
-renamed one kept its old slot until the admin reloaded. The single comparator lives in
-`packages/shared/src/bars.ts` and both callers use it, which is the point: "alphabetical" now
-has one definition rather than one per side. Section 9.3 states the ordering, because it is a
-user-visible contract and the next person to touch that query should find it written down.
-
-The user list in the same file has the same shape of problem — `ORDER BY users.id` — and is
-deliberately left alone: the owner asked about bars, and usernames are a different question
-(anonymity, admins first) that nobody has asked yet.
-
-### v1.20 — the bar import widens to catch a bar's secondary tag
-
-Not a fix. The owner looked up two real, named venues on OpenStreetMap — Enchilada Karlsruhe
-and Aposto Karlsruhe — and found both tagged `amenity=restaurant`, per OSM's "one main tag"
-convention: a venue's primary business goes under `amenity`, so a restaurant that also runs a
-bar stays `amenity=restaurant` rather than `amenity=bar`. Both carry `bar=yes` as the secondary
-tag. The Section 11.1 query, `amenity` in `bar`, `pub`, `biergarten`, `nightclub`, never had a
-defect — it did exactly what it said — but it also never had a way to see either venue. The
-owner decided, knowing the cost, to widen it: pull in anything tagged `bar=yes` regardless of
-`amenity`. His words: "das greift auch Cafés und Hotels, aber solange sie eine Bar haben möchte
-ich sie aufnehmen." Section 11.1 now states the query as an OR and says plainly that this
-widens both the true positives and the false positives the same way the amenity-only version
-already accepted — a café or hotel with a token `bar=yes` and nothing bar-like about it will
-show up too, and curation still runs through the admin interface, same as it always has for
-every other bad tag OSM hands the importer.
-
-`buildBarsQuery` in `packages/shared/src/bars.ts` gained three more statements in its existing
-union — `node`, `way`, and `relation` matching `bar=yes` — inside the same
-`area.cityArea`-scoped block the amenity clause already lives in, not a second query. Overpass
-QL's union is true set semantics (`drolbr/overpass-doc`'s own union example is this exact
-amenity-plus-secondary-tag shape, for ATMs rather than bars): a venue matching both clauses
-appears once in the response, so no de-duplication was needed on this side.
-`osmElementsToBars` needed no change at all — it already accepted any element with a `name`
-regardless of `amenity`, because the filtering has only ever lived in the query text, never in
-local code. A new test pins that down against exactly this shape (`amenity=restaurant`,
-`bar=yes`), so a future "helpful" filter added there cannot silently reintroduce the exclusion
-this change removes.
-
-### v1.19 — the map's edges become a layout
-
-The last item of the third feedback round. The map screen's overlays are no longer positioned
-one by one against the map; one container lays its edges out as bands, and a control at an edge
-cannot be placed on a bar at that edge because the bands claim their own space. Section 8.3
-records the rule, the pointer-events consequence and the single place the bottom safe-area
-inset belongs.
-
-The section's own list was out of date — it said eight overlays and predated the bar sheet of
-v1.17 — which is the sentence demonstrating exactly what it warns about: a set of hand-tuned
-offsets does not survive its ninth member. Corrected to nine, and the ambiguous "whether or not
-the bar it yields to is currently present" is pinned down to what it was meant to say: the
-guarantee holds in both states, and no empty space is reserved.
-
-A third collision nobody had listed turned up in the process. The attribution sat below the
-full-width bar along the bottom edge, so it was covered whenever the nearby panel or the bar
-sheet was on screen — and Section 10.5 requires it to be persistent and legible. It has a place
-in the bands now.
-
-### v1.18 — a visit can be ended, and the banner stops lying about it
-
-The last two items of the third feedback round. `POST /api/visits/:id/cancel` acts only on the
-caller's own pending visit and answers one identical 404 for every other case — another
-player's visit, a completed or expired or already-cancelled one, an id that never existed —
-for the reason Section 9.5 gives about bars, which applies with more force here: visit ids are
-one global sequence, so a distinguishable response would let any signed-in player enumerate
-how many visits everyone else holds. A pending row that is already stale by time is expired
-rather than cancelled: the six-hour rule ending a visit and the player choosing to end it are
-different things and the row records which happened.
-
-The banner now renders the server's `confirmedS` and `remainingS` instead of a client-side
-clock counting from check-in. That clock is what produced "Confirmed 120:21 - 0:00 remaining"
-on a visit walked away from two hours earlier. Section 7.5's rule about what the figure does
-over time is now proven by a test that both steps it on a real sample and holds it still once
-the player is out of range, so neither the lie nor its over-correction can come back. The
-guidance moved inside the list item, which is where it always belonged: several simultaneous
-pending visits are allowed, so one sentence under the whole list could not be true of all of
-them, and that is why the away wording used to appear directly beneath its own contradiction.
-
-Two Phase 5 Definition-of-Done ticks withdrawn in v1.14 are re-earned here, each on the exact
-terms its note set. One new Open Item, O14: an expired visit is still never removed from the
-banner while the map stays open — the same family of defect as the one just fixed, found while
-fixing it, and left recorded rather than quietly folded into an unrelated change.
-
-### v1.17 — checking in moves onto the marker
-
-v1.14 specified this and the code caught up here. The bar's own marker is now the only route
-into a check-in; the nearby panel keeps naming what is in range and has stopped being a
-control. That is what makes two bars a few metres apart separable — the player names the one
-they mean instead of accepting a suggestion made from a position that cannot tell them apart.
-
-One thing v1.14 left ambiguous is now settled and written down. "Leads to that bar" reads as a
-navigation, and taken literally it is impossible: position tracking runs only on the map
-screen, so routing away from it stops fog reveal and sample posting and leaves the destination
-with no live position to judge on-site eligibility against. The check-in therefore lives in a
-sheet on the map screen, and `/bars/:id` is recorded as carrying no check-in at all. Section
-8.3's screen table said the opposite in two rows and is corrected with them.
-
-### v1.16 — the fourth round: the fog edge, a rotated map, minor streets, and the locate zoom
-
-The owner walked the city again with the layer ordering of v1.14 in place and reported it
-working: zoomed out he sees roads and water through the fog and nothing else, zoomed in the
-buildings stay hidden, and explored ground reads as detailed and looks right. Four things came
-back with that.
-
-**The fog edge is a boundary now, not a fade.** His words: the transition fades out so
-gradually that no clear boundary is visible, which makes it not obvious at first glance that
-the player is actually unlocking parts of the map. That is not a cosmetic complaint — the edge
-is the only feedback that the core mechanic works, so an invisible edge is an invisible game.
-The old edge faded over about 190 m. Two things caused it, a two-cell blur and an alpha ramp
-spanning almost the entire blurred range, and Section 7.3 now names both as constants and
-records the relationship between them: the visible transition is exactly `2 · (2r + 1) · h`
-cells wide, so they are one width expressed as two numbers rather than two independent knobs.
-The noise offset that makes the boundary irregular stays untouched — "harder" here means a
-crisp *irregular* edge, never a crisp circle.
-
-**The fog did not cover a rotated map, and the cause was structural.** The quad was a fixed
-rectangle: the city's extent plus the same padding ratio the map uses as its pan limit. That
-reasoning holds only while the map is north-up, because a pan limit constrains an axis-aligned
-viewport — rotate the camera and the viewport's corners sweep outside the rectangle, leaving
-bare un-fogged ground where there is simply no geometry to shade. Section 7.3 now requires the
-quad to be rebuilt every frame from the camera's own bounds, which account for bearing and
-pitch, with its own padding constant. That the padding was shared with the pan limit is
-recorded as the cause, because the same shortcut would produce the same defect again.
-
-**Minor roads are added, below the fog.** He asked for the smaller streets he was missing on
-explored ground, and where they go is the whole question: above the fog they would hand
-unexplored ground the full street grid, which is the detail the fog exists to withhold. Below
-it they are a reward for having been somewhere. That also settles why they are their own layer
-rather than a wider filter on the existing one — a single filter cannot sit on both sides of
-the fog.
-
-**"To my location" now sets a zoom instead of only centring.** Tapping it while zoomed far out
-used to leave the player centred on a city-wide view they still could not walk from. It takes
-them to `MAP_DEFAULT_ZOOM`, the same constant as the opening view, since both answer the same
-question. The map picker on Suggest a bar keeps the old behaviour on purpose, and Section 8.3
-says so: someone who zoomed in to place a pin precisely would otherwise lose the precision
-they zoomed in for. Two identical-looking controls behaving differently is a real cost, taken
-knowingly rather than found later.
-
-### v1.15 — the status palette's deferred values are decided
-
-v1.14 specified the three status icons and expressly left their colours open: "the specific
-values are a later decision and are deliberately not fixed here; the constraint on them is."
-The code landed, so the decision is taken and Section 8.6 records it — the 3:1 floor against
-the binding background, 2.2:1 between adjacent states, 4:1 across the extremes, and luminance
-descending with severity so the ordering survives greyscale. The values live in `index.css` and
-are asserted from those tokens in `App.a11y.test.tsx`, which is what closes the half of Phase
-8's accessibility item that v1.14 opened; the other half, how the three read on a real screen,
-stays a human step.
-
-Recording the numbers also surfaced two things the arithmetic forces rather than chooses, and
-Section 8.6 now says both. The darkest status colour comes out darker than the ink the map
-itself is drawn in, because the 3:1 rule caps the lightest of the three near a relative
-luminance of 0.24 and two steps down from there land below ink. And at that luminance hue
-barely registers, so the `bad` colour reads as black whatever hue it is given and its
-separation is carried by luminance alone. Neither reopens the fixed-shape decision or the
-exclusion of the accent's red — they are the price of both, written down so the next person
-does not mistake them for sloppiness.
-
-### v1.14 — the third round of feedback from the street
-
-Seven decisions, all the owner's, from the third round of feedback on the running app. They
-touch what the fog hides, what the status indicator looks like, where a check-in happens, how a
-player gets out of one, and what the map shows when it opens.
-
-**The fog moves down the layer order, and water and the ordinary streets come up above it.**
-v1.13 put the fog directly beneath the motorway/trunk layer, so trunk roads alone stayed crisp
-on unrevealed ground and everything else — water included — was dimmed away with the buildings.
-Section 7.3 now fixes the order explicitly: background, green landcover, parks and buildings
-below the fog; water, waterways and both road layers above it. Green areas and parks go under
-the fog by the owner's explicit request. A player on unrevealed ground sees roads and water and
-nothing else, which is more of a skeleton to orient by than the trunk network on its own ever
-gave, while everything that says what a place is actually like still waits to be walked to.
-
-**Major roads lose their extra weight, and the hierarchy moves to the zoom threshold.**
-`road-highway` carried the widest ramp in the style at `line-opacity: 0.85`, which was the right
-call while it was the only road above the fog; above the fog alongside everything else it simply
-shouts. Both road layers now take the same colour, opacity and width ramp. Nothing is lost:
-`road-highway` still appears from zoom 4 and `road-primary` only from zoom 8, so the zoomed-out
-map still shows the trunk network alone — the difference shows up at the zoom where it helps
-rather than as a permanent difference in ink.
-
-**The consequence of that ordering is recorded rather than discovered later.** A layer above the
-fog renders identically on fogged and revealed ground; it cannot know the difference. The road
-intensity the owner likes was only ever seen on revealed ground, because below the fog those
-roads were dimmed to nothing — so moving them above puts that same intensity onto unexplored
-ground, where it may read as too loud and where it flattens the distinction the fog exists to
-draw. Section 7.3's answer is a deliberately reduced opacity for the roads above the fog, with
-the revealed-versus-unrevealed contrast carried by the buildings, the green areas and the fog
-tone instead. The exact value is a judgement to be made on a real device. If a single value
-cannot serve both states, the named remedy — the fallback, not the plan — is two copies of the
-road layers, quiet above the fog and full below it, so revealed ground gets both and fogged
-ground only the quiet one.
-
-**The status indicator becomes three icons whose shape never changes, and that costs the
-palette its "exactly one accent colour" rule.** Section 8.6's text indicator with three labelled
-states is replaced by GPS, connection and tracking icons that carry their state in colour alone;
-tapping still opens the same short explanation. Section 8.1 said exactly one accent colour was
-permitted across the whole application, and that the accent was never the only carrier of
-meaning. Both sentences now carry a bounded exception: a small named set of status colours, used
-by this indicator and by nothing else, never as an accent, with the muted red still reserved for
-the player's position and active states. The narrowing is stated as a narrowing, with its reason
-— shapes held fixed leave colour as the only channel, and one accent cannot express three states.
-
-**The accessibility cost of that is mitigated in the spec, not assumed away.** WCAG 2.1 SC 1.4.1
-is about colour not being the only *visual* means of conveying information, so an `aria-label`
-answers for a screen-reader user and does nothing at all for a sighted colour-blind one. With the
-shapes fixed, the mitigation that works is luminance: Section 8.6 requires the three status
-colours to differ in luminance as well as hue, far enough apart to survive colour blindness and a
-greyscale rendering, checked by actually converting the icons to greyscale. Each icon also
-carries an accessible name stating its state in words — for assistive technology, and explicitly
-not a substitute for the luminance rule. No hex values are invented here; the constraint is
-specified and the values are a later decision.
-
-**Checking in moves onto the map, and the nearby panel stops being a control.** The panel used to
-propose a check-in and carry the button. Now the bar's own marker is the only route: tapping a
-discovered bar's marker leads to that bar, where the check-in action is offered and enabled only
-inside the on-site radius. That is what makes two bars next door to each other separable — the
-player names the one they mean instead of accepting a suggestion made from a position that cannot
-tell them apart. The panel stays, because knowing what is in range is worth having; it names the
-bars in range and tells the player to tap one on the map, and it performs no check-in. Sections
-7.5 and 8.3 both described the old arrangement and both are corrected.
-
-**A visit can be cancelled.** There was no way to end a pending visit at all — `POST /api/visits`
-created one and the only exit was the inactivity expiry hours later, so a player who checked in
-by mistake was stuck with it. Section 9.2 gains a cancel endpoint under `/api/visits`, acting
-only on the caller's own pending visit; Section 5.7 gains `cancelled` as a terminal status
-alongside `expired`, reached only by that explicit request, mastering nothing, and releasing the
-partial unique index so the same bar can be checked into again immediately. The pending-visit
-banner carries the control, behind a confirmation, because cancelling discards confirmed time
-that cannot be recovered. `VISIT_EXPIRY_MS` is untouched in value, behaviour and description.
-
-**The pending-visit banner tells the truth about confirmed time.** It labelled as "Confirmed" a
-number that was wall-clock time since check-in, so a visit checked into two hours earlier and
-walked away from read "Confirmed 120:21 - 0:00 remaining" — claiming two hours of presence that
-never happened, and looking complete on a visit that could not complete. Section 7.5 now requires
-the confirmed figure to be the server's own `confirmed_s`, the elapsed time between check-in and
-the last accepted on-site sample as Section 5.7 already defines it, with remaining time derived
-from that. Read alone, that rule invites the opposite defect — a banner frozen at 0:00 while the
-player is standing in the bar — so Section 7.5 also says what the figure does over time: it steps
-forward once per accepted on-site sample, holds between samples, and stops at the last confirmed
-value once the player is out of range. Following the server's number as it changes is the
-requirement; interpolating between the values the server has confirmed is the thing that was
-wrong in the first place. The banner's guidance must also match the state it is shown in: the "Open Tipsy Trails
-again while you're still here" line was rendered unconditionally, directly beneath "You've moved
-away from *bar* — your visit is still pending", telling a player who had left to stay where they
-were. On site, stay and reopen; away, return to finish; never both at once.
-
-**Map overlays may not overlap.** Eight overlays are positioned independently against the map
-container and two collide today — the locate button over the nearby panel at the bottom, the
-tracking indicator over the pending-visit banner at the top, both because a corner control sits
-at a higher z-index than the full-width bar sharing its edge. Section 8.3 specifies the
-requirement rather than the two fixes: no overlay may obscure another, and a control anchored to
-an edge yields to any bar occupying that edge. Fixing the present collisions one at a time leaves
-eight hand-tuned offsets that agree by coincidence and a ninth overlay that breaks them again.
-
-**The map opens at zoom 16 instead of 12.** Zoom 12 is a city overview — a screenful of fog with
-nothing in it to walk towards, and the City overview screen already exists for that. Zoom 16 is a
-few blocks across, the scale at which a bar marker, the player's position and the 50 m grain of
-the fog are all legible. Zooming out to `MAP_MIN_ZOOM` is unchanged. The value belongs in
-`packages/shared/src/config.ts` beside the existing zoom limits, not at the call site that
-creates the map (Section 0, rule 3).
-
-**Two Phase 5 Definition-of-Done ticks are withdrawn.** Section 12's legend says `[x]` means
-proven by an automated test in this repository, so a tick outlives the requirement it was earned
-against only by accident. Check-in "is only offered within the on-site radius … and lists multiple
-candidates by distance" was proven through the panel's button, which no longer exists; and "the
-pending banner shows confirmed and remaining time accurately at all times" was proven by asserting
-that the number moves with the wall clock, which is the defect. Both are unticked with the reason
-recorded inline, and both are re-earned when the code and its tests catch up. The code still
-implements the superseded behaviour as of this version — that is the next step's work, not a
-regression introduced here.
-
-### v1.13 — the fog hides detail instead of tinting it
-
-The owner walked the city with the app open for the first time and reported the fog as too
-low-contrast: zoomed in, every detail still read through it, and revealed ground was only a
-faintly lighter shade. Measured against the palette, he was right, and the cause was two
-deliberate decisions meeting badly. Section 7.3 required roads and water to stay "faintly
-visible beneath [the fog], at roughly 25% opacity", and Section 8.1's near-monochrome style
-draws building fills at `fill-opacity: 0.04`. So a building differed from bare paper by 8 of
-255 levels before any fog, and by 2 underneath it, while a motorway kept 46 — the fog had
-almost nothing to hide, and could not create a difference where none existed.
-
-**The fog now sits beneath the motorway layer rather than on top of the whole style.** It was
-added with no `beforeId` at all, so it dimmed motorway and building alike. Ordering does the
-work instead: everything below it is dimmed away, the motorway layer above it stays crisp on
-unrevealed ground. This serves 7.3's own reason better than 7.3's rule did — that rule existed
-so players could orient themselves, and a sharp motorway orients better than a dimmed one.
-Minor roads and buildings deliberately stay below and disappear, which is the "only high-level
-features" the report asked for. One accepted consequence: motorways now draw over building
-fills rather than under them, imperceptible at 0.04.
-
-**Fog opacity rises from 0.75 to 0.88**, which it can now afford because it no longer carries
-orientation. It had been hardcoded twice — once as a GLSL `const float`, once inside an
-`rgba()` string — and in neither `config.ts` nor `DERIVED`, so the two renderers could have
-drifted apart silently. It is now `CONFIG.FOG_MAX_OPACITY`, read by both.
-
-**A divergence between the two renderers is now permanent and recorded as O13.** The 2D canvas
-fallback is a DOM overlay appended above the entire map, not a style layer, so it cannot be
-interleaved with vector layers and cannot reproduce the ordering. On a device without WebGL2
-the fog still covers motorways and detail still shows through, now at 0.88. There is no clean
-workaround, so it is documented rather than papered over.
-
-Two further options from the same concept — a colder fog hue, and a stronger base map — were
-deliberately not taken, pending a look at this on a real device. Changing all four levers at
-once would have left nobody able to say which one worked.
-
-### v1.12 — badges become a competition, and the threshold goes back behind the server
-
-**This reverses the design intent every version since v1.x has stated, deliberately and on the owner's decision.** Section 7.7 used to open with "Badges are an *activity floor*, not a competition" and award the badge to every user who cleared the threshold. It now awards the badge for a period to the highest scorer alone. The old rule made a badge a participation marker: with thresholds set as low as they must be to avoid excluding real players (0.1% of the city in a week is roughly 900 m of new ground), everyone who went out at all collected the same shelf, and a shelf everyone has says nothing about anyone. A badge that marks the best week in the city is worth something to win; one that marks having left the house is not.
-
-**The threshold survives, in the one role that still makes sense: a floor.** It is not a target and never was — it exists only so the badge cannot be won in a dead period by whoever was least inactive. If nobody reaches it, nobody wins it, and the period simply has no holder. This is why raising a threshold does not make the badge harder to win; it only makes an empty period more likely. `CONFIG.BADGE_THRESHOLDS` keeps its values and its home in `config.ts`; only the comment above it changed, because half of what that comment claimed ("not competitive targets") is now the opposite of the rule.
-
-**Ties award everyone tied at the top rather than being broken.** Section 7.8's "earliest achievement" tie-break exists to make a *listing* deterministic, and reusing it here would silently turn a genuine draw into a loss for whoever moved later in the week — a rule nobody would choose if asked outright. Two users on identical values both won; the schema already permits it, since `UNIQUE (user_id, kind, period, period_key)` is per user. Equality is compared exactly: both metrics derive every value from integer counts through one identical computation, so equal users produce bit-identical floats and a tolerance would only promote near-misses into ties.
-
-**Neither the threshold nor any standing is published.** No endpoint returns the threshold — `GET /api/profile/:handle`'s badge progress carries the player's own value and nothing else — and the profile shows no rank, no "2nd place", no "0.3% to go". The progress bar it used to draw is gone with the number it was drawn against, along with its CSS. A hidden floor keeps the badge from being farmed to the decimal, and withholding rank keeps the surface a record of what a player did rather than a running scoreboard of what everyone else did. Badges already awarded are untouched by any of this: they are a record of periods won and are never revoked.
-
-### v1.11 — the Pi contract, read from the actual files this time
-
-v1.10 opened Section 4.3 with "verified by reading the platform repository directly (`AlexanderHultsch/PiMultiServiceServer`), not inferred". That sentence was false, and it is the reason everything below went unchallenged for a version: the platform repository has never been readable from any session working on this repository, and the description was assembled second-hand from a summary relayed through another chat. Its confidence was borrowed, not earned. On 2026-08-19 the owner pasted the real `sites.conf`, `scripts/deploy.sh`, `docker-compose.yml` and `config/caddy/Caddyfile` off the running Pi; Section 4.3 is corrected against them and now states that provenance instead. Where the paste does not answer a question, the section says so rather than filling it in.
-
-**A failing `seed:admin` does not abort anything — it is swallowed.** The real line is `docker compose exec -T "${name}" npm run seed:admin || echo "  WARN: seed:admin fehlgeschlagen"`. The `|| echo` handles the failure, so `set -e` never fires and the run continues to `docker compose restart caddy`. v1.10 stated the opposite as its headline requirement, and the risk inverts with the correction: not a loud abort that takes the Pi's other sites down with this one, but a site that comes up looking healthy, serving pages, with no working admin account and nothing to mark it but one German warning line in a log nobody may read. Silent is worse than loud here. What *does* abort every site's deploy is the preceding `docker compose up -d --build`, which carries no `||` — a failing image build there ends the whole run, every other site's rebuild included. The demands on the script itself are unchanged and still worth stating: it must exist, be idempotent, be safe to run alongside boot-time seeding, and exit 0 whether it seeded or found the account already present. The `runMigrations` write-lock and `openDatabase` WAL-retry reasoning behind that form is unaffected and was re-verified.
-
-**Registration takes three files, not one line.** `sites.conf`'s own header says a new line there is not sufficient — the service must also appear in the platform's `docker-compose.yml` and in `config/caddy/Caddyfile`. The Caddyfile ends in a fallback that answers 404 to any unmatched hostname, so a site missing its Caddy block is unreachable from the outside while its container runs perfectly, which is the failure mode least likely to be diagnosed quickly. Two further facts about `sites.conf` were never recorded at all: `host` is a **subdomain label**, not a hostname (`winecashing` → `winecashing.<DOMAIN>`), making this site's value `tipsytrails` rather than `tipsytrails.ahultsch.com`; and the file is maintained only on the platform checkout's `env` branch, where the Pi's checkout sits today, because it names private repositories.
-
-**The service block needs `env_file: ./apps/<name>/.env`, and v1.10's example omitted it.** `deploy.sh` writes `SESSION_SECRET`, `ADMIN_USER` and `ADMIN_PASSWORD` into that host file, and nothing carries them into the container unless the service names it — the Pi's ginperium block does. Following the old example would have produced a container that never receives `SESSION_SECRET` and therefore refuses to start (`packages/api/src/env.ts`), after a deploy that reported success.
-
-**`deploy.sh` has no single-site mode, and a failed `git pull` still deploys.** It accepts `--fresh` and `--set-password` and exits 1 on anything else; every run rebuilds and restarts every site on the Pi, so nothing about this site can be deployed in isolation — the earlier text implied it could. And the per-site `git pull --ff-only` only warns on failure before building whatever is already on disk, so a diverged or force-pushed site branch deploys stale code while the run reports success.
-
-**Section 4.3 now carries the three registration blocks verbatim**, derived from the Pi's ginperium blocks so that nothing has to be composed by hand at the Pi: the `sites.conf` line, the `docker-compose.yml` service block (with `env_file:`, with no `ports:`), and the `Caddyfile` host block.
-
-**Two earlier claims are downgraded to open rather than corrected.** The pasted `Caddyfile` excerpt covers one site's `handle` block and the 404 fallback and nothing else, so it evidences neither `auto_https off` nor the absence of `trusted_proxies`/`header_up` — both of which v1.10 asserted. They are now stated as unanswered by the available evidence. Open Item O10 keeps its status — the `trustProxy` hop count was already recorded as unverified, and still is — but its scope and remedy widen: it now names the unread `trusted_proxies`/`header_up` configuration alongside the hop count, and its remedy requires reading the platform `Caddyfile`'s global options in addition to counting header entries, because counting the entries in `X-Forwarded-For` no longer settles the value on its own once a `header_up` override nobody has read might rewrite the list. Section 9.4 is amended to match.
-
-### v1.10 — the real Pi contract, corrected
-
-Three items, all from finally reading `PiMultiServiceServer` instead of inferring its behaviour.
-
-**Section 4.3 is rewritten wholesale.** Everything about `sites.conf`, `deploy.sh`, and the platform's `docker-compose.yml` in the previous text — going back to v1.2.2 — was inferred from the fact that a multi-site platform existed, not read from it. The real contract differs in enough places that patching it piecemeal would have left the two versions tangled: `sites.conf` has four fields (`name repo_url host admin`), no port field; `admin: yes` writes exactly `SESSION_SECRET`, `ADMIN_USER` — not `ADMIN_USERNAME`, which the previous text (and Section 13.4) had been calling it — and `ADMIN_PASSWORD` into `apps/tipsy-trails/.env`, fully overwritten on every deploy, with only `SESSION_SECRET` read back and preserved; `ADMIN_USER`/`ADMIN_PASSWORD` come from one shared `~/pi-server/admin.env` pair reused across every `admin: yes` site, not a shared user store — this app's own `users` table and hashing are untouched by the platform. `PUBLIC_ORIGIN`, `PORT`, and `DB_PATH` must be added by hand to the platform's `docker-compose.yml`, which `deploy.sh` never touches and which therefore does survive redeploys, unlike the three admin values. `deploy.sh --fresh` deletes the whole per-site data volume, which for other sites on this Pi may be a cache and here is the database and the tile extract — every account, all fog progress, every mastered bar. And `deploy.sh` runs `npm run seed:admin` after bringing containers up, under `set -euo pipefail`, so that script must exist and must succeed, idempotently, every time, or it takes every other site on the Pi down with it — a requirement the previous text never stated because the platform's error-handling posture around `admin: yes` was never actually read.
-
-**VAPID keys move out of the environment.** The corrected `admin: yes` contract above is what forces this: a key pair placed in `apps/tipsy-trails/.env` the way `SESSION_SECRET` might be would survive exactly one deploy, because `SESSION_SECRET` is the only value `deploy.sh` reads back and reuses — everything else in that file is a full overwrite. Section 5.9 now specifies generation on first boot, persisted beside the database on the same data volume, loaded on every later boot, and untouched by anything short of `--fresh`. The three `VAPID_*` environment variables stay supported as an all-or-nothing override for deployments that want to pin their own key — most usefully local development — but the Pi should leave them unset now that there is nothing left for it to provision by hand. Section 10.1 states the resulting security posture: the private key lives on the same volume as the password hashes already do, which widens no boundary, and is never logged, returned, or committed.
-
-**Section 9.4's `trustProxy: 1` is downgraded from settled to open for the Pi.** The platform repository confirms Caddy adds no `trusted_proxies` or `header_up` override, but it does not settle how many hops actually reach it — Cloudflare's edge and `cloudflared` may together add more than the one this app currently trusts, and nothing in either repository resolves the count. Recorded as Open Item O10 (Section 14): verify by logging the raw `X-Forwarded-For` header from one real external request against the running deployment and counting the entries, before treating Section 13.4's "rate limits are load-bearing" as true for this hop.
-
-### v1.9 — two loose ends from closing Phase 8
-
-Two corrections, not decisions.
-
-**`/sw.js` gets the same cache treatment as `index.html` and `manifest.json`.** Section 4.1's table predates the service worker and never listed it, so it fell through to the same `public, max-age=0` every other unlisted static file gets — missing `must-revalidate`. That worker controls the entire app shell; a stale copy left cacheable by an intermediary (Cloudflare sits in front of this origin) pins every client it reaches to an old shell until it updates. `packages/api/src/app.ts` now sets `must-revalidate` for it, `app.test.ts` covers it, and the table gains both `/sw.js` and `/icons/*` — the latter at `public, max-age=86400`, matching `/static/districts.json`'s existing reasoning: referenced from the manifest, not content-hashed, changes rarely.
-
-**`scripts/rebuild-grid.ts` now exists.** Section 4.2's tree and Section 6.2 both named it since before v1.8; the file itself was never written — the same gap `extract-tiles.sh` had until v1.6. The new stub validates `--city=<slug>` and the city config like the other pipeline scripts, then refuses to run: migrating every existing `fog_state.mask` onto a new grid (O3) is real work, and a stub that quietly did nothing would be worse than the missing file.
-
-### v1.8 — hardening, polish, and the offline shell
-
-Recorded after Phase 8 was built — the last phase in Section 12's plan. Five decisions. A sixth candidate — the tile extract's measured size — needed nothing further: it was already corrected to 9.4 MB in the v1.6 entry below, and neither Section 4.2's tree nor 13.2 states the old estimate any more, so there was nothing left to fix.
-
-**One service worker, not two.** A scope can have exactly one service worker; registering a second silently replaces the first, and which one wins depends on load order, not on anything a reviewer could predict from the source. `push-sw.js` (Phase 5) and an offline-shell worker (this phase) cannot coexist at the app's one scope, so they are merged into a single `packages/web/public/sw.js` that owns both the Cache-API shell and Web Push. Both registration sites — the eager offline-shell registration on app start and `usePushSubscription`'s `enable()` — import the same `SERVICE_WORKER_URL` constant from `packages/web/src/sw/register.ts` rather than each naming a filename, so a second, competing URL cannot be reintroduced by one call site drifting from the other. `sw.js`'s fetch handler explicitly never intercepts `/api/*`: those responses are `private, no-store` (Section 4.1), and a cached one on a shared device is a privacy problem, not a cache-hit win.
-
-**The client-side fog cache is keyed per user and cleared on logout.** The first version of `packages/web/src/map/fog/fog-cache.ts` used one unkeyed `localStorage` entry, reasoning from the precedent of `packages/web/src/tracking/masteringExplainer.ts`'s existing unkeyed flag — but that flag only records whether someone has seen the mastering explainer once, while this one records where a person walked. On a shared device, the next account to sign in, offline, would have been shown the previous account's revealed fog — their movement history, drawn as a map — before a single network request completed. The cache key now includes the user id, and `auth/useLogout.ts` clears the current user's entry on logout. Sections 10.2 (data minimisation) and 10.6 (account deletion) both bear on this: a fog mask reveals where someone has been in a way the server-side model already treats as sensitive, and a client-side cache is not exempt from that just because it never touches the database.
-
-**The privacy page was re-read line by line against what the code actually does, and three overclaims came out of it.** A claim of *absence* — "we don't use X" — is the kind most worth checking, because nothing forces it to be re-verified when the code beneath it changes. `/privacy` previously implied OpenStreetMap was a service the app talks to at runtime; it is not — tiles are served by this app's own `/tiles/*` route (Section 9.2), and the browser never contacts OSM directly. The page now names OpenStreetMap correctly as the source the map *data* came from, and separately names the two outside services that genuinely do see live traffic: Cloudflare, which tunnels every request including position samples (Section 4, C1), and the browser vendor's own push service (Google, Apple, or Mozilla, depending on the browser), which carries a subscription and each reminder if push is turned on. Two smaller overclaims came out of the same pass: the deletion section stated an unqualified immediate removal, when C7's existing Pi backup job means a routine backup can still hold a copy until it cycles out — now stated as such. And the per-day reveal counters (Section 5.5) were described as feeding only the badge job, when Section 7.8 already has them feeding the leaderboard's week/month filters too; the page now says both.
-
-**`scripts/extract-tiles.sh`'s `--area` flag takes the last segment of `geofabrik_region`, not the field's full stored path.** `data/cities/<slug>.json` stores the full Geofabrik path (`europe/germany/baden-wuerttemberg`) because that is the more useful value to keep on record — it is also the path segment of the actual download URL, which the script's own reachability probe uses. Planetiler's `--area`, however, only ever ran successfully against the short form (`baden-wuerttemberg`); its own log shows it resolving that short name to the full download URL itself. Recorded here because the difference reads as an inconsistency on a first pass over the script, and is not one — the full path and the short segment are each used exactly where they work.
-
-**The player's own position is now rendered on the map** (Sections 8.1, 8.3). It was specified from the start — Section 8.1's one accent colour is reserved for exactly this, among active states — and never built until this phase's `OwnPositionMarker`. Nothing is drawn before the first GPS fix arrives; there is no last-known-position guess and no origin-corner placeholder.
-
-### v1.7 — community submissions and admin
-
-Recorded after Phase 7 was built. Section 11.3 left four things open; all four were decided. Two more decisions, neither previously stated, came out of building the admin area.
-
-**Section 11.3's duplicate guard needed four readings.** The normalized Levenshtein ratio is `1 - distance / max(len a, len b)`, with `a === b` (which also covers both-empty) short-circuiting to 1 before any division, so the both-empty case never divides by zero. The leading-article set covers English and German — the section names the suffixes (`bar`, `pub`, `kneipe`, `cafe`) but not the articles, and this is a German-city app with English UI copy, so both languages' definite/indefinite articles apply. The order of normalisation steps is not a free choice: it is the literal sequence the section's own sentence lists — lowercase, strip diacritics, strip punctuation, collapse whitespace, drop leading article, drop trailing suffix — and is followed as normative, including that the article is dropped before the suffix is checked. And a name can normalize to nothing (the section's own example, "The Bar", loses its article and then its remaining content is entirely the trailing suffix): both sides of the comparison guard against this, because without it two such names would compare as identical and block each other, and an empty string would match every other name that also normalizes away to nothing.
-
-**Hidden bars were not actually hidden.** `GET /api/bars` and `GET /api/bars/:id` never filtered on `bars.status`, so a bar an admin hid stayed visible to every player who had already discovered it — a gap open since Phase 4, closed now that Phase 7 gave admins a way to hide a bar in the first place. Both endpoints now filter to `status = 'active'`. `POST /api/samples`'s discovery query and the check-in query in `routes/visits.ts` already filtered correctly. The leaderboard and badge queries deliberately ignore bar status: mastering is a completed visit, and hiding a bar afterwards must not revoke it. That is a rule, not an oversight.
-
-**Admin routes carry no rate limit.** Section 7.1's `RATE_LIMITS` names none for the admin surface, every admin route sits behind `requireAdmin`, and the admin account is the trust boundary those limits exist to protect in the first place. Recorded here as a decision so a future reader does not mistake the absence for a gap.
-
-**Admin-created and admin-edited bars are exempt from the duplicate guard.** Section 11.3 specifies the guard for community submissions; Section 9.3 says nothing about applying it to admin routes, and the admin is trusted to know what they are doing — including, deliberately, adding a second bar with a name close to an existing one.
-
-**Admin endpoints answer 403 to a logged-in non-admin, not 404.** The opposite of Section 9.5's bar rules, and deliberately so: there, hiding a bar's existence is the point; here, only the authority to act is secret, not the existence of `/api/admin/*` itself.
-
-### v1.6 — progress, leaderboard, and badges
-
-Recorded after Phase 6 was built. Four decisions the earlier text did not settle.
-
-**`BADGE_EVAL_INTERVAL_MS` joined Section 7.1's `CONFIG` block.** Section 7.7 specifies the badge job's cadence only in words ("shortly after each period closes") and names no evaluation interval, so CLAUDE.md's guardrail — every constant lives in `config.ts`, never inlined at a call site — admitted two readings: the constant is not "defined in the spec", but the same rule forbids inlining a timeout next to the `setInterval` that reads it, and `MAINTENANCE_INTERVAL_MS` was already sitting in the block for exactly the tick it serves. It lives in `config.ts` beside that sibling constant and is mirrored into this section, above. The value is hourly, and that is a decision worth recording rather than leaving as a bare number: the catch-up entry point (Section 7.9) is already idempotent and already knows, from the `UNIQUE` constraint, whether a given period was evaluated, so running it once an hour and re-running it on a period it already covered costs nothing extra — no cron parser or precise-boundary scheduling is needed to satisfy "shortly after".
-
-**Section 7.8's tie-break needed a reading.** "Earliest achievement" is well defined for a one-off event but not for a running total — a user's area percentage or bar count does not have a single instant it was "achieved" the way a badge award does. The adopted meaning, applied identically in `packages/api/src/badges.ts` and `routes/leaderboard.ts`: the instant a user's value last rose to what it now is. Concretely, `fog_state.updated_at` for all-time area (the mask's last write is the last time `revealed_cells` changed); the latest day among those summed into the period total for week/month area; and the completion that pushed a user's mastered-bar count to its current total for the bars metric. Users who never scored on a metric carry no achievement instant at all and fall through to the `users.id` tie-break, same as a genuine tie. This is recorded here as the normative reading so a future change does not re-derive a different one for the same words.
-
-**`GET /api/profile/:handle` resolves the `player-{id}` form for every user, not only anonymous ones.** Section 9.5, read literally, restricts only the *username* form for an anonymous user ("the username form returns 404 and only the handle form resolves, masked") and says nothing against the handle form also resolving a non-anonymous user. It does: a bare username still resolves only a non-anonymous user, so an anonymous user stays unreachable by their real username, but `player-{id}` now works for anyone. This discloses nothing the ranked list does not already — Section 7.8's leaderboard shows masked and unmasked entries side by side on the same page, so which numeric ids belong to real accounts is public by design there. What Section 9.5 actually protects is the path from a *known username* to a profile; that path stays closed for anonymous users exactly as written, and the byte-identical 404 (unknown user, anonymous-by-username, malformed handle) still holds.
-
-**The verification chain gained `pretest` and `pretypecheck`.** `packages/api` and `packages/web` resolve `@tipsytrails/shared` through a gitignored `dist`, and neither `pnpm test` nor `pnpm typecheck` rebuilt it — only the `prepare` hook did, and `prepare` covers installing, not editing. A signature-preserving break to a shared rule (`isVisitExpired`, changed to a threshold ten times too large) left `pnpm typecheck` at zero errors and the api suite covering visit expiry green, 26 of 26, because a behaviour change that keeps its signature produces no type error and the stale `dist` on disk was still the old, correct build. Stated plainly: for as long as this held, the four commands CLAUDE.md makes authoritative were testing the *previous* build of `packages/shared`, not the one on disk. `package.json` now runs the `shared` build as `pretest` and `pretypecheck`, so `pnpm test` and `pnpm typecheck` from the repository root are correct again. One gap is accepted rather than closed: a single package's tests invoked directly, as `pnpm --filter @tipsytrails/api test`, still bypasses both hooks and can read a stale `dist`. The four root commands remain the authoritative ones for exactly this reason.
-
-**The tile extract's size was measured, not estimated.** Sections 4.1, 4.3 and 13.2 all quoted "30–80 MB", a figure nobody had ever produced a file to check. Karlsruhe's extract, built for the Section 6.2 bounding box at zoom 0–14, is **9.4 MB**. The numbers are corrected where they informed a decision, and 13.2's reasoning is restated: GitHub's file-size limits were never the real argument for publishing the extract as a Release asset, so the decision now rests on the reasons that actually carry it — a new versioned file per regeneration, ODbL rather than MIT, and clone size. The v1.4 entry below keeps its original wording; it is a record of what was decided then.
-
-**`scripts/extract-tiles.sh` does not exist.** Section 4.2 lists it and `packages/api/src/app.ts` names it in the startup error logged when the extract is missing, but it was never written — Karlsruhe's extract was produced by invoking `planetiler` by hand. Recorded here rather than quietly dropped from the tree, because the error message currently points an operator at a file they cannot find.
-
-### v1.5 — check-in, mastering, and optional push
-
-Recorded after Phase 5 was built. Four decisions the earlier text did not settle.
-
-Section 9.2 gains `GET /api/push/vapid-public-key`, with the reasoning stated beside the table. It is a genuine addition to the endpoint surface rather than a clarification of one, so it is listed here as such.
-
-**The three `VAPID_*` variables are optional.** A deployment that does not set them boots normally, logs once that push is off, and runs every other feature. `PUBLIC_ORIGIN` and `SESSION_SECRET` remain the only variables the container refuses to start without. Push is an enhancement; making it a boot requirement would take down registration and the map over a notification. A partial configuration — some of the three but not all — is treated as a misconfiguration and warned about rather than left as a silent half-state, because it is far likelier to be a typo than an intent.
-
-**`purgeExpiredSessions` now takes an explicit `nowS`.** It previously read the clock itself and had no production caller at all. The maintenance tick (Section 7.9) needs the same statement against a time it controls, and re-deriving the query there would have left two copies of an auth-critical `DELETE` with the dead one easier to find. One statement, one caller, the time passed in.
-
-**`runMaintenanceTick` is asynchronous.** Push dispatch is network I/O, and the tick owns it. It still takes `nowS` as a parameter and still never reads the clock itself, which is what keeps it drivable across hours in a test without faking timers, and what makes it a pass over current state rather than a step forward from the last run — the property Section 7.9 relies on for a missed tick to be self-healing.
-
-### v1.4 — tile serving in the single-container deployment
-
-Sections 4.1 and 13.2 assumed Caddy would serve `/tiles/*` and that `docker compose up` would fail outright when the extract was missing — both true only of the standalone two-container path (Section 4). The single-container deployment that actually runs on the Pi (v1.2.2) has no Caddy in front of the API, so neither assumption held, and Phase 2 could not be built against them (`HANDOVER.md` §4.3).
-
-Closed the gap. The API now serves `/tiles/*` itself in that deployment, with HTTP range support stated as mandatory rather than an optimisation — PMTiles fetches small byte ranges out of one large file, and ignoring `Range` would force the whole 30–80 MB extract down the wire on every map view (Section 4.1). The extract lives on the platform's mounted data volume rather than in the image, under a directory named by the new `TILES_DIR` environment variable (default `/data/tiles`, mirroring `DATABASE_PATH`'s convention in `packages/api/src/env.ts`); see Section 4.3.
-
-Section 13.2's "fails to start" behaviour is now explicitly scoped to the standalone compose path. Refusing to boot the single container over a missing map file would take down registration, login, and every other feature over something only the map needs — a deliberate difference from the standalone path, stated as such rather than left implicit. Instead the API always starts, logs the absence loudly at startup with the download URL and the regeneration script, and answers `/tiles/*` with a clear, client-surfaceable error.
-
-Section 4.1's cache table is unchanged in its values but now says which component applies them per deployment: Caddy in the standalone path, the API itself in the single container. The Cloudflare Cache Rule remains required either way — it is edge configuration, not an origin concern.
-
-Section 9.2 gains the tile route, marked unauthenticated and cacheable — the one path under the API's control deliberately not `private, no-store`. Section 9.4's `trustProxy` description, stale since the single-container topology replaced the two-container tunnel (v1.2.2), is corrected to describe trusting exactly one hop. Phase 2's Definition of Done gains a `206 Partial Content` check.
-
-### v1.3 — city-parameterised data pipeline
-
-Phase 2 needs a district-boundary fetch and a tile extract, and both need OSM data hosts (Overpass, Geofabrik) the implementing agent's sandbox cannot reach. Those scripts are specified as something the project owner runs locally instead — but C10 already commits this project to a multi-city data model, and a pipeline hard-coded to Karlsruhe would just have to be generalised the first time a second city is added. Added Section 11.4: a per-city `data/cities/<slug>.json` config file that is the single seam feeding both the scripts and the `cities` row (5.1), `scripts/fetch-boundaries.ts` for district and neighbour geometry, and the same idempotent, network-scoped, fail-loud posture already established for `import-osm-bars.ts` (11.2) extended across the whole chain. Section 4.2's tree updated to a per-city `data/seed/<slug>/` layout and the new script; Section 6.2 notes that Karlsruhe's grid parameters now live in `data/cities/karlsruhe.json`, with the table there kept as a human-readable copy.
-
-### v1.2.2 — single-container deployment path
-
-Section 4's architecture puts Caddy in front of a separate API container, one
-service per concern. The Raspberry Pi now also runs a small multi-site
-platform: several unrelated projects share the Pi, each as one container
-listening on `PORT` with its SQLite path at `DB_PATH`, sitting behind a single
-Caddy instance the platform owns rather than one this repository ships. That
-container can't run its own Caddy in front of itself, so the API serves the
-built SPA directly through `@fastify/static`, and the cache rules Section 4.1
-described for Caddy — immutable hashed assets, revalidated `index.html` — are
-reproduced in Fastify instead.
-
-The two-container arrangement in Section 4 is not replaced by this. It is
-still what `docker-compose.yml` and `caddy/Caddyfile` provide, and remains
-correct for anyone self-hosting the project outside the Pi's platform. The
-diagram in Section 4 describes that standalone path, not the Pi's.
-
-### v1.2.1 — repository rename
-
-Repository renamed to `TipsyTrails` and the public host to `tipsytrails.ahultsch.com`. The public URL stays HTTPS: the session cookie carries the `Secure` flag (Section 10.1) and would not be sent over plain HTTP. Package manager pinned to pnpm 10, which is what the toolchain provides.
-
-### v1.2 — optimisation pass on v1.1
-
-Corrections (things that were wrong or unbuildable as written):
-
-1. **Visit duration unit mismatch.** `confirmed_ms` was defined as `last_sample_at - started_at`, but those columns are epoch *seconds* while `VISIT_REQUIRED_MS` is 1,200,000 ms — a visit would have needed ~14 days to complete. Renamed to `confirmed_s`, added the global unit rule (Section 0, rule 6) and a single `DERIVED` conversion block.
-2. **Period-scoped progress was not computable.** Badges (7.7) and the leaderboard's week/month filters (7.8) both need "area newly revealed in the period", but the schema stored only a mask with no history. Added `fog_daily_progress`.
-3. **Nothing expired visits or sent the reminder push.** Both were specified as behaviour with no mechanism. Added Section 7.9 (maintenance tick + lazy evaluation on read) and `push_sent_at`.
-4. **No password-change endpoint existed**, although 13.4 requires the seeded admin to change its password on first login. Added `must_change_password`, `POST /api/auth/change-password`, and the forced-change screen.
-5. **Per-IP rate limiting would have been global.** Behind Cloudflare Tunnel every request arrives from `cloudflared`; without a trusted forwarded header all users share one bucket. Specified in 9.4 and made a Phase 1 DoD item.
-6. **CSP would have broken the map.** MapLibre creates workers from blob URLs; the v1.1 policy had no `worker-src`. Full baseline policy now in 10.1.
-7. **Phase 2's "< 200 KB gzipped initial JS" is not achievable** — MapLibre GL v4 alone is ~230 KB gzipped. Replaced with a shell budget plus a code-split map chunk.
-8. **Tile cache-busting.** A 30-day cache on a stable `karlsruhe.pmtiles` filename makes regenerated tiles unreachable for a month. Filename now carries a version segment from `CONFIG.TILES_FILENAME`.
-9. **Cloudflare does not cache `.pmtiles` by default**, so Phase 2's `cf-cache-status: HIT` check could never have passed. Cache Rule requirement added to 4.1.
-10. **`GET /api/bars/:id` returning 403 for undiscovered bars leaks their existence**, contradicting 7.4. Unified to 404, alongside the other non-leaking responses now collected in 9.5.
-11. **Username enumeration via the reset flow.** `GET /api/auth/reset/question` revealed which usernames exist. Now returns a stable HMAC-derived decoy for unknown names.
-12. **Mask size stated as ~16 KB in 5.5 and ~18 KB in 6.2.** Computed once and unified: 417 × 343 = 143,031 cells, ~17.5 KiB.
-13. **Node 20 leaves LTS maintenance in April 2026.** Moved to Node 22 LTS.
-14. **Cross-reference error:** 4.2 pointed at Section 14 for the licence; it is Section 13.
-15. **Admin screen listed "community submission review"** although 11.3 makes submissions live immediately — there is no review queue. Renamed to moderation.
-
-Additions (gaps that were not contradictions but would have caused a stop-and-ask):
-
-16. Package manager named (pnpm), `SPEC.md` and `pnpm-workspace.yaml` added to the tree.
-17. `schema_migrations` tracking made explicit; `grid-meta.json` added so `playable_cells` is never hand-typed.
-18. Sliding-session refresh threshold, session purge, and an `expires_at` index — v1.1 implied a database write per request.
-19. Partial unique index preventing duplicate pending visits at one bar; server-side re-validation of check-in proximity; `VISIT_MIN_ONSITE_SAMPLES`.
-20. Sample validation extended with clock-skew and staleness rules and a batch size cap.
-21. Deletion semantics for bars submitted by a deleted account; password confirmation on account deletion; session invalidation on password reset; push-endpoint cleanup on 404/410.
-22. Duplicate-guard similarity defined concretely rather than as "similar name".
-23. Leaderboard tie-breaking and paging; anonymous-profile addressing.
-24. Accessibility criteria for Phase 8, and the note in 8.1 that the monochrome direction must not cost contrast.
-25. `better-sqlite3` arm64 build note, Pi build memory and swap guidance.
-26. Rate limits, GPS thresholds, duplicate radius, and page size moved into `config.ts` as rule 3 requires.
-27. Explicit statements of accepted trade-offs so they are not "fixed" later: the teleport guard's memory-only reference, the check-in return trip (O9), the equirectangular longitude scale, and revealable-but-unscored cells outside districts.
+A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
+
+- **v1.33** — Review pass over this document: eight confirmed inaccuracies corrected, Section 7.1's constants block completed against `config.ts`, changelog compressed, open items re-audited (O1, O8 and O9 removed as resolved; O18 and O19 added).
+- **v1.32** — The wordmark goes on every main screen at two prominences (hero and chrome); `/app` becomes a real start screen — one action, the player's three figures, a fogged city outline behind them. Section 8.2 corrected: there is no webfont in this repository and never was. Sections 8.1, 8.2, 8.3. O17 added, O2 narrowed.
+- **v1.31** — A player's own profile shows a placeholder for every badge type they have never held, carrying nothing that changes as their own value changes. Section 8.1's "never colour alone" generalised to "never grey alone". Section 7.7. O16 added.
+- **v1.30** — Discovering a bar becomes a stamp pressed onto the map at the bar, with one spoken announcement per batch; Section 8.3 gains the distinction between screen-anchored overlays and ground-anchored marks. Sections 7.4, 8.2, 8.3.
+- **v1.29** — Every bar the API returns carries a per-user `mastered` flag, asked once per request rather than once per bar; the cocktail glass becomes the mark for a bar, with two states. Sections 5.7, 8.1.
+- **v1.28** — The fog's density varies across the city from a noise field instead of one flat alpha; `FOG_MAX_OPACITY` becomes a ceiling; the fog shader moves to `highp`. Section 7.3.
+- **v1.27** — The map stops announcing revealed cells; a district link carries the district's bounding box and the map is built framed on it; district borders are drawn dashed, above the fog. Sections 7.3, 8.3.
+- **v1.26** — `POST /api/samples` answers with `tooFastToReveal`; the check-in radius drops from 50 + 50 m to 30 + 20 m. Sections 7.3, 7.5.
+- **v1.25** — The connection indicator measures the sample queue's *progress* rather than its depth; the map's camera is capped at pitch 0 while rotation stays. Sections 8.3, 8.6. O15 opened.
+- **v1.24** — Cancelling a visit works (a bodyless request must not declare a JSON content type); the banner refetches on `visibilitychange`; duplicate venues are collapsed at import under `IMPORT_DUPLICATE_RADIUS_M`. Sections 5.7, 7.5, 11.1. O14 narrowed.
+- **v1.23** — `viewport-fit=cover` added to the viewport meta tag, without which iOS reports no safe area at all; both insets read from one named token each. Section 8.2.
+- **v1.22** — The burger menu becomes a five-tab bottom bar plus a More sheet; `/privacy` gains its own back link for a signed-out reader. Section 8.4.
+- **v1.21** — The admin bar list is ordered by a German-pinned `Intl.Collator` shared by API and screen, not by SQL `COLLATE NOCASE`. Section 9.3.
+- **v1.20** — The bar import widens to `bar=yes` regardless of `amenity`, catching venues OSM files under their primary business. Section 11.1.
+- **v1.19** — The map's overlays become one band layout instead of independent offsets; the OSM attribution gets a band of its own. Section 8.3.
+- **v1.18** — `POST /api/visits/:id/cancel` built; the banner renders the server's `confirmedS` and `remainingS`. Sections 5.7, 7.5, 9.2. O14 added.
+- **v1.17** — Check-in moves onto the bar's marker and into a sheet on the map screen; `/bars/:id` carries none. Sections 7.5, 8.3.
+- **v1.16** — The fog edge becomes a boundary rather than a 190 m fade, fixed by two related constants; the fog quad is rebuilt each frame from the camera's bounds; minor roads added below the fog; "to my location" sets `MAP_DEFAULT_ZOOM`. Sections 7.3, 8.3.
+- **v1.15** — The status palette's deferred values are decided against Section 8.6's contrast bounds, and two consequences of that arithmetic recorded.
+- **v1.14** — Seven decisions from the third round of field feedback: the fog moves down the layer order with water and both road layers above it; the status indicator becomes three fixed-shape icons, costing the palette its single-accent rule; check-in moves to the marker; visits become cancellable; the banner's confirmed figure becomes the server's; overlays may not obscure one another; the map opens at zoom 16. Sections 7.3, 7.5, 8.1, 8.3, 8.6.
+- **v1.13** — The fog is inserted beneath the motorway layer rather than over the whole style, and its opacity rises and moves into `CONFIG.FOG_MAX_OPACITY`. Section 7.3. O13 opened.
+- **v1.12** — Badges become a per-period competition decided on the highest score; the threshold survives only as a hidden floor; a tie awards everyone tied at the top. Section 7.7.
+- **v1.11** — Section 4.3 corrected against the Pi's real `sites.conf`, `deploy.sh`, `docker-compose.yml` and `Caddyfile`, pasted by the owner on 2026-08-19. O10 widened to cover the unread `trusted_proxies` / `header_up` configuration.
+- **v1.10** — First rewrite of the Pi contract, and VAPID keys move out of the environment onto the data volume. Sections 4.3, 5.9, 10.1. O10 opened. **Superseded by v1.11**: this entry's claim to have read the platform repository was false, and several details taken second-hand from it were wrong.
+- **v1.9** — `/sw.js` and `/icons/*` added to the cache table; `scripts/rebuild-grid.ts` written as a stub that refuses to run. Sections 4.1, 6.2.
+- **v1.8** — Phase 8. One service worker owns both the offline shell and Web Push; the client fog cache is keyed per user and cleared on logout; the privacy page's three overclaims corrected; the own-position marker built. Sections 4.1, 10.2, 10.3, 11.4.
+- **v1.7** — Phase 7. The duplicate guard's four ambiguous readings settled; hidden bars actually hidden from player-facing reads while mastering survives hiding; the admin surface's missing rate limit, its 403, and its duplicate-guard exemption recorded as decisions. Sections 5.7, 9.3, 9.4, 11.3.
+- **v1.6** — Phase 6. `BADGE_EVAL_INTERVAL_MS` added; "earliest achievement" given a normative definition; `player-{id}` resolves for every user; `pretest`/`pretypecheck` added after a stale `dist` hid a real break; the tile extract measured at 9.4 MB against a 30–80 MB estimate. Sections 3, 7.1, 7.8, 9.5, 13.2.
+- **v1.5** — Phase 5. `GET /api/push/vapid-public-key` added; the three `VAPID_*` variables made optional; the maintenance tick made asynchronous and clock-free. Sections 7.9, 9.2.
+- **v1.4** — The API serves `/tiles/*` itself in the single-container deployment, with range support mandatory; a missing extract no longer refuses boot there. Sections 4.1, 4.3, 9.2, 13.2.
+- **v1.3** — The data pipeline is city-parameterised from the start: `data/cities/<slug>.json` as the single seam, `fetch-boundaries.ts`, per-city `data/seed/<slug>/`. Section 11.4.
+- **v1.2.2** — A single-container deployment path added beside the standalone two-container one; the API serves the built SPA and reproduces Caddy's cache rules. Sections 4, 4.1.
+- **v1.2.1** — Repository renamed to `TipsyTrails`, public host to `tipsytrails.ahultsch.com`, package manager pinned to pnpm 10.
+- **v1.2** — Optimisation pass on v1.1. Fifteen corrections of things that were wrong or unbuildable — the `confirmed_ms`/seconds unit mismatch, period-scoped progress being uncomputable without `fog_daily_progress`, nothing expiring visits or sending the reminder, no password-change endpoint, per-IP limiting that would have been global, a CSP with no `worker-src`, an unachievable bundle budget, a tile filename with no version segment, Cloudflare not caching `.pmtiles`, a 403 that leaked undiscovered bars, username enumeration through the reset flow, two different mask sizes, Node 20's LTS end, a wrong cross-reference, and a review queue that does not exist — plus twelve additions. All folded into the sections above.
+
+### Reversed decisions, and other traps worth guarding
+
+Kept only where a future reader might otherwise re-propose the reverted thing and re-break it.
+
+1. **Badges are a competition, not a participation floor** (v1.12 reversed v1.1). Raising a threshold does not make a badge harder to win — it only makes "nobody won" likelier. Section 7.7.
+2. **There is a bottom tab bar** (v1.22 reversed this document's own "no bottom tab bar, no other persistent chrome"). Section 8.4.
+3. **The fog quad must never be a fixed rectangle derived from the city extent, and `FOG_VIEWPORT_PADDING_RATIO` must never be merged with `MAP_BOUNDS_PADDING_RATIO`** (v1.16). Sharing them is what left the corners of a rotated map bare. Section 7.3.
+4. **Roads and water are drawn _above_ the fog, not faintly through it** (v1.13, v1.14 reversed v1.1's "roughly 25% opacity beneath"). Section 7.3.
+5. **`FOG_MAX_OPACITY` is a ceiling, not the fog's alpha** (v1.28). Three consumers read it wanting the darkest ground the fog can produce; a variation that went upward would understate all three. Section 7.1.
+6. **No webfont** (v1.32). Adding a third family is a decision about the whole application, argued in Section 8.2 or not at all.
+7. **A request with no body must never set `Content-Type: application/json`** (v1.24). Fastify rejects it with a 400 before any handler runs, and a test with a stubbed `fetch` cannot see it. Section 7.5.
+8. **The nearby-bars panel is a statement, never a control** (v1.14, v1.17). It is what makes two neighbouring bars separable. Section 7.5.
+9. **The pending banner shows the server's `confirmed_s`** — never a client clock counting from check-in, and never a figure frozen while the player is standing in the bar either (v1.14, v1.18). Section 7.5.
+10. **`BAR_ONSITE_RADIUS_M` and `BAR_ACCURACY_TOLERANCE_M` stay two constants** (v1.26). Folding the tolerance into the base radius makes check-in impossible on a poor fix rather than merely harder.
+11. **`SUGGEST_DUPLICATE_RADIUS_M` and `IMPORT_DUPLICATE_RADIUS_M` stay separate** (v1.24). Loosening the import must not loosen what a player may submit. Section 11.1.
+12. **The connection indicator must not be derived from the queue's depth** (v1.25). Batching means a healthy phone almost always has something queued. Section 8.6.
+13. **The longitude scale is evaluated once at `origin_lat`, never at the sample latitude** (Section 6.1). "Fixing" it makes cells non-uniform and breaks the packed grid.
 
 ---
 
-*End of specification v1.32*
+_End of specification v1.33_
