@@ -675,9 +675,20 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
               ? (district.revealed_cells / district.playable_cells) * 100
               : 0,
         })),
-        // Section 7.6 also defines "bars mastered" here; mastering depends on
-        // visits (Phase 5), not built yet, so the field is omitted rather
-        // than sent as a fabricated zero.
+        // A known gap, deliberately left rather than quietly closed.
+        // SPEC.md Section 9.2's endpoint table says this route answers with
+        // "City + per-district progress, bars mastered", and Section 7.6
+        // defines that figure - but no `barsMastered` is sent here, and the
+        // comment that used to sit in this place explained the omission by
+        // saying visits were "not built yet". They are: routes/visits.ts
+        // exists, and `barsMastered` is computed and returned by both
+        // GET /api/profile/:handle and GET /api/admin/users, so the reason
+        // recorded here outlived the condition that produced it.
+        //
+        // Adding the field is a change to a response shape rather than a
+        // comment fix, so it is not made in a behaviour-preserving pass.
+        // Either the field is added or the spec drops the promise; until one
+        // of those happens this is the honest description of the state.
       };
     });
   };

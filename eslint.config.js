@@ -11,8 +11,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    // Phase 5 step 5: the one hand-written, non-Vite-processed browser
-    // script in the repo (packages/web/public/push-sw.js) - it runs in a
+    // The one hand-written, non-Vite-processed browser script in the repo
+    // (packages/web/public/sw.js, which absorbed the separate push worker
+    // this rule was first written for) - it runs in a
     // ServiceWorkerGlobalScope, not the `window` every other web/src file
     // assumes, so it needs its own globals rather than tsconfig's DOM lib
     // (which TS-aware files get for free; this plain .js file does not go

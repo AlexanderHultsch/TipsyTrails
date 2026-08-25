@@ -21,7 +21,7 @@ import type { BarSource, BarStatus } from './bars.js';
 // SPEC.md Section 9.3, Phase 7 step 2: the admin area. Every route here sits
 // behind requireAdmin (auth/cookie.ts) — a logged-in non-admin gets 403, an
 // unauthenticated caller gets 401 from requireAdmin itself. Bar creation and
-// the move-a-bar recompute reuse routes/fog.ts's resolveCellAndDistrict,
+// the move-a-bar recompute reuse city-grid.ts's resolveCellAndDistrict,
 // the same computation routes/bars.ts's suggest handler uses, rather than a
 // third copy of it.
 

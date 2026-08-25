@@ -2,8 +2,10 @@ import type { ReactElement } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from './CurrentUserContext.js';
 
-// Signed-in and not forced through a password change. Used for the
-// authenticated placeholder at /app.
+// Signed-in and not forced through a password change. Wraps every
+// authenticated route, /app included - which is the start screen
+// (screens/AppHome.tsx, SPEC.md Section 8.3), not the stub it was when this
+// guard was written.
 export function RequireAuth({ children }: { children: ReactElement }): ReactElement | null {
   const { user, loading } = useCurrentUser();
   if (loading) {
