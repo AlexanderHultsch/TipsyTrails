@@ -598,18 +598,21 @@ describe('App', () => {
       moreButton.click();
     });
 
-    // "Report a bug" carries a second line of its own, so its textContent is
-    // the label and that line run together. It is matched here as the whole
-    // string rather than loosened to a substring: this list is the sheet's
-    // order and its contents, and a note that silently disappeared would be
-    // the kind of change it exists to catch.
+    // Matched as whole strings rather than loosened to substrings: this list
+    // is the sheet's order and its contents, and text creeping back onto an
+    // item is the kind of change it exists to catch. "Report a bug" carried
+    // two lines until v1.40 - a "(opens a new tab)" suffix and a second line
+    // about GitHub asking for an account - and the owner cut both from the
+    // screen ("remove the rest of the text"). The new-tab warning did not
+    // leave the item, it moved into the accessible name, which is asserted
+    // where the rest of that item's contract is.
     const entries = container.querySelectorAll('.more-sheet__panel a, .more-sheet__panel button');
     expect(Array.from(entries).map((entry) => entry.textContent)).toEqual([
       'Suggest a bar',
       'How mastering works',
       'Settings',
       'Privacy',
-      'Report a bug on GitHub (opens a new tab)A GitHub account is required.',
+      'Report a bug on GitHub',
       'Log out',
     ]);
 
@@ -716,12 +719,28 @@ describe('App', () => {
     expect(report?.getAttribute('rel')).toContain('noopener');
     expect(report?.getAttribute('rel')).toContain('noreferrer');
 
-    // Said on the item itself, both halves: that it leaves the app, and
-    // that GitHub will ask for an account a player may not have.
-    expect(report?.textContent).toContain('opens a new tab');
-    expect(report?.querySelector('.more-sheet__item-note')?.textContent).toContain(
-      'GitHub account',
+    // Since v1.40 the screen says five words and the accessible layer says
+    // seven, and both halves of that are load-bearing.
+    //
+    // The visible label is exactly what the owner asked for, with nothing
+    // trailing it: "Report a bug on GitHub (remove the rest of the text)".
+    expect(report?.textContent).toBe('Report a bug on GitHub');
+    expect(report?.textContent, 'the suffix the owner cut is back on the screen').not.toContain(
+      'opens a new tab',
     );
+
+    // The unexpected context change is still announced, because a tap that
+    // swaps the app for a browser tab cannot be undone with the back gesture
+    // and a screen reader user gets the least warning of it. WCAG 2.5.3
+    // wants the visible label inside the accessible name, so the name is the
+    // label plus the warning and in that order - a voice-control user saying
+    // the words they can see still hits this item.
+    const name = report?.getAttribute('aria-label') as string;
+    expect(name).toBe('Report a bug on GitHub, opens a new tab');
+    expect(
+      name.startsWith(report?.textContent as string),
+      'the accessible name no longer contains the visible label (WCAG 2.5.3)',
+    ).toBe(true);
   });
 
   // Two things the tab list above cannot see, and both survived a mutation

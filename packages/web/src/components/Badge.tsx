@@ -8,8 +8,8 @@ import type { BadgeKind, BadgeSummary } from '../api/types.js';
 // leaderboard rows.
 //
 // THE GLYPH IS TWO PARTS AND EACH CARRIES ONE AXIS. The pictogram carries the
-// kind - a compass rose for `explorer`, a highball with a straw and a garnish
-// for `barfly` - and a modifier drawn *above* it carries the period: nothing
+// kind - a compass in its case for `explorer`, a highball with a straw and a
+// garnish for `barfly` - and a modifier drawn *above* it carries the period: nothing
 // for a week, a star for a month, a crown for a year. That replaced a ring
 // frame whose stroke count (one, two, three) used to carry the period, and the
 // reason is that a count of thin concentric circles is a counting task at
@@ -43,22 +43,44 @@ const badgePeriodLabel = (period: BadgePeriod): string => BADGE_PERIOD_NAME[peri
 // therefore a little low in its box, on purpose. What is left over at the
 // edges is the margin the placeholder's frame sits in.
 //
-// No fill-rule is set and none is wanted: nothing here is a shape with a hole
-// in it, and the barfly's three subpaths overlap deliberately - the straw
-// crosses the rim, the garnish sits on it - which the default nonzero rule
-// merges into one silhouette where `evenodd` would punch the overlaps out.
+// No fill-rule is set and none is wanted, and the two pictograms need
+// opposite things from that one decision. The barfly's three subpaths overlap
+// deliberately - the straw crosses the rim, the garnish sits on it - which the
+// default nonzero rule merges into one silhouette where `evenodd` would punch
+// the overlaps out. The compass has the one hole in this file, and it is made
+// by *winding* rather than by a rule: its inner circle runs opposite to its
+// outer one, so nonzero cancels the two to nothing and hollows the case, while
+// its needle runs with the outer circle and therefore adds to the case where
+// the two meet at north instead of cutting a notch out of it. Setting
+// `evenodd` here would hollow the compass just as well and break the highball,
+// which is why the winding carries it and no attribute does.
 
 // The kind, as one solid pictogram.
 //
-// `explorer` is a compass rose and not the lozenge it replaced: four long
-// cardinal points at radius 8.4, four short intercardinals at 4.6, and a waist
-// of 3.2 between them. Those last two numbers are the whole of what makes it
-// legible small: an earlier version had a 2.45 waist, which is a truer rose on
-// paper and collapsed into a lumpy diamond at a leaderboard row's size,
-// because a point whose base is under two units is under one device pixel
-// there. Widening the waist trades a little of the drawing for arms that
-// survive. It is the one shape here that is genuinely about direction, which
-// is what the badge is for.
+// `explorer` is a compass in its case: a ring of outer radius 8.4 and wall
+// 2.4, with a north-pointing needle inside it - 10.5 units long, 5.5 wide at
+// its notched tail, its tip running the last 0.8 of a unit into the wall so
+// the needle points *at* the case rather than stopping short of it.
+//
+// IT IS NOT THE BARE ROSE IT REPLACED, and the owner's "can we make it a
+// compass or something similar" is why. What was there was already a compass
+// rose - four long cardinal points, four short intercardinals - which is a
+// true rose on paper and, at the size this is actually drawn at, a star. The
+// month modifier above it *is* a star, so "Explorer Champion" was a star under
+// a star: the kind and the period drawn in one visual language, which is the
+// one thing this two-part glyph may not do. The case is what separates them. A
+// ring has a closed outer silhouette, which nothing else in this file has and
+// no star can be mistaken for, and a closed outline is exactly the feature
+// that survives being made small.
+//
+// What the rasteriser showed at 20 device pixels - the 1.25rem a leaderboard
+// row gives the whole 32-unit box - is that the case is continuous and the
+// needle keeps ground around it: the wall lands at 1.5 px, the faintest pixel
+// anywhere along the ring's centre line is 61% covered, and 20 of the 44
+// pixels inside the case stay under a quarter inked. The old rose at the same
+// size was a 6 x 6 px cross with no closed outline at all. None of that says
+// it *reads* as a compass; a rasteriser cannot say that and neither can any
+// test here. See the note on the modifiers below, which is the same limit.
 //
 // `barfly` is a cocktail glass that is deliberately **not** the martini of
 // Section 8.1. That silhouette - a wide triangular bowl on a stem and a foot -
@@ -73,9 +95,9 @@ const badgePeriodLabel = (period: BadgePeriod): string => BADGE_PERIOD_NAME[peri
 // and nothing at the top corners of the box for the two to be confused in.
 const BADGE_MARK_PATH: Record<BadgeKind, string> = {
   explorer:
-    'M16 12.4 L17.22 17.84 L19.25 17.55 L18.96 19.58 L24.4 20.8 L18.96 22.02 L19.25 24.05 ' +
-    'L17.22 23.76 L16 29.2 L14.78 23.76 L12.75 24.05 L13.04 22.02 L7.6 20.8 L13.04 19.58 ' +
-    'L12.75 17.55 L14.78 17.84 Z',
+    'M7.6 20.8 A8.4 8.4 0 1 1 24.4 20.8 A8.4 8.4 0 1 1 7.6 20.8 Z' +
+    'M10 20.8 A6 6 0 1 0 22 20.8 A6 6 0 1 0 10 20.8 Z' +
+    'M16 14 L18.75 24.5 L16 22.6 L13.25 24.5 Z',
   barfly:
     'M10.5 15.4 L19.3 15.4 L18.3 29.2 L11.5 29.2 Z' +
     'M14.17 27.5 L22.27 13.4 L20.53 12.4 L12.43 26.5 Z' +

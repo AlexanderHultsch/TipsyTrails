@@ -732,31 +732,17 @@ button:focus-visible,
   background: var(--color-border);
 }
 
-/* The one item in the sheet that leaves the application (Section 8.4's
-   "Report a bug"). It carries a second line saying a GitHub account is
-   needed, so it stacks where every other item is a single centred line -
-   scoped through .more-sheet__items so it outranks that rule's
-   `align-items: center`, which would otherwise centre the two lines
-   horizontally.
-
-   The 44 px minimum of Section 8.2 is inherited from the rule above and is
-   a floor, not a height: two lines are taller than that and the padding
-   still applies. */
-.more-sheet__items .more-sheet__external {
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 0.125rem;
-}
-
-/* Secondary to the label above it, at the size and weight the two badge
-   notes already use for the same job. Ink drawn back rather than a colour of
-   its own (Section 8.1), and 0.75 keeps it at 7.1:1 on paper - well clear of
-   Section 8.1's 4.5:1 floor for body text. */
-.more-sheet__item-note {
-  font-size: 0.875rem;
-  opacity: 0.75;
-}
+/* THE ONE ITEM IN THE SHEET THAT LEAVES THE APPLICATION (Section 8.4's
+   "Report a bug") HAS NO RULE OF ITS OWN SINCE v1.40, and the absence is the
+   note. It used to stack two lines - the label, and a second line saying a
+   GitHub account is needed - so it needed `flex-direction: column` scoped
+   through .more-sheet__items to outrank the `align-items: center` above, plus
+   a .more-sheet__item-note rule for the smaller second line. The owner cut the
+   second line ("Report a bug on GitHub (remove the rest of the text)"), so the
+   item is one line like every other item in the sheet and the rule above is
+   the whole of what it needs. The class stays on the anchor as the hook the
+   tests find it by; the rules are gone rather than left behind styling
+   nothing. */
 
 .more-sheet__divider {
   margin: 0.75rem 0;
@@ -977,10 +963,22 @@ button:focus-visible,
    corner, present whether or not tiles loaded - rendered as an ordinary DOM
    element rather than left to MapLibre's own attribution control so it
    never depends on the map or its sources having loaded successfully. Laid
-   out by row 4, at the opposite end from the locate button. */
+   out by row 4, at the opposite end from the locate button.
+
+   ITS PLATE IS THE QUIETER OF THE TWO AND IT IS NOT ALLOWED TO BE ABSENT. The
+   owner asked for both plates to be lighter and said of this one that he does
+   not care whether it is visible; the first half is done here (0.85 -> 0.5,
+   the same cut the wordmark's plate takes and a little further) and the second
+   half is not this application's to grant. Section 10.5 is a licence
+   obligation and the word in it is *legible*: "persistent, legible
+   attribution ... This is a licence obligation, not a design option." So the
+   plate goes down to where the text still clears Section 8.1's 4.5:1 for body
+   text against the darkest ground this map can produce, and no further - 4.72:1
+   there, 12.46:1 over the densest fog. The rule that fixes "there" is on
+   `.map-overlays .wordmark` below, where the argument is written out once. */
 .map-attribution {
   padding: 0.25rem 0.5rem;
-  background: rgba(244, 239, 230, 0.85);
+  background: rgba(244, 239, 230, 0.5);
   border-radius: 4px;
   font-size: 0.75rem;
   color: var(--color-ink);
@@ -991,14 +989,41 @@ button:focus-visible,
    typography is .wordmark's, once, for every screen.
 
    The plate is the treatment .map-attribution above and Section 7.4's stamp
-   caption already use for text over the map, and it is here for the reason
-   they have it: the ground under this corner is anything from bare paper to
-   fully fogged terrain to a run of black road lines, and ink straight onto
-   that is a contrast floor nobody can state. Composited over the densest fog
-   Section 7.3 produces it is 14.3:1 for ink, which App.branding.test.tsx
-   computes from this rule rather than from a number written down beside it.
-   On the screens where .wordmark--chrome sits on the paper ground instead,
-   the same fill is paper over paper and simply disappears.
+   caption already use for text over the map - a paper fill and a 4 px radius,
+   though since v1.40 no longer the same alpha as the caption's - and it is
+   here for the reason they have it: the ground under this corner is anything
+   from bare paper to fully fogged terrain to a run of black road lines, and
+   ink straight onto that is a contrast floor nobody can state. On the screens
+   where .wordmark--chrome sits on the paper ground instead, the same fill is
+   paper over paper and simply disappears.
+
+   IT WAS 0.85 UNTIL v1.40 AND THE OWNER CALLED IT TOO MUCH: "the background of
+   the logo and the OpenStreetMap contributors is too much. Maybe more
+   transparency? ... the logo needs to be visible but I think it can be done
+   with less." How much less is not a matter of taste, and the fog on its own
+   is the wrong place to decide it. Over the densest fog Section 7.3 produces,
+   ink is already 9.97:1 with no plate at all, so against bare fog this plate
+   has never been doing anything a contrast floor can see. What it is for is
+   the map's own ink under the text - and that is not only revealed ground,
+   because Section 7.3 draws the major roads and the water *above* the fog. A
+   major road over the densest fog is the darker of the two cases, not the
+   lighter: rgb(97, 94, 87) against rgb(114, 111, 106) on bare paper, 2.68:1
+   for ink on it with no plate.
+
+   The binding ground is therefore the darkest pixel map/ink-style.ts can
+   produce, and that is a number rather than a guess: every layer in that file
+   paints INK (#1c1a17) at some opacity over PAPER, so no stack of them is ever
+   darker than INK itself, and contrast for ink text on a paper plate falls
+   monotonically as the ground darkens. Solid ink is the worst case there is,
+   it is reachable - a motorway crossing a primary is 0.84 of it before the
+   minor streets and building outlines under them are counted - and this plate
+   is set to clear Section 8.1's 4.5:1 there: 6.20:1 against solid ink at 0.6,
+   12.94:1 over the densest fog, against 4.5:1 needed and 11.20:1 / 14.35:1 for
+   the 0.85 it replaces. Below alpha 0.49 the guarantee is gone (0.4 is 3.47:1
+   against solid ink), which is the floor under both plates and the reason the
+   attribution stops at 0.5. App.branding.test.tsx computes all of this from
+   the two rules rather than from numbers written down beside them, so thinning
+   a plate again fails the suite rather than the eye.
 
    pointer-events: none, and it is the point of scoping this rule to the
    overlay container at all. `.map-overlays > * > *` gives every child of a row
@@ -1016,7 +1041,7 @@ button:focus-visible,
    on source order at equal specificity. */
 .map-overlays .wordmark {
   padding: 0.25rem 0.5rem;
-  background: rgba(244, 239, 230, 0.85);
+  background: rgba(244, 239, 230, 0.6);
   border-radius: 4px;
   pointer-events: none;
 }

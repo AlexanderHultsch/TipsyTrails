@@ -958,18 +958,90 @@ describe('text over the new grounds clears 4.5:1 (SPEC.md Section 8.1)', () => {
     ).toBe(true);
   });
 
-  it('ink on the wordmark’s plate over the densest fog the map produces', () => {
+  // THE TWO PLATES THE MAP CARRIES TEXT ON, and since v1.40 they are measured
+  // against the ground that decides them rather than against the one that is
+  // merely easy to name. Section 8.3 (the wordmark's) and Section 10.5 (the
+  // attribution's, where legibility is a licence obligation and not a
+  // preference).
+  const MAP_PLATES = ['.map-overlays .wordmark', '.map-attribution'];
+  const plateOf = (selector: string) => rgbaOf(cssRuleBody(css, selector), 'background');
+
+  // The map's own ink, read out of the style that paints the map rather than
+  // copied into this file. map/ink-style.ts holds PAPER and INK as literals
+  // kept in sync with these two tokens by hand - a MapLibre style is plain
+  // JSON and cannot read a custom property - so reading it back here is also
+  // the only check anywhere that the hand has kept up.
+  const mapInk = (): [number, number, number] => {
+    const source = readFileSync(fileURLToPath(new URL('./map/ink-style.ts', here)), 'utf-8');
+    const match = source.match(/const INK = '(#[0-9a-fA-F]{6})'/);
+    if (!match) {
+      throw new Error('map/ink-style.ts no longer declares INK as a hex literal');
+    }
+    return hexToRgb(match[1]);
+  };
+
+  // THE BINDING GROUND, AND WHY IT IS THIS ONE. Every layer in
+  // map/ink-style.ts paints that one INK over the paper at some opacity, so no
+  // stack of them - a motorway over a primary over a minor street over a
+  // building outline - is ever darker than the ink itself, and ink text on a
+  // paper plate loses contrast monotonically as the ground darkens. The
+  // darkest ground the map can produce is therefore solid ink, and a plate
+  // that clears the floor there clears it over every pixel of the map.
+  //
+  // The fog case below is kept and is not this one: over the densest fog the
+  // text clears the floor with no plate at all, which is exactly why thinning
+  // these plates cannot be argued from it.
+  it('holds both of the map’s plates to 4.5:1 over the darkest ground the ink style can produce', () => {
+    expect(
+      mapInk(),
+      'map/ink-style.ts and --color-ink have drifted apart, so "the darkest ground the ' +
+        'map can produce" is no longer the colour this measures against',
+    ).toEqual(ink);
+
+    for (const selector of MAP_PLATES) {
+      const plate = plateOf(selector);
+      expect(
+        contrastRatio(ink, blend(plate.rgb, plate.alpha, mapInk())),
+        `${selector} no longer keeps its text legible where the map is at its darkest. ` +
+          'This is the case the plate exists for: on revealed ground the text falls on ' +
+          'road lines and building edges, not on paper.',
+      ).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+    }
+  });
+
+  // The other half of the owner's instruction, and it needs a test of its own
+  // because contrast alone is satisfied by making the plates heavier: "the
+  // background of the logo and the OpenStreetMap contributors is too much.
+  // Maybe more transparency? ... the logo needs to be visible but I think it
+  // can be done with less." Both plates were rgba(244, 239, 230, 0.85) until
+  // v1.40, which is a card; a value at or above that again is the defect
+  // coming back.
+  it('keeps both plates lighter than the card the owner objected to', () => {
+    const alphas = MAP_PLATES.map((selector) => plateOf(selector).alpha);
+    for (const [index, alpha] of alphas.entries()) {
+      expect(alpha, `${MAP_PLATES[index]} is a card again`).toBeLessThanOrEqual(0.6);
+    }
+    expect(
+      alphas[1],
+      'the attribution is the quieter of the two - Section 10.5 asks for legible, which ' +
+        'it keeps above, and the owner asked for quiet',
+    ).toBeLessThanOrEqual(alphas[0]);
+  });
+
+  it('clears the floor on both plates over the densest fog the map produces too', () => {
     // The same worst case App.a11y.test.tsx measures the status icons
     // against: the fog layer's own colour at FOG_MAX_OPACITY over paper. No
-    // patch of fog is ever denser, so no ground under this corner is darker.
+    // patch of fog is ever denser, so no *fogged* ground is darker.
     // FOG_COLOR is not exported from map/fog/webgl-fog-layer.ts, so it is
     // mirrored here by hand exactly as it is there.
     const FOG_COLOR: [number, number, number] = [0.78 * 255, 0.76 * 255, 0.71 * 255];
     const foggedGround = blend(FOG_COLOR, CONFIG.FOG_MAX_OPACITY, paper);
-    const plate = rgbaOf(cssRuleBody(css, '.map-overlays .wordmark'), 'background');
 
-    expect(contrastRatio(ink, blend(plate.rgb, plate.alpha, foggedGround))).toBeGreaterThanOrEqual(
-      BODY_TEXT_MIN,
-    );
+    for (const selector of MAP_PLATES) {
+      const plate = plateOf(selector);
+      expect(
+        contrastRatio(ink, blend(plate.rgb, plate.alpha, foggedGround)),
+      ).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+    }
   });
 });

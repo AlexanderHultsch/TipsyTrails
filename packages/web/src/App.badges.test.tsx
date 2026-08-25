@@ -630,6 +630,64 @@ describe('the badge glyph (SPEC.md Sections 7.7, 8.1)', () => {
     expect(new Set([week.marks[0], month.marks[0], year.marks[0]]).size).toBe(1);
   });
 
+  // THE DEFECT THAT PROMPTED THE REDRAW OF v1.40, and the reason it is a test
+  // and not just a comment. The owner asked for a compass and the explorer
+  // pictogram already was one - a compass *rose*, which is four long points
+  // and four short ones, which is a star. The modifier above it is also a
+  // star. So the kind and the period were drawn in one visual language, and
+  // "Explorer Champion" was a star with a star over it: two parts that are
+  // supposed to carry two axes, saying the same thing twice.
+  //
+  // What this can prove is that no pictogram is the same drawing as any
+  // modifier. What it cannot prove is that they no longer *resemble* each
+  // other - that is a question about rendered pixels, and jsdom lays nothing
+  // out. The case around the compass is the answer to it (components/Badge.tsx
+  // records what an offline rasteriser showed at 20 px), and no test here can
+  // see it.
+  it('never draws a kind in the same shape as a period', async () => {
+    await shelfOf([
+      badge({ kind: 'explorer', period: 'month', periodKey: '2026-08', value: 1 }),
+      badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 1 }),
+    ]);
+
+    const drawn = earnedBadges().map(glyphOf);
+    const modifiers = drawn.flatMap((glyph) => glyph.modifiers);
+    expect(new Set(modifiers).size).toBe(2);
+    for (const glyph of drawn) {
+      for (const mark of glyph.marks) {
+        expect(
+          modifiers,
+          'a pictogram is drawn as one of the period modifiers, so the badge says its ' +
+            'kind and its period in one shape',
+        ).not.toContain(mark);
+      }
+    }
+  });
+
+  // The compass is the one shape in this file with a hole in it, and the hole
+  // is made by winding rather than by a fill-rule: components/Badge.tsx draws
+  // the case as two circles running in opposite directions, which the default
+  // nonzero rule cancels to nothing between them. Give both arcs the same
+  // sweep flag and the case fills in solid - a black disc with a needle
+  // invisible inside it - which renders, passes every other test here, and is
+  // exactly the failure nothing else would catch.
+  it('draws the compass case as two circles wound against each other', async () => {
+    await shelfOf([badge({ kind: 'explorer', period: 'week', periodKey: '2026-W32', value: 1 })]);
+
+    const mark = glyphOf(earnedBadges()[0]).marks[0];
+    const sweeps = Array.from(
+      mark.matchAll(/A\s*[\d.]+[\s,]+[\d.]+[\s,]+[\d.]+[\s,]+([01])[\s,]+([01])[\s,]/g),
+    ).map((match) => match[2]);
+    expect(sweeps.length, 'the compass case is no longer drawn with arcs').toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(
+      new Set(sweeps).size,
+      'every arc of the compass runs the same way, so nonzero fills the case solid and ' +
+        'there is no case left - only a disc',
+    ).toBe(2);
+  });
+
   // The kind is the other axis, and the two pictograms are two shapes.
   it('draws one pictogram per kind, and two different ones', async () => {
     await shelfOf([

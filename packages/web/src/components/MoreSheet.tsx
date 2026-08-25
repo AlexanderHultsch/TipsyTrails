@@ -138,18 +138,33 @@ export function MoreSheet({ onClose }: { onClose: () => void }) {
           </li>
           {/* The one destination in the sheet that is not in the
               application. It is an <a> and not a <Link> because there is no
-              route to give the router, and it says so in its own label: a tap
-              that silently swaps the app for a browser tab is a tap a player
-              cannot undo with the back gesture they have. `noopener
-              noreferrer` for the reason every `target="_blank"` needs it - the
-              opened page must not get a handle on this one.
-              `rel="external"` is deliberately not added: it says nothing to a
-              browser or a reader that the label does not already say.
+              route to give the router. `noopener noreferrer` for the reason
+              every `target="_blank"` needs it - the opened page must not get a
+              handle on this one. `rel="external"` is deliberately not added:
+              it says nothing to a browser or a reader that the item does not
+              already say.
 
-              The second line is the sign-in wall stated before it is hit.
-              GitHub asks for an account to file an issue, and a player who
-              does not have one should find that out here rather than on a
-              login page in a tab they did not ask for.
+              THE ITEM SAYS FIVE WORDS ON THE SCREEN AND SEVEN TO A READER,
+              and the split is the owner's: "Report a bug on GitHub (remove the
+              rest of the text)." So the visible label is exactly that, and the
+              new-tab warning moves into `aria-label` rather than off the item
+              altogether. A tap that silently swaps the app for a browser tab
+              is still a context change a player cannot undo with the back
+              gesture they have, and a screen reader user is the one who gets
+              least warning of it from the tab itself. WCAG 2.5.3 requires the
+              accessible name to contain the visible label, which "Report a bug
+              on GitHub, opens a new tab" does, word for word and in order - so
+              a voice-control user saying the words they can see still hits
+              this item.
+
+              THE SIGN-IN WALL IS NO LONGER STATED, deliberately and at the
+              owner's direction rather than by oversight. The second line used
+              to say that GitHub asks for an account before it will take an
+              issue, so a player without one found out here instead of at a
+              login page in a tab they did not ask for. That warning is gone
+              from the screen with the rest of the text; it is not hiding in
+              the accessible name either, because a name that carried it would
+              be a paragraph read out on every pass through the sheet.
 
               It sits with the navigation above rather than in the gap below,
               which belongs to Log out alone: this is somewhere to go, and the
@@ -161,10 +176,10 @@ export function MoreSheet({ onClose }: { onClose: () => void }) {
               href={issueUrlFor(pathname)}
               target="_blank"
               rel="noopener noreferrer"
+              aria-label="Report a bug on GitHub, opens a new tab"
               onClick={onClose}
             >
-              <span>Report a bug on GitHub (opens a new tab)</span>
-              <span className="more-sheet__item-note">A GitHub account is required.</span>
+              Report a bug on GitHub
             </a>
           </li>
           {/* Exactly the rule the burger menu applied, unchanged. It is
