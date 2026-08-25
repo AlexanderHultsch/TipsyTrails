@@ -497,7 +497,7 @@ describe('leaderboard', () => {
     expect(row.querySelector('.avatar svg')).not.toBeNull();
     const badgeEl = row.querySelector('.badge');
     expect(badgeEl).not.toBeNull();
-    expect(badgeEl?.getAttribute('aria-label')).toBe('Barfly badge, month');
+    expect(badgeEl?.getAttribute('aria-label')).toBe('Bar Champion badge, month');
   });
 
   it('reflects a toggled anonymity setting on the next leaderboard view without a reload', async () => {
@@ -666,7 +666,7 @@ describe('profile', () => {
     const badges = container.querySelectorAll('.badge-shelf:not(.badge-shelf--compact) .badge');
     expect(badges).toHaveLength(2);
     expect(badges[0].getAttribute('aria-label')).toBe('Explorer badge, week');
-    expect(badges[1].getAttribute('aria-label')).toBe('Barfly badge, month');
+    expect(badges[1].getAttribute('aria-label')).toBe('Bar Champion badge, month');
 
     const progressItems = container.querySelectorAll('.profile__progress-item');
     expect(progressItems).toHaveLength(6);
@@ -780,13 +780,17 @@ describe('badge placeholders', () => {
     );
   }
 
+  // The owner's six names (packages/shared/src/badges.ts), each followed by
+  // the period it is for - which is the whole reason BADGE_PERIOD_NAME
+  // survived the rename. "Bar Legend" does not say "year" and is not supposed
+  // to; the label is where a screen reader is told anyway.
   const ALL_PLACEHOLDER_LABELS = [
     'Not yet earned: Explorer badge, week',
-    'Not yet earned: Explorer badge, month',
-    'Not yet earned: Explorer badge, year',
-    'Not yet earned: Barfly badge, week',
-    'Not yet earned: Barfly badge, month',
-    'Not yet earned: Barfly badge, year',
+    'Not yet earned: Explorer Champion badge, month',
+    'Not yet earned: Explorer Legend badge, year',
+    'Not yet earned: Bar Hopper badge, week',
+    'Not yet earned: Bar Champion badge, month',
+    'Not yet earned: Bar Legend badge, year',
   ];
 
   // The worst failure available in this feature is telling a screen reader
@@ -808,11 +812,11 @@ describe('badge placeholders', () => {
     expect(earned).toEqual(['Explorer badge, week']);
 
     expect(placeholderLabels()).toEqual([
-      'Not yet earned: Explorer badge, month',
-      'Not yet earned: Explorer badge, year',
-      'Not yet earned: Barfly badge, week',
-      'Not yet earned: Barfly badge, month',
-      'Not yet earned: Barfly badge, year',
+      'Not yet earned: Explorer Champion badge, month',
+      'Not yet earned: Explorer Legend badge, year',
+      'Not yet earned: Bar Hopper badge, week',
+      'Not yet earned: Bar Champion badge, month',
+      'Not yet earned: Bar Legend badge, year',
     ]);
     expect(placeholderLabels()).not.toContain('Explorer badge, week');
   });
@@ -839,7 +843,9 @@ describe('badge placeholders', () => {
       container.querySelectorAll('.badge-shelf:not(.badge-shelf--compact) .badge'),
     ).toHaveLength(3);
     expect(placeholderLabels()).toEqual(
-      ALL_PLACEHOLDER_LABELS.filter((label) => label !== 'Not yet earned: Barfly badge, month'),
+      ALL_PLACEHOLDER_LABELS.filter(
+        (label) => label !== 'Not yet earned: Bar Champion badge, month',
+      ),
     );
   });
 

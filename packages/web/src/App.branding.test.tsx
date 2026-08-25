@@ -492,7 +492,7 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
 // header everywhere. On the map it should be small and elegant; on the start
 // screen, very prominent.
 describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
-  it('is small on the map, never the start screen’s hero, and takes no tap', async () => {
+  it('is small on the map, never the start screen’s hero, and leads the top row', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
         return signedInUser();
@@ -512,15 +512,143 @@ describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
     expect(marks[0].classList.contains('wordmark--hero')).toBe(false);
     // Chrome, not the subject: the map is about the map, and a screen reader
     // navigating by heading must not be told the name of the application.
-    expect(marks[0].tagName).toBe('SPAN');
+    // An anchor since v1.38 - it leads to the start screen - but still never
+    // a heading.
+    expect(marks[0].tagName).toBe('A');
+    expect(marks[0].closest('h1')).toBeNull();
 
     // A member of the overlay grid (Section 8.3), in the row that already
-    // exists, and second in it so the status icons keep the corner they have
-    // always been in.
+    // exists, and FIRST in it since v1.38. That order is the whole of the
+    // fix: the row is `justify-content: space-between`, so the second child
+    // takes the right-hand end - and while the wordmark was second, the mark
+    // sat right on the map and left on every other screen. Swapping them puts
+    // the mark where .wordmark--chrome puts it everywhere else and moves the
+    // status icons to the opposite corner, which the owner accepted.
     const row = container.querySelector('.map-overlays__controls--top');
     expect(row?.contains(marks[0])).toBe(true);
-    expect(Array.from(row?.children ?? []).indexOf(marks[0])).toBe(1);
-    expect(row?.firstElementChild?.classList.contains('tracking-indicator')).toBe(true);
+    expect(
+      Array.from(row?.children ?? []).indexOf(marks[0]),
+      'the wordmark is not the first child of the map’s top row, so space-between is ' +
+        'putting it at the right-hand end again - the one screen in the application ' +
+        'where the signature does not sit where it sits on the other four',
+    ).toBe(0);
+    expect(row?.lastElementChild?.classList.contains('tracking-indicator')).toBe(true);
+  });
+
+  // The owner: "I would like that we can press the logo and get to the start
+  // screen", and - in the same breath - "when we click the logo we should not
+  // be logged out, just land at the same page". Everything below is those two
+  // sentences: where the mark leads, and the two places it must not lead
+  // anywhere at all.
+  //
+  // What none of this can see is the tap target. Section 8.2 wants 44 px
+  // around a mark that is 0.75rem tall, and jsdom lays nothing out - the
+  // declaration is scanned in stylesheet.test.ts and believed, and whether it
+  // is comfortable on a phone still needs a phone.
+  it('leads to the start screen from every screen it signs, and is an ordinary link', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return signedInUser();
+      }
+      if (url.startsWith('/static/')) {
+        return jsonResponse(200, SQUARE_CITY);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          districts: [],
+        });
+      }
+      if (url.startsWith('/api/leaderboard')) {
+        return jsonResponse(200, {
+          metric: 'area',
+          period: 'all',
+          page: 1,
+          pageSize: 50,
+          totalUsers: 0,
+          totalPages: 1,
+          entries: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    for (const path of ['/city', '/leaderboard']) {
+      act(() => {
+        root.unmount();
+      });
+      root = createRoot(container);
+      await renderApp(path);
+
+      const mark = wordmarks()[0] as HTMLAnchorElement;
+      expect(mark.tagName).toBe('A');
+      expect(mark.getAttribute('href')).toBe('/app');
+      // The accessible name is the ordinary name of the application and
+      // carries no explanatory suffix: a wordmark that leads home needs no
+      // instructions read out with it. What separates it from the inert mark
+      // for a screen reader is the role, not the name - "Tipsy Trails, link"
+      // against "Tipsy Trails".
+      expect(mark.textContent).toBe('Tipsy Trails');
+      expect(mark.getAttribute('aria-label')).toBeNull();
+      // It leads to the start screen and to nothing that could end a session:
+      // no target, no download, no logout.
+      expect(mark.getAttribute('target')).toBeNull();
+    }
+  });
+
+  // The half of the owner's request that is easy to lose, and the expensive
+  // one to get wrong. `/app` is behind RequireAuth, which sends a reader with
+  // no session to /login - so a linked wordmark on the signed-out landing
+  // screen would deliver exactly the "logged out" outcome he ruled out, by
+  // way of the tap he asked for.
+  it('is inert on the signed-out landing screen, where a link would bounce to /login', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/');
+
+    const mark = wordmarks()[0];
+    expect(mark.tagName).toBe('H1');
+    expect(container.querySelector('.wordmark a')).toBeNull();
+    expect(container.querySelector('a.wordmark')).toBeNull();
+    // Nothing in the mark leads anywhere; the two ways in are the buttons
+    // below it, and they are unchanged.
+    expect(
+      Array.from(container.querySelectorAll('a')).map((link) => link.getAttribute('href')),
+    ).toEqual(['/login', '/register']);
+  });
+
+  // A control that visibly does nothing is worse than plain text, and
+  // navigating to the route you are standing on is visibly nothing.
+  it('is inert on the start screen it leads to', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return signedInUser();
+      }
+      if (url.startsWith('/static/')) {
+        return jsonResponse(200, SQUARE_CITY);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          districts: [],
+        });
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    await renderApp('/app');
+
+    const mark = wordmarks()[0];
+    expect(mark.tagName).toBe('H1');
+    expect(container.querySelector('a.wordmark')).toBeNull();
+    expect(container.querySelector('.wordmark a')).toBeNull();
   });
 
   it.each([
@@ -559,7 +687,9 @@ describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
     const marks = wordmarks();
     expect(marks).toHaveLength(1);
     expect(marks[0].classList.contains('wordmark--chrome')).toBe(true);
-    expect(marks[0].tagName).toBe('SPAN');
+    // An anchor, not a heading: it leads to the start screen (below) and it
+    // still must not retitle the page it is signing.
+    expect(marks[0].tagName).toBe('A');
 
     // Exactly one <h1>, and it is the screen's own subject rather than the
     // application's name. This is the assertion that stops the wordmark being

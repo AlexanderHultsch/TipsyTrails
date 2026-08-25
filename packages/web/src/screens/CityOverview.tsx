@@ -100,7 +100,7 @@ export function CityOverview() {
         {/* Chrome, not the subject: this screen is about Karlsruhe, so the
             city keeps the <h1> and the wordmark sits above it as the
             application's signature (components/Wordmark.tsx). */}
-        <Wordmark prominence="chrome" />
+        <Wordmark prominence="chrome" linksToStart />
         <h1>Karlsruhe</h1>
         {loading && <p role="status">Loading the city outline…</p>}
         {error && (

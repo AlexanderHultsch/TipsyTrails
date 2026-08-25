@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BADGE_CATALOGUE,
   BADGE_COMPETITION_NOTE,
-  badgeDescription,
+  BADGE_PERIOD_NAME,
   badgeName,
   unearnedBadgeTypes,
 } from './badges.js';
@@ -87,64 +87,59 @@ describe('unearnedBadgeTypes', () => {
   });
 });
 
-// SPEC.md Section 7.7 decides every word of this copy: a description may say
-// what the badge is, what earns it and over what window, and may never carry
-// the threshold, a distance from it, a rank, a standing or a share of a
-// target. The tests below are that rule, read from both sides - what each
-// description must distinguish, and what none of them may contain.
+// SPEC.md Section 7.7 decides every word of this copy: it may say what the
+// badge is called and, in words, that a badge goes to the period's best, and
+// it may never carry the threshold, a distance from it, a rank, a standing or
+// a share of a target. The tests below are that rule read from both sides.
+//
+// Since v1.38 there is no per-badge description at all - the owner's "remove
+// the detailed description for all of them, the name is enough" - so what a
+// badge says about itself is its name plus one sentence shared by all six.
+// The tests that used to hold six composed descriptions apart are gone with
+// the descriptions; the ones that bounded what any of that copy could contain
+// are kept and now run over the names and the note.
 describe('badge copy', () => {
-  const descriptions = BADGE_CATALOGUE.map((type) => badgeDescription(type.kind, type.period));
+  const names = BADGE_CATALOGUE.map((type) => badgeName(type.kind, type.period));
 
-  it('gives every badge in the catalogue a description of its own', () => {
-    expect(new Set(descriptions).size).toBe(BADGE_CATALOGUE.length);
+  // The owner's six names, verbatim and pinned individually. A table of six
+  // strings is exactly the thing a refactor "tidies" back into a composition,
+  // and the composition it came from produced "Barfly · Year" for a badge he
+  // calls a Bar Legend.
+  it('gives each pair the owner’s own name', () => {
+    expect(badgeName('barfly', 'week')).toBe('Bar Hopper');
+    expect(badgeName('barfly', 'month')).toBe('Bar Champion');
+    expect(badgeName('barfly', 'year')).toBe('Bar Legend');
+    expect(badgeName('explorer', 'week')).toBe('Explorer');
+    expect(badgeName('explorer', 'month')).toBe('Explorer Champion');
+    expect(badgeName('explorer', 'year')).toBe('Explorer Legend');
   });
 
-  // The kind carries what counts. A player reading the barfly sheet must not
-  // be told the explorer rule, and the exclusion clause is the half of it
-  // they cannot guess - a second visit to a mastered bar scores nothing.
-  it('names the activity of the kind, exclusion and all', () => {
-    expect(badgeDescription('explorer', 'week')).toContain(
-      'city area you clear for the first time',
-    );
-    expect(badgeDescription('explorer', 'week')).toContain(
-      'Walking a street you have already cleared adds nothing.',
-    );
-    expect(badgeDescription('barfly', 'week')).toContain('bars you master for the first time');
-    expect(badgeDescription('barfly', 'week')).toContain(
-      'A second completed visit to a bar you have already mastered counts for nothing.',
-    );
+  // Six badges, six names. Two pairs sharing a name would put one title on
+  // two different sheets and one label on two different glyphs, which is a
+  // player being told they are looking at a badge they are not.
+  it('gives every badge in the catalogue a name of its own', () => {
+    expect(new Set(names).size).toBe(BADGE_CATALOGUE.length);
   });
 
-  // The period carries the window, and an ISO week is not "the last seven
-  // days" (Section 5.8) - which is the reading a player arrives with, and the
-  // one that has them counting from the wrong day.
-  it('names the window of the period, in Europe/Berlin', () => {
-    expect(badgeDescription('explorer', 'week')).toContain('an ISO week (Monday to Sunday)');
-    expect(badgeDescription('explorer', 'month')).toContain('a calendar month');
-    expect(badgeDescription('explorer', 'year')).toContain('a calendar year');
-    for (const description of descriptions) {
-      expect(description).toContain('Europe/Berlin');
+  // The names deliberately stopped saying which period they belong to - "Bar
+  // Legend" is the point of the rename - so the period has to survive
+  // somewhere a screen reader can reach it, because the crown that carries it
+  // on screen (Section 8.1) is silent. This is the vocabulary the accessible
+  // labels are built from (components/Badge.tsx), and it is lower case
+  // because every one of them uses it inside a sentence fragment.
+  it('keeps a spoken word for each period, since no name carries one', () => {
+    expect(BADGE_PERIOD_NAME).toEqual({ week: 'week', month: 'month', year: 'year' });
+    for (const word of Object.values(BADGE_PERIOD_NAME)) {
+      expect(word).toBe(word.toLowerCase());
     }
   });
 
-  // Two sentences at most, so a sheet is read rather than skipped.
-  it('says it in no more than two sentences', () => {
-    for (const description of descriptions) {
-      expect(description.split('. ').length).toBeLessThanOrEqual(2);
-    }
-  });
-
-  // The rule this whole feature is bounded by. No description, name or note
-  // may carry a digit at all: a threshold, a distance from one, a rank or a
-  // share of a target would each be a number, and the surest way to publish
-  // none of them is to publish no number.
+  // The rule this whole feature is bounded by. No name and no note may carry
+  // a digit at all: a threshold, a distance from one, a rank or a share of a
+  // target would each be a number, and the surest way to publish none of them
+  // is to publish no number.
   it('carries no digit and nothing that reads as a target or a standing', () => {
-    const everything = [
-      ...descriptions,
-      ...BADGE_CATALOGUE.map((type) => badgeName(type.kind, type.period)),
-      BADGE_COMPETITION_NOTE,
-    ];
-    for (const text of everything) {
+    for (const text of [...names, ...Object.values(BADGE_PERIOD_NAME), BADGE_COMPETITION_NOTE]) {
       expect(text).not.toMatch(/\d/);
       expect(text).not.toMatch(/%/);
       expect(text.toLowerCase()).not.toMatch(
@@ -155,17 +150,14 @@ describe('badge copy', () => {
 
   // Said identically on every badge, because it is true of every badge: a
   // badge goes to the period's best, so no score wins one. It is the honest
-  // answer to the question a description raises and cannot answer.
+  // answer to the question a name raises and cannot answer, and since v1.38
+  // it is the whole of what a sheet says beyond the name and the status.
   it('answers "what must I do" in words rather than leaving a number to be invented', () => {
-    expect(BADGE_COMPETITION_NOTE).toContain('whoever does the most of it');
-    expect(BADGE_COMPETITION_NOTE).toContain('no fixed score wins one');
-  });
-
-  it('titles a badge by its kind and its period', () => {
-    expect(badgeName('explorer', 'week')).toBe('Explorer · Week');
-    expect(badgeName('barfly', 'year')).toBe('Barfly · Year');
-    expect(new Set(BADGE_CATALOGUE.map((type) => badgeName(type.kind, type.period))).size).toBe(
-      BADGE_CATALOGUE.length,
+    expect(BADGE_COMPETITION_NOTE).toBe(
+      'Each badge goes to whoever does the most of it in the period.',
     );
+    // One sentence, and the owner's "not more" is the reason. The clause this
+    // used to end with - "- no fixed score wins one" - is what "not more" cut.
+    expect(BADGE_COMPETITION_NOTE.split('. ')).toHaveLength(1);
   });
 });

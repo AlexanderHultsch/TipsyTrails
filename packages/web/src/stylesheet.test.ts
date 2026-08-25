@@ -934,15 +934,19 @@ describe('index.css: what the content column and the wordmark are allowed to dep
 // (Section 7.7) is greyed because the owner asked for it to be, but greying
 // is a difference in lightness and nothing else: it is gone in a black-and-
 // white print, and it is the weakest of signals for anyone reading the shelf
-// at a glance. The earned/unearned distinction therefore also lives in the
-// shape of the glyph - the mark hollow rather than solid ink, the rings
-// broken rather than continuous - and both of those are declarations in this
-// file that no render test can see, because nothing in this repository
-// renders a component with this stylesheet applied.
+// at a glance.
+//
+// SINCE v1.38 THE SECOND CHANNEL IS THE FRAME AND ONLY THE FRAME, which
+// raises the stakes of these tests rather than lowering them. The artwork
+// itself is now deliberately identical in the two states - the owner's "just
+// use same as real badge but in light grey" - so where there used to be two
+// shape channels (a hollowed mark, broken rings) there is now one, and it is
+// the dashed frame drawn round the unearned glyph. Delete it and the entire
+// distinction is opacity, which is exactly what Section 8.1 forbids.
 //
 // What this cannot prove is that the result reads well; that still needs
-// eyes. What it does prove is that removing either shape channel, and
-// leaving the difference to opacity or colour alone, fails the suite.
+// eyes. What it does prove is that the artwork stays identical, that the
+// frame exists and is broken, and that removing it leaves nothing but grey.
 describe('index.css: an unearned badge differs from an earned one in shape, not only in grey', () => {
   function bodyFor(selector: string): string {
     const matching = rules().filter((rule) =>
@@ -952,34 +956,153 @@ describe('index.css: an unearned badge differs from an earned one in shape, not 
     return matching.map((rule) => rule.body).join(' ');
   }
 
-  it('fills the earned mark with ink and leaves the unearned one hollow', () => {
-    expect(bodyFor('.badge__mark')).toMatch(/fill\s*:\s*currentColor/);
-
-    const placeholderMark = bodyFor('.badge-placeholder__mark');
-    expect(
-      /fill\s*:\s*none/.test(placeholderMark) && /stroke\s*:\s*currentColor/.test(placeholderMark),
-      'a placeholder mark must be a wall of ink around an empty middle - most of ' +
-        'the glyph appearing or disappearing is what survives greyscale and print',
-    ).toBe(true);
+  // The owner asked for the same drawing, and "the same drawing" is a
+  // property of the paint as much as of the paths: a placeholder whose mark
+  // were hollow or stroked would be a second drawing of the same badge, which
+  // is what this replaced. Hollowing it would also now say the wrong thing
+  // outright - a wall of ink around an empty middle is Section 8.1's grammar
+  // for a *mastered* cocktail glass, and the barfly pictogram is a cocktail
+  // glass.
+  it('paints the unearned artwork exactly as the earned artwork', () => {
+    for (const element of ['mark', 'modifier']) {
+      expect(bodyFor(`.badge__${element}`)).toMatch(/fill\s*:\s*currentColor/);
+      const placeholder = bodyFor(`.badge-placeholder__${element}`);
+      expect(
+        placeholder,
+        `.badge-placeholder__${element} must be filled like the earned one - the owner ` +
+          'asked for the same badge in light grey, not a second drawing of it',
+      ).toMatch(/fill\s*:\s*currentColor/);
+      expect(placeholder).not.toMatch(/stroke\s*:/);
+    }
   });
 
-  it('breaks the unearned rings and leaves the earned ones continuous', () => {
-    expect(bodyFor('.badge__ring')).not.toMatch(/stroke-dasharray/);
+  it('frames the unearned glyph, and breaks the frame', () => {
+    const frame = bodyFor('.badge-placeholder__frame');
+    expect(frame).toMatch(/fill\s*:\s*none/);
+    expect(frame).toMatch(/stroke\s*:\s*currentColor/);
     expect(
-      bodyFor('.badge-placeholder__ring'),
-      'a placeholder ring must be dashed - the same channel Section 8.1 gives ' +
-        'district boundaries, and for the same reason: weight and opacity alone ' +
-        'cannot carry a distinction on this palette',
+      frame,
+      'the placeholder frame must be dashed - it is the only channel left that is not ' +
+        'lightness, and Section 8.1 does not allow a state to rest on lightness alone. ' +
+        'Broken against continuous is the same channel district boundaries use.',
     ).toMatch(/stroke-dasharray\s*:\s*\S/);
+
+    // And the earned badge has no frame at all, or the channel carries
+    // nothing: there is no .badge__frame rule, and Badge.tsx draws the <rect>
+    // in one of the two states only.
+    expect(
+      rules().filter((rule) =>
+        rule.selector.split(',').some((part) => part.trim() === '.badge__frame'),
+      ),
+      'an earned badge has grown a frame of its own, so the frame no longer separates ' +
+        'the two states',
+    ).toHaveLength(0);
   });
 
   it('keeps the placeholder quieter than an earned badge as well', () => {
-    // The third channel, and the one the owner asked for by name
+    // The lightness channel, and the one the owner asked for by name
     // ("ausgegraut", "sehr dezent"): an earned badge stays the louder thing
-    // on a shelf holding both.
+    // on a shelf holding both. It is the *second* channel and never the only
+    // one - see the frame above.
     expect(bodyFor('.badge__icon')).not.toMatch(/opacity/);
     const opacity = /opacity\s*:\s*(0?\.\d+)/.exec(bodyFor('.badge-placeholder__icon'));
     expect(opacity, '.badge-placeholder__icon must be drawn back from full ink').not.toBeNull();
     expect(Number(opacity?.[1])).toBeLessThan(1);
+  });
+
+  // Section 8.1: ink, and the accent is reserved for the player's own
+  // position and for active states. A badge is neither, and a badge is
+  // exactly the thing someone reaches for a colour to make special.
+  it('draws every part of both states in ink and in nothing else', () => {
+    for (const selector of [
+      '.badge__icon',
+      '.badge__mark',
+      '.badge__modifier',
+      '.badge-placeholder__icon',
+      '.badge-placeholder__mark',
+      '.badge-placeholder__modifier',
+      '.badge-placeholder__frame',
+      '.badge-sheet__mark',
+    ]) {
+      const body = bodyFor(selector);
+      expect(body, `${selector} paints with the accent colour`).not.toMatch(/--color-accent/);
+      expect(body, `${selector} paints with a colour of its own`).not.toMatch(
+        /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/,
+      );
+      expect(body, `${selector} carries a gradient or a shadow`).not.toMatch(
+        /gradient|box-shadow|filter\s*:|drop-shadow/,
+      );
+    }
+  });
+});
+
+// Section 8.1/8.2: the wordmark became a control on every screen that carries
+// it as chrome, and a control needs a target. This is a scan of index.css and
+// nothing more - jsdom computes no geometry, so nothing here proves the 44 px
+// is comfortable, or that the strip it adds above and below a 0.75rem line is
+// as tight to the mark as it is meant to be. What it proves is that removing
+// the declarations fails the suite.
+describe('index.css: the wordmark as a link (SPEC.md Sections 8.1, 8.2)', () => {
+  function bodyFor(selector: string): string {
+    const matching = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim() === selector),
+    );
+    expect(matching.length, `no rule targets ${selector}`).toBeGreaterThan(0);
+    return matching.map((rule) => rule.body).join(' ');
+  }
+
+  it('reserves Section 8.2’s 44px of height around a 0.75rem mark', () => {
+    const body = bodyFor('.wordmark--link');
+    expect(
+      body,
+      'the chrome wordmark is 0.75rem of type in a 0.25rem padding box - about 22px - ' +
+        'so without a stated minimum it is half the tap target Section 8.2 requires',
+    ).toMatch(/min-height:\s*44px/);
+    // Shrink-wrapped, which is the half of it that matters on the map: a
+    // block-level link would stretch an invisible 44px bar across the whole
+    // width of a map whose one gesture is a drag.
+    expect(
+      body,
+      'the wordmark link must be inline-flex, or its box is as wide as the row and the ' +
+        'target becomes a strip along the top of the map instead of the mark itself',
+    ).toMatch(/display:\s*inline-flex/);
+    expect(body).toMatch(/text-decoration:\s*none/);
+  });
+
+  // `.map-overlays .wordmark` sets pointer-events: none, which is right for a
+  // mark and fatal for a link. Both rules exist on purpose and the link one
+  // has to come second - they have equal specificity, so this is source order
+  // doing the work, and nothing about it is visible in a rendered DOM.
+  it('gives the map’s wordmark its pointer events back, after the rule that took them', () => {
+    const all = rules();
+    const markIndex = all.findIndex((rule) => rule.selector.trim() === '.map-overlays .wordmark');
+    const linkIndex = all.findIndex(
+      (rule) => rule.selector.trim() === '.map-overlays .wordmark--link',
+    );
+    expect(markIndex, 'no rule targets .map-overlays .wordmark').toBeGreaterThanOrEqual(0);
+    expect(linkIndex, 'no rule targets .map-overlays .wordmark--link').toBeGreaterThanOrEqual(0);
+    expect(all[linkIndex].body).toMatch(/pointer-events:\s*auto/);
+    expect(
+      linkIndex,
+      'the two selectors have the same specificity, so .map-overlays .wordmark--link ' +
+        'must come after .map-overlays .wordmark - before it, the map’s wordmark is a ' +
+        'link that cannot be tapped',
+    ).toBeGreaterThan(markIndex);
+  });
+
+  // The tracking indicator moved to the top-right corner when the wordmark
+  // took the row's first slot, and its explanation panel is 18rem wide and
+  // absolutely positioned against it. Anchored on its left edge from that
+  // corner it runs off the side of the phone, and `max-width` cannot save it
+  // because the overflow is a position rather than a width.
+  it('hangs the tracking explanation from the corner its icons now sit in', () => {
+    const body = bodyFor('.tracking-indicator__panel');
+    expect(
+      body,
+      'the tracking panel is anchored left again. Since the top row swapped its two ' +
+        'children the icons sit at the right edge, and a panel growing rightwards from ' +
+        'there is 18rem of panel off the side of the screen.',
+    ).toMatch(/(?:^|;)\s*right:\s*0/);
+    expect(body).not.toMatch(/(?:^|;)\s*left:\s*0/);
   });
 });

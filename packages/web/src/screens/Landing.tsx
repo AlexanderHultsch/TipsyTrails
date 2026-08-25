@@ -20,6 +20,14 @@ export function Landing() {
   return (
     <main className="screen">
       <div className="screen__content screen__content--middle">
+        {/* Inert, and on this screen that is a rule rather than a default.
+            Everywhere the wordmark is chrome it now leads to `/app`
+            (components/Wordmark.tsx), and `/app` is behind RequireAuth: a
+            signed-out reader tapping it here would be sent to /login, which
+            is the "logged out" outcome the owner ruled out in the same
+            sentence that asked for the link. The hero form takes no
+            `linksToStart` at all, so this is enforced by the type rather
+            than remembered. */}
         <Wordmark as="h1" prominence="hero" />
         <p>A location-based exploration game for Karlsruhe.</p>
       </div>

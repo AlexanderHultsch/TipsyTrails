@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.js';
+import { cocktailGlassPathData } from './components/cocktail-glass.js';
 
 // SPEC.md Sections 7.7 and 8.3: tapping a badge on the player's own profile
 // opens a sheet that says what the badge is, what earns it and over what
@@ -185,8 +186,12 @@ describe('the badge sheet', () => {
     expect(panel).not.toBeNull();
     expect(panel?.getAttribute('role')).toBe('dialog');
     expect(panel?.getAttribute('aria-modal')).toBe('true');
-    expect(panel?.getAttribute('aria-label')).toBe('Explorer · Week');
-    expect(panel?.querySelector('.badge-sheet__name')?.textContent).toBe('Explorer · Week');
+    // The name a player reads is the badge's own - one name, not a kind
+    // joined to a period. The name a player *hears* carries the period as
+    // well: a dialog is announced by its accessible name alone, and the star
+    // or crown that says which period this is (Section 8.1) is silent.
+    expect(panel?.getAttribute('aria-label')).toBe('Explorer, week');
+    expect(panel?.querySelector('.badge-sheet__name')?.textContent).toBe('Explorer');
     // The same mark the shelf drew, from the same definition and in the
     // earned state - not a second copy of the path and not a second state.
     expect(panel?.querySelector('.badge-sheet__mark .badge__icon')).not.toBeNull();
@@ -211,45 +216,40 @@ describe('the badge sheet', () => {
     }
     expect(earnedBadges()[0].getAttribute('aria-label')).toBe('Explorer badge, week');
     expect(placeholders()[0].getAttribute('aria-label')).toBe(
-      'Not yet earned: Explorer badge, month',
+      'Not yet earned: Explorer Champion badge, month',
     );
   });
 
-  // Mutation: one description for both kinds. The sheet must carry the rule
-  // of the badge that was tapped, exclusion clause and all.
-  it('describes the kind that was tapped, not the other one', async () => {
+  // Mutation: the same name on two sheets. Since v1.38 the name is the whole
+  // of what identifies a badge to a reader - there is no description under it
+  // to disambiguate two badges that share one - so a sheet showing the wrong
+  // name is a sheet about the wrong badge with nothing to contradict it.
+  it('names the badge that was tapped, not the other one', async () => {
     const both = profileBody({
       badges: [
         badge({ kind: 'explorer', period: 'week' }),
-        badge({ kind: 'barfly', period: 'week', periodKey: '2026-W32', value: 4 }),
+        badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 4 }),
       ],
     });
 
     await openBadgeSheet('player-1', both, 0);
-    const explorerText = sheetText();
-    expect(explorerText).toContain('city area you clear for the first time');
-    expect(explorerText).toContain('Walking a street you have already cleared adds nothing.');
-    expect(explorerText).not.toContain('master');
+    expect(sheet()?.querySelector('.badge-sheet__name')?.textContent).toBe('Explorer');
 
     await click(sheet()?.querySelector('.badge-sheet__close') as HTMLElement);
     await click(earnedBadges()[1]);
-    const barflyText = sheetText();
-    expect(barflyText).toContain('bars you master for the first time');
-    expect(barflyText).toContain(
-      'A second completed visit to a bar you have already mastered counts for nothing.',
-    );
-    expect(barflyText).not.toContain('city area you clear');
-    expect(barflyText).not.toBe(explorerText);
+    expect(sheet()?.querySelector('.badge-sheet__name')?.textContent).toBe('Bar Legend');
   });
 
-  // Mutation: one description for all three periods. Each sheet must name its
-  // own window, and an ISO week is not a calendar month.
-  it('names the window of the period that was tapped', async () => {
-    const windows: string[] = [];
+  // Mutation: one name for all three periods of a kind. The three barfly
+  // badges are three different things a player can hold and each has a name
+  // of its own; a sheet that called them all "Bar Hopper" would be telling a
+  // player who won the year that they won the week.
+  it('gives each period of a kind its own name', async () => {
+    const names: string[] = [];
     for (const [index, expected] of [
-      [0, 'an ISO week (Monday to Sunday)'],
-      [1, 'a calendar month'],
-      [2, 'a calendar year'],
+      [0, 'Bar Hopper'],
+      [1, 'Bar Champion'],
+      [2, 'Bar Legend'],
     ] as const) {
       act(() => {
         root.unmount();
@@ -259,19 +259,59 @@ describe('the badge sheet', () => {
         'player-1',
         profileBody({
           badges: [
-            badge({ period: 'week', periodKey: '2026-W32' }),
-            badge({ period: 'month', periodKey: '2026-08' }),
-            badge({ period: 'year', periodKey: '2026' }),
+            badge({ kind: 'barfly', period: 'week', periodKey: '2026-W32', value: 1 }),
+            badge({ kind: 'barfly', period: 'month', periodKey: '2026-08', value: 2 }),
+            badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 3 }),
           ],
         }),
         index,
       );
-      const text = sheetText();
-      expect(text).toContain(expected);
-      expect(text).toContain('Europe/Berlin');
-      windows.push(text);
+      expect(sheet()?.querySelector('.badge-sheet__name')?.textContent).toBe(expected);
+      names.push(expected);
     }
-    expect(new Set(windows).size).toBe(3);
+    expect(new Set(names).size).toBe(3);
+  });
+
+  // The owner: "Remove the detailed description for all of them, the name is
+  // enough", and for the one line that stays: "Each badge goes to whoever
+  // does the most of it in the period. Not more." So the sheet is four
+  // things - the mark, the name, that sentence, the status - and this is the
+  // test that fails if a description comes back, in any of the three shapes
+  // it could come back in: the old copy, a new element, or an extra
+  // paragraph nobody counted.
+  it('carries the name, one sentence and the status, and no description at all', async () => {
+    await openBadgeSheet(
+      'player-1',
+      profileBody({
+        badges: [badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 4 })],
+      }),
+    );
+
+    const panel = sheet();
+    expect(panel?.querySelector('.badge-sheet__description')).toBeNull();
+    expect(panel?.querySelector('.badge-sheet__note')?.textContent).toBe(
+      'Each badge goes to whoever does the most of it in the period.',
+    );
+
+    const text = sheetText();
+    for (const gone of [
+      'rewards new ground',
+      'rewards new bars',
+      'Europe/Berlin',
+      'ISO week',
+      'calendar month',
+      'calendar year',
+      'no fixed score wins one',
+    ]) {
+      expect(text, `the sheet is describing badges again: "${gone}"`).not.toContain(gone);
+    }
+
+    // Counted rather than listed, so a fourth paragraph slipped in between
+    // the name and the status fails here even if its words are innocent.
+    const paragraphs = Array.from(panel?.querySelectorAll('p') ?? []);
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0].className).toBe('badge-sheet__note');
+    expect(paragraphs[1].className).toBe('badge-sheet__status');
   });
 
   // Section 7.7 permits this one number: it is the player's own past
@@ -356,7 +396,7 @@ describe('the badge sheet', () => {
     const panel = sheet();
     expect(panel).not.toBeNull();
     expect(panel?.querySelector('.badge-sheet__status')?.textContent).toBe('Not yet earned.');
-    expect(panel?.getAttribute('aria-label')).toBe('Not yet earned: Explorer · Week');
+    expect(panel?.getAttribute('aria-label')).toBe('Not yet earned: Explorer, week');
     expect(panel?.querySelector('.badge-sheet__mark .badge-placeholder__icon')).not.toBeNull();
     expect(panel?.querySelector('.badge__icon')).toBeNull();
 
@@ -524,5 +564,141 @@ describe('the badge sheet', () => {
     expect(compact?.tagName).toBe('SPAN');
     expect(compact?.getAttribute('role')).toBe('img');
     expect(container.querySelector('.badge-button')).toBeNull();
+  });
+});
+
+// SPEC.md Sections 7.7 and 8.1: what the glyph is made of. The kind carries a
+// pictogram, the period carries a modifier drawn above it, and an unearned
+// badge is the same artwork inside a dashed frame.
+//
+// Everything below is markup, and that is the boundary of what it can say.
+// jsdom loads no stylesheet and lays nothing out, so no test here can see a
+// crown at the 1.25rem a leaderboard row draws a badge at, or tell a crown
+// from a star, or judge whether the drawing is any good. What it can prove is
+// that the three periods are three different marks, that the week has none,
+// that the two states draw the same artwork, and that the barfly badge is not
+// wearing the martini that means something else everywhere it appears.
+describe('the badge glyph (SPEC.md Sections 7.7, 8.1)', () => {
+  function glyphOf(element: Element): { marks: string[]; modifiers: string[]; frames: number } {
+    return {
+      marks: Array.from(element.querySelectorAll('[class$="__mark"]')).map(
+        (path) => path.getAttribute('d') ?? '',
+      ),
+      modifiers: Array.from(element.querySelectorAll('[class$="__modifier"]')).map(
+        (path) => path.getAttribute('d') ?? '',
+      ),
+      frames: element.querySelectorAll('.badge-placeholder__frame').length,
+    };
+  }
+
+  async function shelfOf(badges: Badge[]) {
+    act(() => {
+      root.unmount();
+    });
+    root = createRoot(container);
+    stubProfile(profileBody({ badges }));
+    await renderApp('/profile/player-1');
+  }
+
+  // Mutation: the same modifier for two periods, or a modifier on the week.
+  // The period is carried by nothing / a star / a crown since the ring frame
+  // went, and two periods drawing the same thing is a badge that cannot say
+  // which of three it is to anyone who is looking at it rather than listening.
+  it('draws one modifier per period, three different ones, and none on the week', async () => {
+    await shelfOf([
+      badge({ kind: 'barfly', period: 'week', periodKey: '2026-W32', value: 1 }),
+      badge({ kind: 'barfly', period: 'month', periodKey: '2026-08', value: 2 }),
+      badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 3 }),
+    ]);
+
+    const [week, month, year] = earnedBadges().map(glyphOf);
+    expect(week.modifiers, 'the weekly badge has grown a modifier').toHaveLength(0);
+    expect(month.modifiers).toHaveLength(1);
+    expect(year.modifiers).toHaveLength(1);
+    expect(
+      month.modifiers[0],
+      'the month and the year draw the same modifier, so the star and the crown are one ' +
+        'shape and the two badges are indistinguishable by sight',
+    ).not.toBe(year.modifiers[0]);
+    for (const d of [...month.modifiers, ...year.modifiers]) {
+      expect(d).not.toBe('');
+    }
+
+    // The pictogram is the kind's and does not change with the period: the
+    // three barfly badges are one glass with something above it, not three
+    // drawings.
+    expect(new Set([week.marks[0], month.marks[0], year.marks[0]]).size).toBe(1);
+  });
+
+  // The kind is the other axis, and the two pictograms are two shapes.
+  it('draws one pictogram per kind, and two different ones', async () => {
+    await shelfOf([
+      badge({ kind: 'explorer', period: 'week', periodKey: '2026-W32', value: 1 }),
+      badge({ kind: 'barfly', period: 'week', periodKey: '2026-W32', value: 1 }),
+    ]);
+
+    const [explorer, barfly] = earnedBadges().map(glyphOf);
+    expect(explorer.marks).toHaveLength(1);
+    expect(barfly.marks).toHaveLength(1);
+    expect(explorer.marks[0]).not.toBe(barfly.marks[0]);
+  });
+
+  // The owner ruled this out by name: the martini belongs to the map marker,
+  // the bar sheet, the bar detail screen and the discovery stamp, where its
+  // two states say whether a bar is mastered (Section 8.1). A badge wearing it
+  // would make one silhouette mean two things. Compared against the real
+  // definition rather than against a copy of it here, so this keeps working if
+  // the glass is ever redrawn.
+  it('does not wear the martini of Section 8.1', async () => {
+    await shelfOf([badge({ kind: 'barfly', period: 'year', periodKey: '2026', value: 1 })]);
+
+    const drawn = glyphOf(earnedBadges()[0]);
+    const martini = [...cocktailGlassPathData(false), ...cocktailGlassPathData(true)];
+    for (const d of [...drawn.marks, ...drawn.modifiers]) {
+      expect(martini, `a badge is drawing the cocktail glass of Section 8.1: ${d}`).not.toContain(
+        d,
+      );
+    }
+  });
+
+  // Section 8.1: the unearned state may not rest on lightness alone, and since
+  // the artwork became identical in the two states the frame is the only other
+  // channel there is. index.css proves it is dashed; this proves it is there,
+  // and there in exactly one of the two states.
+  it('frames the unearned glyph and only the unearned glyph', async () => {
+    await shelfOf([badge({ kind: 'explorer', period: 'week', periodKey: '2026-W32', value: 1 })]);
+
+    expect(glyphOf(earnedBadges()[0]).frames, 'an earned badge has grown a frame').toBe(0);
+    for (const placeholder of placeholders()) {
+      expect(
+        glyphOf(placeholder).frames,
+        'a placeholder has no frame, so nothing but opacity separates it from an earned ' +
+          'badge - which Section 8.1 forbids and a greyscale print erases',
+      ).toBe(1);
+    }
+  });
+
+  // The owner's instruction was "same as real badge but in light grey", and
+  // "the same" is a claim about the paths as well as the paint: a placeholder
+  // that redrew the mark would be a second drawing of the badge free to drift
+  // from the first.
+  it('draws the placeholder from the same artwork as the badge it stands for', async () => {
+    await shelfOf([badge({ kind: 'explorer', period: 'year', periodKey: '2026', value: 1 })]);
+
+    const earned = glyphOf(earnedBadges()[0]);
+    // explorer/year is held, so explorer/month is the placeholder to compare
+    // against - same kind, and the modifier differs because the period does.
+    const barflyYear = placeholders().find(
+      (element) => element.getAttribute('aria-label') === 'Not yet earned: Bar Legend badge, year',
+    );
+    expect(barflyYear).toBeDefined();
+    expect(glyphOf(barflyYear as HTMLElement).modifiers[0]).toBe(earned.modifiers[0]);
+
+    const explorerMonth = placeholders().find(
+      (element) =>
+        element.getAttribute('aria-label') === 'Not yet earned: Explorer Champion badge, month',
+    );
+    expect(explorerMonth).toBeDefined();
+    expect(glyphOf(explorerMonth as HTMLElement).marks[0]).toBe(earned.marks[0]);
   });
 });

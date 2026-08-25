@@ -423,6 +423,40 @@ button:focus-visible,
   text-align: left;
 }
 
+/* Section 8.1's wordmark where it is a link to the start screen, which since
+   v1.38 is everywhere it is chrome. Two facts and no third: it is a control,
+   so it takes a tap and reserves a target; and it is still the same mark, so
+   it takes nothing else that an anchor would otherwise bring.
+
+   NO UNDERLINE, AND THAT IS NOT A STYLE PREFERENCE. `a` in this stylesheet is
+   ink and otherwise the user agent's, which underlines - and an underlined
+   wordmark is a different mark from the one on the two hero screens, which
+   Section 8.1's "one definition, nothing varies between the prominences"
+   rules out. What offers the tap instead is the pointer, the same
+   `:focus-visible` ring every control on this palette gets, and the fact that
+   a wordmark leading home is a pattern people already have.
+
+   THE TARGET IS 44 px TALL AND AS WIDE AS THE MARK, WHICH IS THE WHOLE
+   BARGAIN. Section 8.2 requires 44 x 44; the chrome mark is 0.75rem of type
+   in a 0.25rem padding box, about 22 px, so half the height of the target is
+   padding a player cannot see. Four screens carry the chrome mark; on the
+   three that are ordinary scrolling pages - the city overview, the
+   leaderboard, a profile - that padding is a strip of paper and costs
+   nothing. On the map it sits over terrain that can be dragged, so it is
+   bounded on the axis that matters: `inline-flex` keeps the
+   box shrink-wrapped around a single non-wrapping line - roughly the width of
+   "TIPSY TRAILS" and no more - instead of a block-level element stretching an
+   invisible full-width bar across the top of the map. What cannot be bounded
+   is the extra height, because 44 px is the floor and the mark is 22; that
+   the remaining strip is tight to the mark is the most that can be said, and
+   it is not something any test in this repository can watch. */
+.wordmark--link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  text-decoration: none;
+}
+
 /* Section 8.3's start screen. `relative` so the backdrop below has this to be
    absolutely positioned against; `isolation` so the backdrop's stacking stays
    this screen's business and cannot reach the tab bar. */
@@ -968,14 +1002,33 @@ button:focus-visible,
 
    pointer-events: none, and it is the point of scoping this rule to the
    overlay container at all. `.map-overlays > * > *` gives every child of a row
-   its pointer events back so the overlays can be used; the wordmark is not an
-   overlay a player uses, it is a mark, and a mark that swallows drags in the
-   top corner of a map is a bug in the one gesture this screen is for. */
+   its pointer events back so the overlays can be used; a wordmark that is only
+   a mark is not an overlay a player uses, and a mark that swallows drags in
+   the top corner of a map is a bug in the one gesture this screen is for.
+
+   THAT LAST PARAGRAPH STOPPED BEING THE WHOLE STORY IN v1.38, and the rule
+   below is what it stops being true for. On this screen the wordmark now leads
+   to the start screen, so it is a control and has to take a tap - see
+   .wordmark--link. This declaration is kept rather than deleted because it is
+   still the right answer for a chrome mark that is *not* a link: the map is
+   the only screen where the mark sits over a draggable surface, and a mark
+   that leads nowhere must not cost a drag. The link rule follows it and wins
+   on source order at equal specificity. */
 .map-overlays .wordmark {
   padding: 0.25rem 0.5rem;
   background: rgba(244, 239, 230, 0.85);
   border-radius: 4px;
   pointer-events: none;
+}
+
+/* The map's copy of it, and the one declaration it needs that the others do
+   not: the pointer events the rule above gives back. Placed after
+   `.map-overlays .wordmark` deliberately - the two selectors have the same
+   specificity, so this is source order doing the work, and moving it up the
+   file would silently make the link untappable on the one screen the owner
+   asked about first. */
+.map-overlays .wordmark--link {
+  pointer-events: auto;
 }
 
 /* Section 8.6: the GPS/connection/foreground-tracking indicator, always
@@ -1047,11 +1100,22 @@ button:focus-visible,
 /* Against the control above, not against the map: it hangs below the icons
    that opened it. On a narrow screen it reaches across the whole of row 2,
    and the z-index is what keeps it above the rows it paints over while it is
-   open. */
+   open.
+
+   IT HANGS FROM THE RIGHT EDGE BECAUSE THE ICONS DO. This said `left: 0`
+   while the indicator was row 2's first child and sat in the top-left corner,
+   where a panel growing rightwards had the whole screen to grow into. v1.38
+   swapped the row's two children so the wordmark leads it, which moved the
+   indicator to the top *right* - and 18rem growing rightwards from a control
+   already at the right margin is 18rem of panel off the side of the phone,
+   with `max-width` unable to help because the overflow is a position and not
+   a width. Anchoring the opposite corner is the fix, and it is the same
+   panel: it still reaches the full width of row 2 on a narrow screen, from
+   the other end. */
 .tracking-indicator__panel {
   position: absolute;
   top: calc(100% + 0.5rem);
-  left: 0;
+  right: 0;
   z-index: 11;
   width: 18rem;
   max-width: calc(100vw - 2rem);
@@ -1886,9 +1950,16 @@ button:focus-visible,
   font-weight: 600;
 }
 
-/* Section 7.7: badge glyphs - solid ink pictogram (kind) inside a ring
-   frame whose stroke count carries the period tier (week/month/year), on
-   the badge shelf (profile) and inline in leaderboard rows. */
+/* Section 7.7: badge glyphs - a solid ink pictogram carrying the kind, with
+   the period's modifier (nothing, a star, a crown) drawn above it, on the
+   badge shelf (profile) and inline in leaderboard rows.
+
+   Solid ink and nothing else, which is Section 8.1 read literally: "symbols
+   are solid black pictograms with no gradients, shadows, or outlines", and
+   the one accent this palette allows is reserved for the player's own
+   position and for active states. A badge is neither, however much a badge is
+   the thing on this screen a player is meant to want. What it is allowed to
+   be proud of is the drawing. */
 .badge {
   display: inline-flex;
   width: 2rem;
@@ -1903,13 +1974,15 @@ button:focus-visible,
   color: var(--color-ink);
 }
 
-.badge__ring {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1;
+/* The two halves of the glyph are painted identically and separately: one
+   declaration each, so that a rule reaching for the pictogram cannot silently
+   restyle the crown above it, and so the stylesheet says out loud that the
+   modifier is ink like everything else here rather than a highlight. */
+.badge__mark {
+  fill: currentColor;
 }
 
-.badge__mark {
+.badge__modifier {
   fill: currentColor;
 }
 
@@ -1939,19 +2012,33 @@ button:focus-visible,
 }
 
 /* Section 7.7's placeholders: the badges a player has not earned, drawn so
-   they can be wanted. Same box, same paths, same ring count as the real thing
+   they can be wanted. Same box, same paths, same modifier as the real thing
    (components/Badge.tsx draws both from one definition) - everything that
-   separates the two states is here.
+   separates the two states is here, and since v1.38 it is two things rather
+   than three.
 
-   Three channels, and only one of them is colour. Section 8.1 forbids leaning
-   on colour alone and this palette makes it a weak signal anyway: grey ink on
-   warm paper is the same ink at lower contrast, which is nothing at all in
-   greyscale, in print, or to a player who perceives no colour. So the mark is
-   hollow rather than solid - a wall of ink around an empty middle, the state
-   grammar Section 8.1 already sets for the cocktail glass, and most of the
-   glyph's area disappearing - and the rings are broken rather than continuous,
-   which is the same reason Section 8.1 gives for drawing district boundaries
-   dashed. Either one alone survives being printed in black and white.
+   THE ARTWORK IS NO LONGER REDRAWN, WHICH IS THE OWNER'S OWN INSTRUCTION:
+   "just use same as real badge but in light grey maybe transparent. Your
+   frame idea is okay." So the mark and the modifier are filled exactly as the
+   earned ones are, the whole glyph is drawn back in lightness, and a dashed
+   frame goes round it.
+
+   THE FRAME IS REQUIRED AND NOT DECORATIVE. Section 8.1 forbids a state
+   resting on lightness alone, and this palette makes that a weak signal
+   anyway: grey ink on warm paper is the same ink at lower contrast, which is
+   nothing at all in greyscale, in print, or to a player who perceives no
+   colour. The frame is the second channel and it is a shape, so it survives
+   all three. It is dashed for the reason Section 8.1 gives for drawing
+   district boundaries dashed - broken against continuous is a distinction
+   that weight and opacity cannot carry here - and it is drawn inside the
+   glyph's own SVG rather than as a CSS border so that it scales with the mark
+   at all three sizes this badge is drawn at.
+
+   What it replaced was a hollow mark and broken rings. The rings are gone
+   with the period they used to count, and hollowing the mark had become
+   actively wrong: a wall of ink around an empty middle is Section 8.1's
+   grammar for a *mastered* cocktail glass, and the barfly pictogram is now a
+   cocktail glass.
 
    The opacity is what the owner asked for by "ausgegraut" and what keeps this
    "sehr dezent": it is the channel that makes an earned badge unmistakably the
@@ -1974,18 +2061,27 @@ button:focus-visible,
   opacity: 0.4;
 }
 
-.badge-placeholder__ring {
+/* Identical to .badge__mark and .badge__modifier, and stated separately
+   rather than merged into one selector list with them: they are the same
+   declarations for opposite reasons - there because the badge is ink, here
+   because an unearned badge must be recognisably the *same drawing* - and a
+   shared rule would make "the placeholder stopped matching the badge" a thing
+   nobody could express. */
+.badge-placeholder__mark {
+  fill: currentColor;
+}
+
+.badge-placeholder__modifier {
+  fill: currentColor;
+}
+
+/* The second channel. Inside the glyph, at the edge of the 32-unit box, so
+   there is a hair of margin between it and the artwork at every size. */
+.badge-placeholder__frame {
   fill: none;
   stroke: currentColor;
   stroke-width: 1;
-  stroke-dasharray: 2 2.5;
-}
-
-.badge-placeholder__mark {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linejoin: round;
+  stroke-dasharray: 3 2.5;
 }
 
 .badge-shelf__heading {
@@ -2086,15 +2182,16 @@ button:focus-visible,
   margin: 0.5rem 0 0;
 }
 
-.badge-sheet__description {
-  margin: 0.5rem auto 0;
-  max-width: 30rem;
-  font-size: 0.9375rem;
-}
+/* The same quieter treatment .badge-shelf__note gets, and since v1.38 the only
+   copy on this sheet: the per-badge description is gone (the owner's "the name
+   is enough") and this one sentence is what is left. It stays quiet even
+   though it is no longer a footnote to anything, because the subject of this
+   sheet is the mark and the name above it and this only settles that the
+   answer to "how do I get one" is not a number.
 
-/* The same quieter treatment .badge-shelf__note gets, and the same sentence:
-   it settles that the answer is not a number, which is a footnote to the
-   description above it rather than a second description. */
+   There is deliberately no .badge-sheet__description rule any more. It was
+   removed rather than left unused: an orphan rule is an invitation to put the
+   description back. */
 .badge-sheet__note {
   margin: 0.5rem auto 0;
   max-width: 30rem;

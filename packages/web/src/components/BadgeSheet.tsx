@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { BADGE_COMPETITION_NOTE, badgeDescription, badgeName } from '@tipsytrails/shared';
+import { BADGE_COMPETITION_NOTE, BADGE_PERIOD_NAME, badgeName } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type { BadgeKind, BadgeSummary } from '../api/types.js';
 import { BadgeGlyph } from './Badge.js';
@@ -15,11 +15,22 @@ import { BadgeGlyph } from './Badge.js';
 // backdrop carries no keyboard handler for the reason MoreSheet's comment
 // gives, and this one does not either.
 //
-// **Section 7.7 is what this sheet may say, and it is a short list.** What a
-// badge is, what activity earns it, over what window, and - if the player
-// won it - which period they won it for and what they did to win it. Never
-// the threshold, never a distance from one, never a rank, never a standing,
-// never a share of a target. The unearned branch is where that matters most:
+// **Section 7.7 is what this sheet may say, and since v1.38 it is a very
+// short list.** The mark drawn large, the badge's name, one sentence, and -
+// if the player won it - which period they won it for and what they did to
+// win it. Never the threshold, never a distance from one, never a rank, never
+// a standing, never a share of a target.
+//
+// THE DESCRIPTION IS GONE ON PURPOSE, and the owner's reason is the whole of
+// it: *"Remove the detailed description for all of them, the name is enough"*.
+// Two sentences of rule and window under a name like "Bar Legend" is a sheet
+// that explains a picture nobody asked to have explained; the one line that
+// survives is the one thing a name genuinely cannot say, which is that no
+// score wins a badge. What each kind rewards is still stated once on the
+// profile, under the placeholders that raise the question
+// (components/Badge.tsx), rather than six times on six sheets.
+//
+// The unearned branch is where the remaining bound matters most:
 // a sheet that leaked a number there would hand back the floor Section 7.7
 // keeps off the screen, readable by opening the sheet again after every walk.
 // It is handed no value at all for an unearned badge (see BadgeSelection),
@@ -112,6 +123,13 @@ export function BadgeSheet({
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const name = badgeName(kind, period);
+  // The dialog's name says the period; the heading below does not. "Bar
+  // Legend" is the badge's name and is what a player reads, but a dialog is
+  // announced by its accessible name alone and the crown that carries the
+  // period on screen (Section 8.1) says nothing out loud - so the spoken name
+  // carries the period the same way the shelf's own labels do
+  // (components/Badge.tsx).
+  const spokenName = `${name}, ${BADGE_PERIOD_NAME[period]}`;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -141,7 +159,7 @@ export function BadgeSheet({
         // name is announced on open, the status line is a beat later, and a
         // listener who stops after the first words must not be told they hold
         // a badge they do not.
-        aria-label={award ? name : `Not yet earned: ${name}`}
+        aria-label={award ? spokenName : `Not yet earned: ${spokenName}`}
         ref={panelRef}
         onClick={(event) => event.stopPropagation()}
       >
@@ -152,10 +170,11 @@ export function BadgeSheet({
           <BadgeGlyph kind={kind} period={period} block={award ? 'badge' : 'badge-placeholder'} />
         </span>
         <h2 className="badge-sheet__name">{name}</h2>
-        <p className="badge-sheet__description">{badgeDescription(kind, period)}</p>
-        {/* Said on every sheet, identically, because it is true of every
-            badge: there is no score that wins one. A player who is told what
-            earns a badge and nothing else will supply a number themselves. */}
+        {/* The one line of copy left, said on every sheet identically because
+            it is true of every badge: there is no score that wins one. A
+            player given a name and nothing else will supply a number
+            themselves, and this is the answer that stops them - not a
+            footnote under a description any more, but the description. */}
         <p className="badge-sheet__note">{BADGE_COMPETITION_NOTE}</p>
         <p className="badge-sheet__status">
           {award

@@ -88,7 +88,7 @@ export function Leaderboard() {
             navigation defect rather than a difference of wording, so the two
             were renamed together. The route, the API and everything else on
             this screen keep the name they had. */}
-        <Wordmark prominence="chrome" />
+        <Wordmark prominence="chrome" linksToStart />
         <h1>Ranks</h1>
 
         <div className="leaderboard__controls">

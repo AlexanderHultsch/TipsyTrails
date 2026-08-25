@@ -475,22 +475,36 @@ export function MapScreen() {
             onCancel={(visitId) => void visits.cancelVisit(visitId)}
           />
         </div>
-        {/* The owner's specification for the tab bar, section 1: the status
-            indicator cluster stays exactly where it is. It has the wordmark
-            for company since Section 8.1's branding pass, and that costs it
-            nothing: this row is `justify-content: space-between`, so a second
-            child takes the opposite end and the indicator does not move a
-            pixel from the corner it has always been in. Which is also why the
-            wordmark is second in the markup and not first.
-            The owner asked for it "small and elegant on the map" - the chrome
-            prominence, a member of the overlay grid like everything else on
-            this screen rather than something absolutely positioned on top of
-            it (Section 8.3). It is a mark and never a control: index.css
-            gives it back the pointer-events this row's children otherwise
-            take, so it cannot eat a drag in the corner it sits in. */}
+        {/* THE WORDMARK IS FIRST IN THIS ROW AND THE STATUS ICONS SECOND,
+            WHICH IS THE OPPOSITE OF WHAT IT WAS. The reason it used to be
+            second is recorded here rather than deleted, because it was a good
+            reason and is superseded rather than wrong: this row is
+            `justify-content: space-between`, so whichever child comes second
+            takes the right-hand end - and putting the wordmark there kept the
+            tracking-indicator cluster in the exact corner it had occupied
+            since before the branding pass, at no cost to it.
+            What outweighs it is that `space-between` was then deciding the
+            wordmark's position, and it decided the *opposite* of every other
+            screen: .wordmark--chrome is left-aligned everywhere else
+            (index.css, Section 8.1), so the application's signature sat right
+            on the map and left on the four screens either side of it. One mark
+            in one place is worth more than a cluster's corner, so the two
+            children swap and the GPS/connection/tracking icons move to the
+            top right. The owner has been told and accepts it; index.css moves
+            their explanation panel to hang from the right edge with them,
+            which is not cosmetic - anchored left it would have run off the
+            side of every phone from that corner.
+            The owner asked for the mark "small and elegant on the map" - the
+            chrome prominence, a member of the overlay grid like everything
+            else on this screen rather than something absolutely positioned on
+            top of it (Section 8.3). It is now a control as well as a mark: it
+            leads to the start screen, so it takes the pointer events this
+            row's children get by default, and index.css keeps that hit area
+            tight to the mark instead of letting it become a strip along the
+            top of a map whose one gesture is a drag. */}
         <div className="map-overlays__controls map-overlays__controls--top">
+          <Wordmark prominence="chrome" linksToStart />
           <TrackingIndicator state={trackingState} />
-          <Wordmark prominence="chrome" />
         </div>
         <div className="map-overlays__middle">
           {tilesUnavailable && (

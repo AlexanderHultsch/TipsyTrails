@@ -160,7 +160,12 @@ export function AppHome() {
       <div className="screen__content screen__content--middle home">
         {/* The one screen where the wordmark is the subject rather than the
             signature, so it is the <h1> here and a plain span everywhere it is
-            chrome (components/Wordmark.tsx). */}
+            chrome (components/Wordmark.tsx).
+            It is also the one screen the chrome mark leads *to*, so here it
+            leads nowhere: a link to the route you are already standing on is
+            a control that visibly does nothing, which is worse than plain
+            text. The hero form takes no `linksToStart`, so that is a fact
+            about the type rather than about this call site remembering. */}
         <Wordmark as="h1" prominence="hero" />
         <p className="home__tagline">Karlsruhe is waiting.</p>
       </div>

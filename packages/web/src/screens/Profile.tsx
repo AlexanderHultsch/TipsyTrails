@@ -117,7 +117,7 @@ export function Profile() {
             screen while the profile is still loading and while it is failing -
             a main screen that is briefly nothing but a spinner is exactly the
             "collection of separate screens" this wordmark exists against. */}
-        <Wordmark prominence="chrome" />
+        <Wordmark prominence="chrome" linksToStart />
         {loading && <p role="status">Loading profile…</p>}
         {error && (
           <p className="error-message" role="alert">

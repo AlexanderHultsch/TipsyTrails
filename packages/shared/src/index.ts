@@ -23,9 +23,7 @@ export type { BadgePeriod, BadgePeriodBoundaries } from './berlin-time.js';
 export {
   BADGE_CATALOGUE,
   BADGE_COMPETITION_NOTE,
-  BADGE_KIND_NAME,
   BADGE_PERIOD_NAME,
-  badgeDescription,
   badgeName,
   unearnedBadgeTypes,
 } from './badges.js';

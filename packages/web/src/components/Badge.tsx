@@ -1,44 +1,117 @@
 import type { ReactNode } from 'react';
-import { BADGE_KIND_NAME, BADGE_PERIOD_NAME, unearnedBadgeTypes } from '@tipsytrails/shared';
+import { BADGE_PERIOD_NAME, badgeName, unearnedBadgeTypes } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type { BadgeKind, BadgeSummary } from '../api/types.js';
 
 // SPEC.md Section 7.7: "badges are prominent and public" - a compact,
-// solid-ink glyph per (kind, period) pair. The pictogram itself (the shape
-// inside the ring) carries the kind, and the ring count carries the period
-// tier (week/month/year) - both readable at a glance without text, per the
-// task brief - but the badge is never identified by shape alone: `aria-label`
-// below carries the same kind + period as text for anyone who can't see the
-// shape at all.
+// solid-ink glyph per (kind, period) pair, on the badge shelf and inline in
+// leaderboard rows.
 //
-// The two words come from packages/shared's badge vocabulary, which is also
-// what BadgeSheet titles a badge with and what the descriptions are keyed on.
-// They are lower-cased here and only here: this label is a sentence fragment
-// ("Explorer badge, week") where the sheet's title is a title ("Explorer ·
-// Week"), and one vocabulary in two cases is not two vocabularies.
-const badgeKindLabel = (kind: BadgeKind): string => BADGE_KIND_NAME[kind];
-const badgePeriodLabel = (period: BadgePeriod): string => BADGE_PERIOD_NAME[period].toLowerCase();
+// THE GLYPH IS TWO PARTS AND EACH CARRIES ONE AXIS. The pictogram carries the
+// kind - a compass rose for `explorer`, a highball with a straw and a garnish
+// for `barfly` - and a modifier drawn *above* it carries the period: nothing
+// for a week, a star for a month, a crown for a year. That replaced a ring
+// frame whose stroke count (one, two, three) used to carry the period, and the
+// reason is that a count of thin concentric circles is a counting task at
+// 1.25rem, where "is there a crown on it?" is a silhouette.
+//
+// Neither half is ever the only channel. `aria-label` below carries the
+// badge's name *and* its period as text, because a screen reader user gets
+// nothing from a crown - see BADGE_PERIOD_NAME in packages/shared, which
+// exists for exactly that reason now that the names themselves have stopped
+// saying "week", "month" or "year".
+//
+// The vocabulary comes from packages/shared's badge catalogue, which is also
+// what BadgeSheet titles a badge with, so a name cannot mean one thing on the
+// shelf and another in the sheet.
+const badgePeriodLabel = (period: BadgePeriod): string => BADGE_PERIOD_NAME[period];
 
-const BADGE_PERIOD_RINGS: Record<BadgePeriod, number> = {
-  week: 1,
-  month: 2,
-  year: 3,
+// One definition of each shape, drawn by both states. Section 8.1 makes the
+// argument for the cocktail glass and it is the same one here: a mark redrawn
+// per state is two marks that drift, and the two states are precisely what
+// must stay the same shape. Since v1.38 the earned/unearned difference is
+// entirely in how these paths are painted and in one frame drawn around them
+// (index.css and the placeholder branch below), never in which paths they are.
+//
+// EVERYTHING IS DRAWN IN A 32-UNIT BOX WITH A FIXED DIVISION OF IT. The
+// modifier band is y 2.6 - 10.4; the pictogram is y 12.4 - 29.2 around a
+// centre at (16, 20.8); the two never come closer than two units, which is
+// what keeps a crown from fusing with the glass under it at the smallest size
+// this is drawn at. Nothing in either band moves or grows when the other is
+// empty, which is what makes the three periods of one kind read as one badge
+// with something added rather than as three drawings - a weekly badge is
+// therefore a little low in its box, on purpose. What is left over at the
+// edges is the margin the placeholder's frame sits in.
+//
+// No fill-rule is set and none is wanted: nothing here is a shape with a hole
+// in it, and the barfly's three subpaths overlap deliberately - the straw
+// crosses the rim, the garnish sits on it - which the default nonzero rule
+// merges into one silhouette where `evenodd` would punch the overlaps out.
+
+// The kind, as one solid pictogram.
+//
+// `explorer` is a compass rose and not the lozenge it replaced: four long
+// cardinal points at radius 8.4, four short intercardinals at 4.6, and a waist
+// of 3.2 between them. Those last two numbers are the whole of what makes it
+// legible small: an earlier version had a 2.45 waist, which is a truer rose on
+// paper and collapsed into a lumpy diamond at a leaderboard row's size,
+// because a point whose base is under two units is under one device pixel
+// there. Widening the waist trades a little of the drawing for arms that
+// survive. It is the one shape here that is genuinely about direction, which
+// is what the badge is for.
+//
+// `barfly` is a cocktail glass that is deliberately **not** the martini of
+// Section 8.1. That silhouette - a wide triangular bowl on a stem and a foot -
+// belongs to the bar marker and to the discovery stamp, where it carries a
+// state (full/nearly empty, Section 5.7), and a badge wearing it would be a
+// fifth surface drawing a mark that means something else. This is a tapered
+// highball instead, and it is told apart from the martini by its outline
+// alone: a tall column widest at the rim and narrowing to the base, a straw
+// crossing out of it diagonally to the upper right, and a round garnish on the
+// near rim - against a shape that is widest at the very top, pinches to a
+// point in its middle, and stands on a foot. No stem, no foot, no triangle,
+// and nothing at the top corners of the box for the two to be confused in.
+const BADGE_MARK_PATH: Record<BadgeKind, string> = {
+  explorer:
+    'M16 12.4 L17.22 17.84 L19.25 17.55 L18.96 19.58 L24.4 20.8 L18.96 22.02 L19.25 24.05 ' +
+    'L17.22 23.76 L16 29.2 L14.78 23.76 L12.75 24.05 L13.04 22.02 L7.6 20.8 L13.04 19.58 ' +
+    'L12.75 17.55 L14.78 17.84 Z',
+  barfly:
+    'M10.5 15.4 L19.3 15.4 L18.3 29.2 L11.5 29.2 Z' +
+    'M14.17 27.5 L22.27 13.4 L20.53 12.4 L12.43 26.5 Z' +
+    'M9.3 14.3a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0Z',
 };
 
-// One definition of each pictogram, drawn by both states. Section 8.1 makes
-// the argument for the cocktail glass and it is the same one here: a mark
-// redrawn per state is two marks that drift, and the two states are precisely
-// what must stay the same shape. The earned/unearned difference is entirely in
-// how these paths are painted (index.css), never in which paths they are.
+// The period, as a modifier above the pictogram - or as nothing at all.
 //
-// `fillRule` is only load-bearing for the barfly mug, whose handle is a second
-// subpath punched out of the first; on the explorer's single-subpath diamond it
-// is a no-op, and it is set unconditionally rather than branching for one of
-// two shapes.
-const BADGE_MARK_PATH: Record<BadgeKind, string> = {
-  explorer: 'M16 7 L20.5 16 L16 25 L11.5 16 Z',
-  barfly:
-    'M10 9h9v10a4.5 4.5 0 0 1-9 0zm11 2h1.5a3.5 3.5 0 0 1 0 7H21v-2h1.5a1.5 1.5 0 0 0 0-3H21z',
+// `null` for the week rather than an empty string or a missing key: a
+// `Record<BadgePeriod, ...>` makes a fourth period a compile error here, and
+// "the weekly badge has no modifier" is a decision worth being able to read.
+//
+// BOTH SHAPES ARE DRAWN FOR THE SIZE THEY ARE ACTUALLY RENDERED AT, which
+// inline in a leaderboard row is 1.25rem for the whole 32-unit box - so this
+// band is about five device pixels tall there, and every decision in these two
+// paths is about that. The star is fat (inner radius 43% of outer, against the
+// 38% of a classic pentagram) so it holds ink instead of dissolving into five
+// hairs, and it is narrow: about eight units across. The crown is twelve units
+// across - half again as wide - with three bold points over a solid band, no
+// arches, no jewels and no rim, and its notches are cut deep enough (to y 8.2,
+// against points reaching 2.6 and 3.9) that the three teeth stay separate
+// rather than smearing into one lump. So the three periods differ by mass and
+// width as much as by shape: nothing, a narrow point, a wide bar with teeth.
+//
+// None of that is provable here. jsdom loads no stylesheet and lays nothing
+// out, so no test in this repository can see one of these rendered at any
+// size; the drawings were checked by rasterising them offline at 20, 32 and 64
+// device pixels, and the claim that they are *legible* still needs eyes on a
+// phone. What the tests hold is that the three modifiers are three different
+// paths and that the week has none.
+const BADGE_MODIFIER_PATH: Record<BadgePeriod, string | null> = {
+  week: null,
+  month:
+    'M16 2.6 L17.09 5.4 L20.09 5.57 L17.76 7.47 L18.53 10.38 L16 8.75 ' +
+    'L13.47 10.38 L14.24 7.47 L11.91 5.57 L14.91 5.4 Z',
+  year: 'M10 10.2 V3.9 L13 8.2 L16 2.6 L19 8.2 L22 3.9 V10.2 Z',
 };
 
 // Exported for BadgeSheet, which draws the same mark large. That is the whole
@@ -56,14 +129,21 @@ export function BadgeGlyph({
   period: BadgePeriod;
   block: 'badge' | 'badge-placeholder';
 }) {
-  const rings = BADGE_PERIOD_RINGS[period];
+  const modifier = BADGE_MODIFIER_PATH[period];
 
   return (
     <svg viewBox="0 0 32 32" className={`${block}__icon`} aria-hidden="true" focusable="false">
-      {Array.from({ length: rings }, (_, i) => (
-        <circle key={i} cx="16" cy="16" r={13 - i * 3} className={`${block}__ring`} />
-      ))}
-      <path className={`${block}__mark`} fillRule="evenodd" d={BADGE_MARK_PATH[kind]} />
+      {/* The placeholder's frame, and the reason it is markup rather than a
+          border in the stylesheet: it is a *shape*, and Section 8.1 requires
+          the unearned state to differ from the earned one in more than
+          lightness. It is drawn first so the artwork sits inside it, and it
+          exists in exactly one of the two states - which is the whole point,
+          since the artwork itself is now identical in both. */}
+      {block === 'badge-placeholder' && (
+        <rect className="badge-placeholder__frame" x="1" y="1" width="30" height="30" rx="4" />
+      )}
+      <path className={`${block}__mark`} d={BADGE_MARK_PATH[kind]} />
+      {modifier !== null && <path className={`${block}__modifier`} d={modifier} />}
     </svg>
   );
 }
@@ -137,7 +217,12 @@ export function Badge({
   className?: string;
   onSelect?: (opener: HTMLButtonElement) => void;
 }) {
-  const label = `${badgeKindLabel(kind)} badge, ${badgePeriodLabel(period)}`;
+  // Name first, period second: "Bar Legend badge, year". The name is what the
+  // sheet titles this badge with and the period is what the crown above the
+  // glass says silently, so the two together are the whole of what a sighted
+  // player can see - and the period is not optional information now that no
+  // name carries it.
+  const label = `${badgeName(kind, period)} badge, ${badgePeriodLabel(period)}`;
 
   return (
     <BadgeBox
@@ -151,21 +236,28 @@ export function Badge({
 }
 
 // Section 7.7: a badge the player has *not* got, drawn so they can want it.
-// The same pictogram and the same ring count as the real thing - a placeholder
-// that did not say which badge it stands for could not raise the question it
-// exists to raise - and three differences from it, none of which is a number.
 //
-// The state is never colour alone, which Section 8.1 forbids and a
-// near-monochrome palette makes easy to fall into by accident. Two of the
-// three differences are shape and survive greyscale, print and a reader who
-// perceives no colour at all: the mark is hollow rather than solid ink (the
-// same grammar as the mastered cocktail glass in Section 8.1 - a wall of ink
-// around an empty middle, which is most of the mark's area appearing or
-// disappearing), and the rings are broken rather than continuous (the same
-// grammar as Section 8.1's district boundaries, dashed for exactly the reason
-// that weight and opacity alone cannot carry a distinction on this palette).
-// The third is the greying the owner asked for, and it is the one that makes
-// an earned badge stay the louder thing on the shelf.
+// The owner decided the treatment: *"just use same as real badge but in light
+// grey maybe transparent. Your frame idea is okay."* So it is the same
+// artwork, pictogram and modifier both - a placeholder that did not say which
+// badge it stands for could not raise the question it exists to raise - drawn
+// back in lightness, inside a dashed frame.
+//
+// THE FRAME IS NOT DECORATION. Section 8.1 does not allow a state to rest on
+// lightness alone: greying something out is a difference nobody sees in a
+// black-and-white print, and it is the weakest signal available on a palette
+// that is already near-monochrome. Lightness is what the owner asked for and
+// it is what makes an earned badge the louder thing on a shelf holding both;
+// the frame is the second channel, and it is dashed for the reason Section 8.1
+// gives for drawing district boundaries dashed - broken against continuous is
+// a distinction weight and opacity cannot carry here. An empty frame around a
+// badge also happens to say the right thing: a place kept for something not
+// there yet.
+//
+// This replaces a hollow-mark-and-broken-rings treatment. Hollowing the mark
+// is Section 8.1's grammar for a *mastered* cocktail glass, and with the badge
+// pictogram now a glass of its own, an unearned barfly badge drawn hollow
+// would have been saying "mastered" in the application's own vocabulary.
 //
 // What it never carries: the threshold, the player's distance from one, a
 // rank, a standing, a share of a target, or any mark that moves as the
@@ -189,12 +281,12 @@ function BadgePlaceholder({
   className?: string;
   onSelect?: (opener: HTMLButtonElement) => void;
 }) {
-  // The state leads rather than trails. A screen reader user hearing
-  // "Explorer badge, week" from a placeholder would be told they hold a badge
+  // The state leads rather than trails. A screen reader user hearing "Bar
+  // Legend badge, year" from a placeholder would be told they hold a badge
   // they do not, which is the worst failure available here, and a listener who
   // stops after the first words is exactly who that failure lands on - so the
   // first words are the ones that settle it.
-  const label = `Not yet earned: ${badgeKindLabel(kind)} badge, ${badgePeriodLabel(period)}`;
+  const label = `Not yet earned: ${badgeName(kind, period)} badge, ${badgePeriodLabel(period)}`;
 
   return (
     <BadgeBox
