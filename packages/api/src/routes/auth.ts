@@ -105,12 +105,13 @@ function usernameFromRequest(request: FastifyRequest): string {
 // /api/auth/me` is the canonical "who am I" answer and register/login return
 // the same body; routes/account.ts imports them for `PATCH /api/settings`,
 // which answers with the updated user, rather than keeping the second
-// identical copy of all three it used to (same precedent as routes/admin.ts
-// importing `sendBarNotFound` from routes/bars.ts). Two copies of a
-// client-facing shape is exactly the thing that drifts, and the web client's
-// own mirror of it (packages/web/src/api/types.ts's `User`) already has to
-// be kept in step by hand across the package boundary — there is no reason
-// to have a third to keep in step inside this one.
+// identical copy of all three it used to (same precedent as the shared
+// reply bodies in http/errors.ts, imported rather than redefined per route).
+// Two copies of a client-facing shape is exactly the thing that drifts, and
+// the web client's own mirror of it (packages/web/src/api/types.ts's
+// `User`) already has to be kept in step by hand across the package
+// boundary — there is no reason to have a third to keep in step inside this
+// one.
 //
 // `password_hash` and `security_answer_hash` are deliberately absent from
 // both: neither ever leaves the server (Section 10.2), and the only place

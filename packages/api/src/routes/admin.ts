@@ -150,6 +150,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
+    // Parses `request.query` but answers with `sendInvalidRequestBody`'s
+    // "The request body is invalid." — a real mismatch, not a mistake here:
+    // http/errors.ts's own comment on `sendInvalidRequestBody` explains why
+    // this exact string is preserved rather than corrected to
+    // `sendInvalidRequestQuery`.
     const parsed = listBarsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       sendInvalidRequestBody(reply);
@@ -176,7 +181,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // SPEC.md Section 9.3: created with source='admin', active immediately,
   // submitted_by set to the creating admin — the same convention
-  // routes/bars.ts's suggest handler uses for community submissions.
+  // routes/bars.ts's suggest handler uses for community submissions. What it
+  // does not share with that handler is `findConflictingBar`
+  // (@tipsytrails/shared): Section 11.3's duplicate guard is a community
+  // safeguard against two players independently submitting the same venue,
+  // not a general constraint on the `bars` table (there is no UNIQUE on
+  // `name` either), and an admin creating or moving a bar is assumed to
+  // know what they are doing. A name identical to an existing bar's is
+  // accepted here without complaint.
   app.post('/api/admin/bars', { preHandler: requireAdmin }, async (request, reply) => {
     if (request.userId == null) {
       sendUnauthenticated(reply);
@@ -245,7 +257,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
   // SPEC.md Section 9.3: "Editing a bar's position recomputes cell_index and
   // district_id. Existing discoveries are not revoked." — this handler never
-  // touches bar_discoveries, so the second half holds by construction.
+  // touches bar_discoveries, so the second half holds by construction. A
+  // rename to a name matching another bar is accepted the same way a
+  // create is (see the POST handler above) — no duplicate check runs here
+  // either.
   app.patch('/api/admin/bars/:id', { preHandler: requireAdmin }, async (request, reply) => {
     if (request.userId == null) {
       sendUnauthenticated(reply);

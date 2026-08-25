@@ -29,12 +29,14 @@ import { useVisits } from '../tracking/useVisits.js';
 
 const TILES_URL = `/tiles/${CONFIG.TILES_FILENAME}`;
 
-// Roughly the middle of Karlsruhe's bounding box (Section 6.2). There is no
-// city-metadata endpoint wired up in this phase (that is /api/city -
-// Section 9.2), so this is a fixed fallback view rather than one derived
-// from server data. Used whenever the URL carries neither a district centre
-// nor a district bounding box (see centerFromSearchParams and
-// boundsFromSearchParams below).
+// Roughly the middle of Karlsruhe's bounding box (Section 6.2). GET
+// /api/city (Section 9.2) exists and this screen already fetches it
+// (useCityMaxBounds below), but that fetch is async and the map has to be
+// on screen before it can resolve - the same reason useCityMaxBounds.ts
+// gives for not waiting on it - so this stays a fixed fallback view rather
+// than one derived from server data. Used whenever the URL carries neither
+// a district centre nor a district bounding box (see centerFromSearchParams
+// and boundsFromSearchParams below).
 //
 // There is no INITIAL_ZOOM beside it: the opening zoom is
 // CONFIG.MAP_DEFAULT_ZOOM (Section 8.3, and Section 0 rule 3 - a zoom limit

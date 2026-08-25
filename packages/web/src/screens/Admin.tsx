@@ -130,6 +130,11 @@ function BarsSection() {
   const [bars, setBars] = useState<AdminBar[]>([]);
   const [barsLoading, setBarsLoading] = useState(true);
   const [barsError, setBarsError] = useState<string | null>(null);
+  // Shared by handleToggleStatus and handleDelete below, unlike
+  // createError/editError, which each belong to one open form: a toggle or
+  // a delete has no form of its own to show its error next to - the click
+  // that triggers it comes straight off the row - so one banner above the
+  // list is that action's only place to report a failure.
   const [rowActionError, setRowActionError] = useState<string | null>(null);
 
   const [createForm, setCreateForm] = useState<BarFormState>(EMPTY_BAR_FORM);
@@ -226,6 +231,15 @@ function BarsSection() {
     }
   }
 
+  // Unlike handleDelete below, this asks for no confirmation. 'hidden' only
+  // removes a bar from player-facing endpoints (routes/bars.ts filters on
+  // `status = 'active'`); it does not touch bar_discoveries or visits, so
+  // an admin who hides the wrong bar by mistake corrects it with a second
+  // tap of the same button, not a support request. The two statuses are the
+  // whole vocabulary the server accepts here (patchBarSchema,
+  // packages/api/src/routes/admin.ts) - there is no third value to guard
+  // against, so the toggle needs no state machine, just the opposite of
+  // whatever the row currently shows.
   async function handleToggleStatus(bar: AdminBar) {
     setRowActionError(null);
     const nextStatus = bar.status === 'active' ? 'hidden' : 'active';

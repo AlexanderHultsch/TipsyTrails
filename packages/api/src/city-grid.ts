@@ -66,12 +66,15 @@ type CellDistrictResult =
   | { status: 'outside_city' }
   | { status: 'grid_unavailable' };
 
-// One computation shared by POST /api/samples (routes/fog.ts), the suggest
-// handler (routes/bars.ts) and the create/move-bar handlers
-// (routes/admin.ts), rather than three copies of it. Order matters and is
-// the order the original had: outside-city is checked before grid
-// availability, since a position outside the grid never needs the district
-// lookup at all.
+// One computation shared by the suggest handler (routes/bars.ts) and the
+// create/move-bar handlers (routes/admin.ts), rather than three copies of
+// it. POST /api/samples (routes/fog.ts) resolves a cell the same way
+// (`toCell`) but does not call this: it runs per accepted sample in a batch
+// and only needs the cell index there, resolving districts once in bulk
+// afterwards over the revealed cells (routes/fog.ts's own `applyReveal`)
+// rather than per sample. Order matters and is the order the original had:
+// outside-city is checked before grid availability, since a position
+// outside the grid never needs the district lookup at all.
 export function resolveCellAndDistrict(
   grid: GridParams,
   districtGrid: Uint16Array | null,

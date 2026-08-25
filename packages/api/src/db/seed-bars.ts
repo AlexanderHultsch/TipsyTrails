@@ -12,10 +12,11 @@ import { resolveSeedDir } from '../routes/static-data.js';
 // (SPEC.md Sections 5.6, 11.1) — the file `scripts/import-osm-bars.ts`
 // writes, one `Bar` (packages/shared/src/bars.ts) per entry.
 //
-// The file does not exist yet in this repository (the real OSM export is
-// still to come, per the phase brief), so its absence is treated the same
-// way `app.ts` treats a missing `grid.bin`: log it and continue rather than
-// fail the boot.
+// `data/seed/karlsruhe/bars.json` is committed (the OSM export has run), but
+// a city added later or a fresh checkout that has not yet run
+// `scripts/import-osm-bars.ts` for it still has no such file, so absence is
+// treated the same way `app.ts` treats a missing `grid.bin`: log it and
+// continue rather than fail the boot.
 //
 // Like `seedCity`, this is not "insert once, skip forever": a bar is matched
 // by `(city_id, osm_id)` — the identity `bars.json` itself carries — and an
