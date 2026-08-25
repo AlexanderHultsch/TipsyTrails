@@ -1,4 +1,5 @@
-import { unearnedBadgeTypes } from '@tipsytrails/shared';
+import type { ReactNode } from 'react';
+import { BADGE_KIND_NAME, BADGE_PERIOD_NAME, unearnedBadgeTypes } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type { BadgeKind, BadgeSummary } from '../api/types.js';
 
@@ -9,16 +10,14 @@ import type { BadgeKind, BadgeSummary } from '../api/types.js';
 // task brief - but the badge is never identified by shape alone: `aria-label`
 // below carries the same kind + period as text for anyone who can't see the
 // shape at all.
-const BADGE_KIND_LABEL: Record<BadgeKind, string> = {
-  explorer: 'Explorer',
-  barfly: 'Barfly',
-};
-
-const BADGE_PERIOD_LABEL: Record<BadgePeriod, string> = {
-  week: 'week',
-  month: 'month',
-  year: 'year',
-};
+//
+// The two words come from packages/shared's badge vocabulary, which is also
+// what BadgeSheet titles a badge with and what the descriptions are keyed on.
+// They are lower-cased here and only here: this label is a sentence fragment
+// ("Explorer badge, week") where the sheet's title is a title ("Explorer ·
+// Week"), and one vocabulary in two cases is not two vocabularies.
+const badgeKindLabel = (kind: BadgeKind): string => BADGE_KIND_NAME[kind];
+const badgePeriodLabel = (period: BadgePeriod): string => BADGE_PERIOD_NAME[period].toLowerCase();
 
 const BADGE_PERIOD_RINGS: Record<BadgePeriod, number> = {
   week: 1,
@@ -42,7 +41,13 @@ const BADGE_MARK_PATH: Record<BadgeKind, string> = {
     'M10 9h9v10a4.5 4.5 0 0 1-9 0zm11 2h1.5a3.5 3.5 0 0 1 0 7H21v-2h1.5a1.5 1.5 0 0 0 0-3H21z',
 };
 
-function BadgeGlyph({
+// Exported for BadgeSheet, which draws the same mark large. That is the whole
+// reason: "never a second copy of the path" is the rule this module already
+// keeps between the earned and unearned states, and a sheet with its own
+// `<svg>` would be a third mark free to drift from both. `block` still decides
+// only how the paths are *painted*, so the sheet cannot invent a state either
+// - it is handed one, from the same profile data the shelf drew itself from.
+export function BadgeGlyph({
   kind,
   period,
   block,
@@ -63,21 +68,85 @@ function BadgeGlyph({
   );
 }
 
+/** What a tapped badge hands back: which badge it is, and the award if any. */
+export interface BadgeSelection {
+  kind: BadgeKind;
+  period: BadgePeriod;
+  // The award this glyph stands for, or null for a badge the player has never
+  // held. Not a boolean: a player holds several awards of the same type
+  // (badges recur), and the sheet names the period *this* one was won for.
+  award: BadgeSummary | null;
+}
+
+// The callback also gets the button that was tapped, so the screen that owns
+// the sheet can hand focus back to it on close - the same contract
+// components/BottomNav.tsx keeps with its More tab, and the reason a keyboard
+// reader does not land back at the top of the document after closing.
+type BadgeSelect = (selection: BadgeSelection, opener: HTMLButtonElement) => void;
+
+// A badge is a picture, until a screen offers to explain it - then it is a
+// control, and the difference is not cosmetic. It opens a dialog, so it is a
+// button rather than a `role="img"` with a click handler: it reaches the
+// keyboard, it announces as a button, it says what it opens
+// (`aria-haspopup`), and Section 8.2's 44px target and the global
+// `button:focus-visible` ring come with it.
+//
+// The picture is what the leaderboard's rows keep. Six tappable glyphs per
+// ranked row would offer to explain someone else's badges, and Section 7.7
+// declines to publish standings - so the control is opt-in, exactly as
+// `showPlaceholders` below is, and for the same reason.
+function BadgeBox({
+  className,
+  label,
+  onSelect,
+  children,
+}: {
+  className: string;
+  label: string;
+  onSelect?: (opener: HTMLButtonElement) => void;
+  children: ReactNode;
+}) {
+  if (!onSelect) {
+    return (
+      <span className={className} role="img" aria-label={label}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`${className} badge-button`}
+      aria-label={label}
+      aria-haspopup="dialog"
+      onClick={(event) => onSelect(event.currentTarget)}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function Badge({
   kind,
   period,
   className,
+  onSelect,
 }: {
   kind: BadgeKind;
   period: BadgePeriod;
   className?: string;
+  onSelect?: (opener: HTMLButtonElement) => void;
 }) {
-  const label = `${BADGE_KIND_LABEL[kind]} badge, ${BADGE_PERIOD_LABEL[period]}`;
+  const label = `${badgeKindLabel(kind)} badge, ${badgePeriodLabel(period)}`;
 
   return (
-    <span className={className ? `badge ${className}` : 'badge'} role="img" aria-label={label}>
+    <BadgeBox
+      className={className ? `badge ${className}` : 'badge'}
+      label={label}
+      onSelect={onSelect}
+    >
       <BadgeGlyph kind={kind} period={period} block="badge" />
-    </span>
+    </BadgeBox>
   );
 }
 
@@ -113,26 +182,28 @@ function BadgePlaceholder({
   kind,
   period,
   className,
+  onSelect,
 }: {
   kind: BadgeKind;
   period: BadgePeriod;
   className?: string;
+  onSelect?: (opener: HTMLButtonElement) => void;
 }) {
   // The state leads rather than trails. A screen reader user hearing
   // "Explorer badge, week" from a placeholder would be told they hold a badge
   // they do not, which is the worst failure available here, and a listener who
   // stops after the first words is exactly who that failure lands on - so the
   // first words are the ones that settle it.
-  const label = `Not yet earned: ${BADGE_KIND_LABEL[kind]} badge, ${BADGE_PERIOD_LABEL[period]}`;
+  const label = `Not yet earned: ${badgeKindLabel(kind)} badge, ${badgePeriodLabel(period)}`;
 
   return (
-    <span
+    <BadgeBox
       className={className ? `badge-placeholder ${className}` : 'badge-placeholder'}
-      role="img"
-      aria-label={label}
+      label={label}
+      onSelect={onSelect}
     >
       <BadgeGlyph kind={kind} period={period} block="badge-placeholder" />
-    </span>
+    </BadgeBox>
   );
 }
 
@@ -148,14 +219,23 @@ function BadgePlaceholder({
 // placeholders: the leaderboard draws a shelf per row, and six grey glyphs on
 // every row of a ranked list would bury the badges people actually won. A
 // default of `true` would have given it them by inheritance.
+//
+// `onSelect` is opt-in for the same reason and is the same decision: with it
+// every glyph on the shelf becomes a control that explains itself, earned or
+// not (the owner's "even not achieved badges need to be described on
+// request"); without it the shelf is a picture, which is what a leaderboard
+// row and a stranger's profile get. Offering to explain a badge is only ever
+// offered about the player's own shelf - screens/Profile.tsx says why.
 export function BadgeShelf({
   badges,
   compact = false,
   showPlaceholders = false,
+  onSelect,
 }: {
   badges: BadgeSummary[];
   compact?: boolean;
   showPlaceholders?: boolean;
+  onSelect?: BadgeSelect;
 }) {
   const className = compact ? 'badge-shelf badge-shelf--compact' : 'badge-shelf';
 
@@ -177,7 +257,18 @@ export function BadgeShelf({
         <ul className={className}>
           {badges.map((badge) => (
             <li key={`${badge.kind}-${badge.period}-${badge.periodKey}`}>
-              <Badge kind={badge.kind} period={badge.period} />
+              <Badge
+                kind={badge.kind}
+                period={badge.period}
+                // The award itself, not its type: a player holds several
+                // awards of one type and the sheet names the period *this*
+                // glyph was won for.
+                onSelect={
+                  onSelect &&
+                  ((opener) =>
+                    onSelect({ kind: badge.kind, period: badge.period, award: badge }, opener))
+                }
+              />
             </li>
           ))}
         </ul>
@@ -192,7 +283,22 @@ export function BadgeShelf({
           <ul className="badge-shelf badge-shelf--placeholders">
             {placeholders.map((type) => (
               <li key={`${type.kind}-${type.period}`}>
-                <BadgePlaceholder kind={type.kind} period={type.period} />
+                <BadgePlaceholder
+                  kind={type.kind}
+                  period={type.period}
+                  // `award: null` is the whole of what the sheet is told
+                  // about an unearned badge, and it is what stops the sheet
+                  // being able to leak anything that moves with the player's
+                  // own value: it is handed no value to leak. Section 7.7's
+                  // operative rule - nothing about a placeholder may change
+                  // as the player's value changes - reaches the sheet as this
+                  // one `null`.
+                  onSelect={
+                    onSelect &&
+                    ((opener) =>
+                      onSelect({ kind: type.kind, period: type.period, award: null }, opener))
+                  }
+                />
               </li>
             ))}
           </ul>

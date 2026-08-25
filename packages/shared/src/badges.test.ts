@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { BADGE_CATALOGUE, unearnedBadgeTypes } from './badges.js';
+import {
+  BADGE_CATALOGUE,
+  BADGE_COMPETITION_NOTE,
+  badgeDescription,
+  badgeName,
+  unearnedBadgeTypes,
+} from './badges.js';
 import type { BadgeType } from './badges.js';
 import { BADGE_PERIODS } from './berlin-time.js';
 import { CONFIG } from './config.js';
@@ -78,5 +84,88 @@ describe('unearnedBadgeTypes', () => {
 
     expect(unearnedBadgeTypes([withValue])).toEqual(unearnedBadgeTypes([withoutValue]));
     expect(unearnedBadgeTypes([withValue])).toEqual(unearnedBadgeTypes([earned]));
+  });
+});
+
+// SPEC.md Section 7.7 decides every word of this copy: a description may say
+// what the badge is, what earns it and over what window, and may never carry
+// the threshold, a distance from it, a rank, a standing or a share of a
+// target. The tests below are that rule, read from both sides - what each
+// description must distinguish, and what none of them may contain.
+describe('badge copy', () => {
+  const descriptions = BADGE_CATALOGUE.map((type) => badgeDescription(type.kind, type.period));
+
+  it('gives every badge in the catalogue a description of its own', () => {
+    expect(new Set(descriptions).size).toBe(BADGE_CATALOGUE.length);
+  });
+
+  // The kind carries what counts. A player reading the barfly sheet must not
+  // be told the explorer rule, and the exclusion clause is the half of it
+  // they cannot guess - a second visit to a mastered bar scores nothing.
+  it('names the activity of the kind, exclusion and all', () => {
+    expect(badgeDescription('explorer', 'week')).toContain(
+      'city area you clear for the first time',
+    );
+    expect(badgeDescription('explorer', 'week')).toContain(
+      'Walking a street you have already cleared adds nothing.',
+    );
+    expect(badgeDescription('barfly', 'week')).toContain('bars you master for the first time');
+    expect(badgeDescription('barfly', 'week')).toContain(
+      'A second completed visit to a bar you have already mastered counts for nothing.',
+    );
+  });
+
+  // The period carries the window, and an ISO week is not "the last seven
+  // days" (Section 5.8) - which is the reading a player arrives with, and the
+  // one that has them counting from the wrong day.
+  it('names the window of the period, in Europe/Berlin', () => {
+    expect(badgeDescription('explorer', 'week')).toContain('an ISO week (Monday to Sunday)');
+    expect(badgeDescription('explorer', 'month')).toContain('a calendar month');
+    expect(badgeDescription('explorer', 'year')).toContain('a calendar year');
+    for (const description of descriptions) {
+      expect(description).toContain('Europe/Berlin');
+    }
+  });
+
+  // Two sentences at most, so a sheet is read rather than skipped.
+  it('says it in no more than two sentences', () => {
+    for (const description of descriptions) {
+      expect(description.split('. ').length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  // The rule this whole feature is bounded by. No description, name or note
+  // may carry a digit at all: a threshold, a distance from one, a rank or a
+  // share of a target would each be a number, and the surest way to publish
+  // none of them is to publish no number.
+  it('carries no digit and nothing that reads as a target or a standing', () => {
+    const everything = [
+      ...descriptions,
+      ...BADGE_CATALOGUE.map((type) => badgeName(type.kind, type.period)),
+      BADGE_COMPETITION_NOTE,
+    ];
+    for (const text of everything) {
+      expect(text).not.toMatch(/\d/);
+      expect(text).not.toMatch(/%/);
+      expect(text.toLowerCase()).not.toMatch(
+        /threshold|target|at least|rank|leader|to go|so close|nearly there/,
+      );
+    }
+  });
+
+  // Said identically on every badge, because it is true of every badge: a
+  // badge goes to the period's best, so no score wins one. It is the honest
+  // answer to the question a description raises and cannot answer.
+  it('answers "what must I do" in words rather than leaving a number to be invented', () => {
+    expect(BADGE_COMPETITION_NOTE).toContain('whoever does the most of it');
+    expect(BADGE_COMPETITION_NOTE).toContain('no fixed score wins one');
+  });
+
+  it('titles a badge by its kind and its period', () => {
+    expect(badgeName('explorer', 'week')).toBe('Explorer · Week');
+    expect(badgeName('barfly', 'year')).toBe('Barfly · Year');
+    expect(new Set(BADGE_CATALOGUE.map((type) => badgeName(type.kind, type.period))).size).toBe(
+      BADGE_CATALOGUE.length,
+    );
   });
 });

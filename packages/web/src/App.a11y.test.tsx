@@ -423,6 +423,12 @@ describe('minimum tap targets (SPEC.md Section 8.2)', () => {
     // Section 7.5's bar sheet closes with a square icon-only button, the
     // same shape as the controls above and the same regression risk.
     '.bar-sheet__close',
+    // Section 7.7's badges become controls on the player's own shelf, and
+    // the glyph inside one is 2rem. The target is the button around it -
+    // which is exactly the case this describe block is about, a square
+    // icon-only control whose tap area is invisible to someone sizing the
+    // icon by eye.
+    '.badge-button',
   ])('%s reserves at least 44px in both dimensions', (selector) => {
     const body = cssRuleBody(css, selector);
     expect(body).toMatch(/(?:min-)?width:\s*44px/);

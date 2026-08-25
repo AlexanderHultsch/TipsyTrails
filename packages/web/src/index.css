@@ -1892,6 +1892,118 @@ button:focus-visible,
   opacity: 0.75;
 }
 
+/* Section 7.7/8.2: a badge on the player's own shelf opens the sheet that
+   describes it, which makes it a control and not a picture
+   (components/Badge.tsx says why it is a real <button>). A control needs a
+   44 x 44 px target, and the glyph is 2rem - so the target is this box and
+   the mark keeps its size inside it, rather than the mark growing to fill a
+   tap target and an earned badge changing size on the one screen that draws
+   both states side by side.
+
+   No colour, no border, no background: Section 8.1 keeps the accent for the
+   player's position and for active states, and a badge is neither. What marks
+   it as tappable is the pointer, and the focus ring every button in this
+   stylesheet already gets from the :focus-visible rule near the top. */
+.badge-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.badge-button .badge__icon,
+.badge-button .badge-placeholder__icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+/* The sheet a badge opens (components/BadgeSheet.tsx): what the badge is,
+   what earns it, and whether this player has it. The same modal shape as
+   .more-sheet - bottom-anchored where the thumb is (Section 8.2), over a
+   backdrop that closes it - because it is the same kind of thing and a second
+   dialog vocabulary would be one to keep in step for nothing. */
+.badge-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgba(28, 26, 23, 0.35);
+}
+
+.badge-sheet__panel {
+  max-height: 80vh;
+  max-height: 80dvh;
+  overflow-y: auto;
+  padding: 1.25rem 1rem calc(1rem + var(--bottom-nav-inset));
+  background: var(--color-paper);
+  border-top: 1px solid var(--color-border);
+  border-radius: 8px 8px 0 0;
+  text-align: center;
+}
+
+/* The mark at the size a player looks *at* rather than past. Sizing only:
+   which of the two states it is drawn in stays with .badge__icon and
+   .badge-placeholder__icon above, so the sheet cannot paint a state of its
+   own. */
+.badge-sheet__mark {
+  display: inline-flex;
+  width: 4rem;
+  height: 4rem;
+}
+
+.badge-sheet__name {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  margin: 0.5rem 0 0;
+}
+
+.badge-sheet__description {
+  margin: 0.5rem auto 0;
+  max-width: 30rem;
+  font-size: 0.9375rem;
+}
+
+/* The same quieter treatment .badge-shelf__note gets, and the same sentence:
+   it settles that the answer is not a number, which is a footnote to the
+   description above it rather than a second description. */
+.badge-sheet__note {
+  margin: 0.5rem auto 0;
+  max-width: 30rem;
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+/* Earned or not, in words. Heavier than the copy above it because it is the
+   line a player opened the sheet for, and in ink like everything else here -
+   Section 8.1 does not let the accent carry a state. */
+.badge-sheet__status {
+  margin: 0.75rem auto 0;
+  max-width: 30rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.badge-sheet__close {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
 /* Leaderboard screen (Section 8.3/7.8): ranked list, metric/period toggles,
    pager. */
 .leaderboard__controls {

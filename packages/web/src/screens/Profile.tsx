@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { BADGE_PERIODS } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
@@ -7,6 +7,8 @@ import type { BadgeKind, ProfileResponse } from '../api/types.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
 import { BadgeShelf } from '../components/Badge.js';
+import type { BadgeSelection } from '../components/Badge.js';
+import { BadgeSheet } from '../components/BadgeSheet.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { Wordmark } from '../components/Wordmark.js';
 
@@ -42,12 +44,25 @@ function formatMetric(kind: BadgeKind, value: number): string {
 // name, and Section 7.7 declines to publish standings. Nothing is concealed by
 // the choice - the badges another player holds are public, and so therefore is
 // what is missing from them - it is simply not a thing to draw.
+//
+// Tapping a badge opens a sheet describing it (components/BadgeSheet.tsx),
+// and that is bounded by the same test and answered by the same flag. On a
+// stranger's shelf, "what is that badge and did they get it?" is a question
+// about where they stand, asked one glyph at a time; the badges stay pictures
+// there. On the player's own shelf every glyph is tappable, earned or not -
+// the owner's "even not achieved badges need to be described on request", and
+// what stops the placeholders reading as decoration.
 export function Profile() {
   const { handle } = useParams<{ handle: string }>();
   const { user } = useCurrentUser();
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [openBadge, setOpenBadge] = useState<BadgeSelection | null>(null);
+  // The glyph the open sheet was opened from, so closing hands focus back to
+  // it instead of dropping a keyboard reader at the top of the document -
+  // the contract components/BottomNav.tsx keeps with its More tab.
+  const openerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!handle) {
@@ -74,6 +89,25 @@ export function Profile() {
       cancelled = true;
     };
   }, [handle]);
+
+  // A sheet describing a badge on a profile the reader has navigated away
+  // from would be a dialog about nothing, so it closes with the profile it
+  // belongs to rather than surviving the fetch above.
+  useEffect(() => {
+    setOpenBadge(null);
+  }, [handle]);
+
+  function closeBadgeSheet() {
+    setOpenBadge(null);
+    openerRef.current?.focus();
+  }
+
+  // Compared on the numeric user id rather than on the handle: the same
+  // player resolves under two handles (their username and `player-{id}`,
+  // Section 9.5) and under only one id. It decides two things at once, and
+  // deliberately - placeholders and the tappable sheet are the same question
+  // about whose shelf this is.
+  const isOwnProfile = profile !== null && user?.id === profile.userId;
 
   return (
     <main className="screen">
@@ -108,10 +142,18 @@ export function Profile() {
 
             <section className="profile__section">
               <h2>Badges</h2>
-              {/* Compared on the numeric user id rather than on the handle:
-                  the same player resolves under two handles (their username
-                  and `player-{id}`, Section 9.5) and under only one id. */}
-              <BadgeShelf badges={profile.badges} showPlaceholders={user?.id === profile.userId} />
+              <BadgeShelf
+                badges={profile.badges}
+                showPlaceholders={isOwnProfile}
+                onSelect={
+                  isOwnProfile
+                    ? (selection, opener) => {
+                        openerRef.current = opener;
+                        setOpenBadge(selection);
+                      }
+                    : undefined
+                }
+              />
             </section>
 
             <section className="profile__section">
@@ -131,6 +173,21 @@ export function Profile() {
                 )}
               </ul>
             </section>
+
+            {/* Rendered beside the two sections rather than inside the badge
+                one, for the reason components/BottomNav.tsx renders its own
+                sheet beside the nav landmark: a dialog nested in a section is
+                announced as part of it. It also keeps the earned badge's
+                value out of a section Section 7.7 holds to naming activities
+                in words. */}
+            {openBadge && (
+              <BadgeSheet
+                kind={openBadge.kind}
+                period={openBadge.period}
+                award={openBadge.award}
+                onClose={closeBadgeSheet}
+              />
+            )}
           </>
         )}
       </div>
