@@ -124,16 +124,22 @@ function squareAt(west: number, osmId: number) {
 // geometry so that a rendered `d` is countable and nothing about the real
 // Karlsruhe fixture can make an assertion here pass or fail by accident.
 //
-// TWO features, and that is the whole point of the fixture. A one-feature
-// collection cannot tell "one path for the whole city" apart from "one path
-// per feature", and the difference is not cosmetic: the backdrop is
-// translucent, translucent paint compounds where it overlaps, and the contrast
-// floor asserted at the bottom of this file is computed for exactly one layer
-// of it. A single-feature fixture let that mutation through on the first
-// attempt at this test.
+// TWO features, so that "every feature of the collection is drawn" is a
+// statement this fixture can falsify: a one-feature collection cannot tell a
+// path built from the whole city apart from one built from the first shape it
+// found. A single-feature fixture let exactly that mutation through on the
+// first attempt at this test.
 const SQUARE_CITY = {
   type: 'FeatureCollection',
   features: [squareAt(8.3, 1), squareAt(8.5, 2)],
+};
+
+// Two more squares, inside the city's bounding box because real districts are
+// inside their city - which is what lets the backdrop project both with one
+// projector fitted to the city alone.
+const SQUARE_DISTRICTS = {
+  type: 'FeatureCollection',
+  features: [squareAt(8.35, 3), squareAt(8.45, 4)],
 };
 
 async function renderApp(initialPath: string) {
@@ -183,6 +189,28 @@ function textOf(selector: string): string | null {
   return container.querySelector(selector)?.textContent?.trim() ?? null;
 }
 
+/**
+ * The bounding box a rendered `d` occupies in its own viewBox, read back out
+ * of the path. Every command geo/geojson-path.ts emits is an absolute M or L
+ * with an explicit pair, so the vertices are the whole of the geometry and
+ * there is nothing implicit to reconstruct.
+ */
+function projectedBox(d: string): { minX: number; maxX: number; minY: number; maxY: number } {
+  const points = [...d.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((match) => ({
+    x: Number(match[1]),
+    y: Number(match[2]),
+  }));
+  if (points.length === 0) {
+    throw new Error(`no M/L vertices in "${d}"`);
+  }
+  return {
+    minX: Math.min(...points.map((point) => point.x)),
+    maxX: Math.max(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+    maxY: Math.max(...points.map((point) => point.y)),
+  };
+}
+
 // The start screen every authenticated entry path lands on (Login, Register,
 // ChangePassword and the route guards all redirect to /app).
 describe('the start screen (SPEC.md Section 8.3)', () => {
@@ -191,6 +219,7 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
       bars?: ReturnType<typeof bar>[];
       percent?: number;
       boundaryFails?: boolean;
+      districtsFail?: boolean;
       statsFail?: boolean;
     } = {},
   ): FetchHandler {
@@ -203,6 +232,12 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
           throw new Error('network down');
         }
         return jsonResponse(200, SQUARE_CITY);
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/districts.geojson`) {
+        if (options.districtsFail) {
+          throw new Error('network down');
+        }
+        return jsonResponse(200, SQUARE_DISTRICTS);
       }
       if (url === '/api/progress') {
         if (options.statsFail) {
@@ -285,17 +320,136 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
     expect(backdrop?.getAttribute('aria-hidden')).toBe('true');
     expect(backdrop?.getAttribute('role')).toBeNull();
 
-    // One path for the whole city, not one per feature: overlapping
-    // translucent paint compounds, and the contrast floor asserted further
-    // down is computed for exactly one layer of it. The fixture carries two
-    // features precisely so this can fail.
-    const paths = container.querySelectorAll('.home-backdrop path');
-    expect(paths).toHaveLength(1);
-    expect(paths[0].getAttribute('fill-rule')).toBe('evenodd');
+    const cityPath = container.querySelector('.home-backdrop__city');
+    expect(cityPath?.getAttribute('fill-rule')).toBe('evenodd');
     // Both squares' four corners plus their closing points - proof this is the
-    // projected boundary of every feature and not an empty, truncated or
-    // hard-coded `d`.
-    expect((paths[0].getAttribute('d') ?? '').match(/[ML]/g)).toHaveLength(10);
+    // projected boundary of every feature of the collection and not an empty,
+    // truncated or hard-coded `d`.
+    expect((cityPath?.getAttribute('d') ?? '').match(/[ML]/g)).toHaveLength(10);
+  });
+
+  // Fault two of three in the report this screen was rebuilt from: a single
+  // flat fill reads as an administrative silhouette, and the owner asked for a
+  // fogged detail *of the map*. The district edges are what carry the
+  // difference, and they are only drawable at all because the fill is now
+  // opaque (screens/AppHome.tsx, and the contrast block at the foot of this
+  // file). Without this test the layer can be deleted and every other
+  // assertion here still passes.
+  it('draws the district edges over the city fill, as a second layer', async () => {
+    stubFetch(stubStartScreen());
+    await renderApp('/app');
+
+    const districts = container.querySelector('.home-backdrop__districts');
+    expect(
+      districts,
+      'the backdrop is drawing the city fill alone again, which is the silhouette this ' +
+        'layer exists to break up',
+    ).not.toBeNull();
+    // Both district squares, same proof as the city path above.
+    expect((districts?.getAttribute('d') ?? '').match(/[ML]/g)).toHaveLength(10);
+
+    // Over the fill, not under it: an edge painted first and then covered by
+    // the city is an edge nobody sees, and in this document order it is the
+    // one thing that cannot be checked by looking at the paths themselves.
+    const layers = Array.from(container.querySelectorAll('.home-backdrop path')).map((path) =>
+      path.getAttribute('class'),
+    );
+    expect(layers).toEqual(['home-backdrop__city', 'home-backdrop__districts']);
+  });
+
+  // Fault one of three, and the root cause of the rest: the drawing was fitted
+  // to a SQUARE viewBox and then covered a 9:19.5 phone with
+  // preserveAspectRatio="slice", which scales to cover - so the city came out
+  // at 2.6x with more than half its width cropped away. A shapeless grey mass
+  // bleeding off all four edges is what the owner was looking at.
+  //
+  // What is asserted is the geometry that cannot produce that, rather than the
+  // numbers that happen to be in the file today: a box taller than it is wide,
+  // so `slice` on a phone crops a little of one axis instead of magnifying a
+  // square into a tall one, and a city sitting in the upper part of it, so the
+  // action and the 0.875rem row of figures at the bottom of the screen have
+  // paper under them rather than the busiest part of a map.
+  it('frames the city in a tall box, in the half of it the words are not in', async () => {
+    stubFetch(stubStartScreen());
+    await renderApp('/app');
+
+    const backdrop = container.querySelector('.home-backdrop');
+    const [, , width, height] = (backdrop?.getAttribute('viewBox') ?? '')
+      .split(/[\s,]+/)
+      .map(Number);
+    expect(
+      height / width,
+      'the backdrop viewBox is square or landscape again. Under ' +
+        'preserveAspectRatio="slice" on a portrait phone that is a magnified fragment ' +
+        'of the city rather than a crop of it - the defect this framing replaced.',
+    ).toBeGreaterThanOrEqual(1.5);
+    expect(backdrop?.getAttribute('preserveAspectRatio')).toBe('xMidYMid slice');
+
+    const drawn = projectedBox(
+      container.querySelector('.home-backdrop__city')?.getAttribute('d') ?? '',
+    );
+
+    expect(
+      (drawn.minY + drawn.maxY) / 2 / height,
+      'the city is centred in the whole box again. It is fitted into a band across the ' +
+        'top of it on purpose: .screen__actions and .home__stats sit in the bottom ' +
+        'half of this screen, and the smallest text in the application should not have ' +
+        'the densest part of a map behind it.',
+    ).toBeLessThanOrEqual(0.45);
+    expect(drawn.maxY / height).toBeLessThanOrEqual(0.65);
+  });
+
+  // ONE PROJECTOR, FITTED TO THE CITY, AND THE DISTRICTS DRAWN THROUGH IT.
+  // Two projectors is the mutation this is written against, and it is an easy
+  // one to write: fitting each collection to the box on its own stretches the
+  // districts to fill the frame, so the edges land nowhere near the fill they
+  // are supposed to be inside. The fixture's districts occupy the middle of
+  // the city's longitude span and the whole of its latitude span, so under one
+  // projector they must come out strictly inside the city horizontally and
+  // flush with it vertically - and under two, they fill the frame on both
+  // axes.
+  //
+  // Fitting to the union of both collections is a third possibility and this
+  // cannot see it: the shipped districts.geojson tiles Karlsruhe exactly, so
+  // the two bounding boxes are the same to the last decimal and the union
+  // changes nothing. It is still the city's box the code fits to, because that
+  // is a property of the code rather than of this month's GeoJSON - the
+  // districts arrive on a second, later response, and a frame that depended on
+  // them would move the drawing after the first paint the day they stop
+  // tiling it exactly.
+  it('draws the district edges through the city’s own projector, not one of their own', async () => {
+    stubFetch(stubStartScreen());
+    await renderApp('/app');
+
+    const city = projectedBox(
+      container.querySelector('.home-backdrop__city')?.getAttribute('d') ?? '',
+    );
+    const districts = projectedBox(
+      container.querySelector('.home-backdrop__districts')?.getAttribute('d') ?? '',
+    );
+
+    expect(districts.minX).toBeGreaterThan(city.minX);
+    expect(districts.maxX).toBeLessThan(city.maxX);
+    expect(districts.minY).toBeCloseTo(city.minY, 1);
+    expect(districts.maxY).toBeCloseTo(city.maxY, 1);
+  });
+
+  // The district edges are a decoration on a decoration, and they fail on
+  // their own network request. Losing them may not cost the backdrop - which
+  // is why the two boundaries are two fetches and not one Promise.all
+  // (screens/AppHome.tsx).
+  it('keeps the city fill when the district edges never arrive', async () => {
+    stubFetch(stubStartScreen({ districtsFail: true, bars: [bar(1, false)] }));
+    await renderApp('/app');
+
+    expect(container.querySelector('.home-backdrop__city')).not.toBeNull();
+    expect(container.querySelector('.home-backdrop__districts')).toBeNull();
+
+    // And the screen is otherwise untouched: no message, and the three figures
+    // are not collateral of a decoration's failed fetch.
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('.error-message')).toBeNull();
+    expect(Array.from(container.querySelectorAll('.home__stats-list li'))).toHaveLength(3);
   });
 
   // The brief's rule for this screen: degrade to something, never to nothing.
@@ -527,6 +681,41 @@ function cssToken(css: string, name: string): [number, number, number] {
   return hexToRgb(match[1]);
 }
 
+/** The opaque `#rrggbb` a rule paints one property with. */
+function hexOf(body: string, property: string): [number, number, number] {
+  // The property name is anchored on its left so that `stroke` cannot be
+  // answered by `stroke-width`, and on its right by the colon.
+  const match = body.match(new RegExp(`(?:^|[;\\s])${property}:\\s*(#[0-9a-fA-F]{6})\\b`));
+  if (!match) {
+    throw new Error(`no opaque hex ${property} found in "${body.trim()}"`);
+  }
+  return hexToRgb(match[1]);
+}
+
+/**
+ * The ratio at which `tone` is `ink` composited over `paper`, or null if it is
+ * not a point on that line at all. Solved per channel from the composite
+ * itself - tone = ink*a + paper*(1-a) - and the three answers have to agree,
+ * which is what makes "some grey that happens to look right" fail while every
+ * genuine blend of the two palette tokens passes. The tolerance is the largest
+ * disagreement 8-bit rounding can produce: half a level over the narrowest of
+ * the three channel gaps.
+ */
+function inkRatioOf(
+  tone: [number, number, number],
+  ink: [number, number, number],
+  paper: [number, number, number],
+): number | null {
+  const ratios = [0, 1, 2].map(
+    (index) => (paper[index] - tone[index]) / (paper[index] - ink[index]),
+  );
+  const tolerance = 0.5 / Math.min(...[0, 1, 2].map((index) => paper[index] - ink[index]));
+  if (Math.max(...ratios) - Math.min(...ratios) > 2 * tolerance) {
+    return null;
+  }
+  return (ratios[0] + ratios[1] + ratios[2]) / 3;
+}
+
 /** The single `rgba(r, g, b, a)` a rule paints with. */
 function rgbaOf(body: string, property: string): { rgb: [number, number, number]; alpha: number } {
   const match = body.match(
@@ -554,15 +743,89 @@ describe('text over the new grounds clears 4.5:1 (SPEC.md Section 8.1)', () => {
   const ink = cssToken(css, 'color-ink');
   const BODY_TEXT_MIN = 4.5;
 
-  it('ink over the fogged city backdrop on the start screen', () => {
-    const fill = rgbaOf(cssRuleBody(css, '.home-backdrop__city'), 'fill');
+  // THE BACKDROP'S PAINT MODEL, AND WHY THIS BLOCK CHANGED SHAPE. It used to
+  // be one translucent fill, and it had to be: translucent paint compounds
+  // where it overlaps, so a second layer would have produced a darker grey
+  // than anyone had computed, and the only defensible drawing was one path
+  // painted once. It is now the same colour pre-composited and painted opaque
+  // - not one pixel of the screen changed value - and opaque paint does not
+  // compound, which is the entire reason the district edges can exist.
+  //
+  // So the three checks are the three halves of that bargain: the tones are
+  // still ink over paper and nothing else (Section 8.1), they are still
+  // opaque, and the darkest of them still clears the floor. Reading the ratio
+  // back out of the composite rather than out of an `rgba()` is strictly
+  // stronger than the version this replaced - a hand-picked grey that is not
+  // on the ink/paper line now fails, where before any alpha at all was
+  // accepted and only the outcome was measured.
+  const backdropTones = (): { name: string; rgb: [number, number, number] }[] => [
+    {
+      name: '.home-backdrop__city fill',
+      rgb: hexOf(cssRuleBody(css, '.home-backdrop__city'), 'fill'),
+    },
+    {
+      name: '.home-backdrop__districts stroke',
+      rgb: hexOf(cssRuleBody(css, '.home-backdrop__districts'), 'stroke'),
+    },
+  ];
 
-    // The backdrop is exactly one translucent layer of ink over the paper
-    // ground - one path, painted once (screens/AppHome.tsx) - so its darkest
-    // possible pixel is this single blend and there is no compounding case to
-    // measure separately.
-    const darkest = blend(fill.rgb, fill.alpha, paper);
-    expect(contrastRatio(ink, darkest)).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+  it('paints every tone of the backdrop as the ink composited over the paper', () => {
+    for (const tone of backdropTones()) {
+      const ratio = inkRatioOf(tone.rgb, ink, paper);
+      expect(
+        ratio,
+        `${tone.name} is not --color-ink over --color-paper at any single ratio. Section ` +
+          '8.1 gives this screen the ink and the paper and nothing else; a grey mixed by ' +
+          'eye is a third colour in a two-colour palette.',
+      ).not.toBeNull();
+      expect(ratio).toBeGreaterThan(0);
+      expect(ratio).toBeLessThan(1);
+    }
+  });
+
+  it('paints them opaque, which is what lets the backdrop have layers at all', () => {
+    for (const selector of ['.home-backdrop__city', '.home-backdrop__districts']) {
+      const body = cssRuleBody(css, selector);
+      expect(
+        /rgba|\bopacity\s*:|#[0-9a-fA-F]{8}\b/.test(body),
+        `${selector} paints translucently again. Translucent paint compounds where it ` +
+          'overlaps - the city fill under a district edge, two districts sharing a ' +
+          'border - so the darkest pixel of this screen would be an accident rather ' +
+          'than a decision, and the floor measured below would not be the real one.',
+      ).toBe(false);
+    }
+  });
+
+  it('clears the floor against the darkest of them, which is the district edges', () => {
+    const tones = backdropTones();
+    const darkest = tones.reduce((worst, tone) =>
+      relativeLuminance(tone.rgb) < relativeLuminance(worst.rgb) ? tone : worst,
+    );
+    expect(darkest.name).toBe('.home-backdrop__districts stroke');
+
+    // Opaque paint, so this is the whole story: every pixel of the backdrop is
+    // one of these two declared colours, and the edge mask on .home-backdrop
+    // can only move a pixel from its colour towards the paper behind it, never
+    // past it. There is no compounding case left to measure separately.
+    expect(contrastRatio(ink, darkest.rgb)).toBeGreaterThanOrEqual(BODY_TEXT_MIN);
+  });
+
+  // Fault three of the report: the backdrop terminated as a crisp boundary,
+  // which reads as a grey cutout laid on the page rather than as fog. The mask
+  // is what dissolves it, and it has to reach full transparency - a gradient
+  // that only fades to a lighter grey still ends in an edge, it just ends in a
+  // fainter one. index.css says why this is a CSS mask and not an SVG <mask>.
+  it('dissolves the backdrop at its edges instead of ending it', () => {
+    const body = cssRuleBody(css, '.home-backdrop');
+
+    const mask = body.match(/mask-image:\s*([^;]+)/);
+    expect(mask, '.home-backdrop declares no mask-image, so the fog has a border').not.toBeNull();
+    expect(mask?.[1]).toMatch(/gradient\(/);
+    expect(
+      /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)|\btransparent\b/.test(mask?.[1] ?? ''),
+      'the mask never reaches zero, so the drawing still terminates somewhere - the ' +
+        'edge is softer but it is still an edge',
+    ).toBe(true);
   });
 
   it('ink on the wordmark’s plate over the densest fog the map produces', () => {

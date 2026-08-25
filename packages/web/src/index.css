@@ -385,7 +385,35 @@ button:focus-visible,
    entirely: whether it arrives, arrives late, or never arrives, it cannot move
    a word on the screen in front of it. Negative z-index rather than a plain 0
    so every child of .screen--home is above it without any of them having to
-   say so. */
+   say so.
+
+   THE MASK IS WHY THIS IS FOG AND NOT A CUTOUT. Without it the drawing ends
+   where it ends - a crisp boundary against the paper, and a crisp straight
+   line wherever `slice` crops it at the edge of the screen - which reads as a
+   grey shape laid on the page rather than as weather behind it. One radial
+   gradient centred on the city (screens/AppHome.tsx puts it at 31% of the
+   height), solid through the middle and falling to nothing before every edge
+   of the screen.
+
+   A CSS mask rather than an SVG <mask>, and the reason is the `slice` above.
+   An SVG mask is in the drawing's own user space, so it is scaled and cropped
+   by preserveAspectRatio exactly as the artwork is: on whichever axis `slice`
+   crops - and which axis that is depends on the phone - the fade would be
+   cropped off-screen with it, and the artwork would meet the viewport edge at
+   full strength again. That is the fault this is fixing. A CSS mask is in the
+   element's own box, which IS the screen (inset: 0), so the fade lands at the
+   screen's edges on every viewport regardless of how the viewBox was fitted
+   into it.
+
+   It cannot cost the words their contrast: a mask only ever moves a pixel
+   from its declared colour towards the paper behind it, never past it, so the
+   darkest pixel of this backdrop is the unmasked colour below and the floor
+   App.branding.test.tsx computes from those declarations is the real one.
+
+   No animation, deliberately: fog that drifted would be motion behind text,
+   and the global prefers-reduced-motion rule collapses animation-duration
+   rather than removing animations, which runs one to its last keyframe (see
+   .bar-stamp). The safest reduced-motion story is having no motion. */
 .home-backdrop {
   position: absolute;
   inset: 0;
@@ -393,19 +421,53 @@ button:focus-visible,
   width: 100%;
   height: 100%;
   pointer-events: none;
+  mask-image: radial-gradient(
+    55% 46% at 50% 31%,
+    rgb(0, 0, 0) 0%,
+    rgb(0, 0, 0) 25%,
+    rgba(0, 0, 0, 0) 100%
+  );
 }
 
-/* The fog. Section 8.1's ink at low alpha over the paper ground rather than a
-   grey of its own, so the backdrop is drawn in the same colour as everything
-   else in the application - and one flat alpha rather than a fill and a stroke
-   and a wash, because translucent paint compounds where it overlaps and three
-   values would mean the darkest pixel on this screen is nobody's decision.
-   With one alpha it is exactly this blend, everywhere, and ink text over it is
-   9.5:1 - well past Section 8.1's 4.5:1 floor for body text, which
-   App.branding.test.tsx computes from this declaration so that fogging the
-   backdrop less can never quietly cost the words their contrast. */
+/* The fog, and every tone in it is Section 8.1's ink composited over the paper
+   ground at some ratio - no grey of its own, so the backdrop is drawn in the
+   same colour as everything else in the application.
+
+   COMPOSITED HERE, PAINTED OPAQUE. This was `rgba(28, 26, 23, 0.22)` and is
+   now the pixel that produced: ink 22% over paper #f4efe6 is #c4c0b8, to the
+   byte. Nothing about the screen's colour changed; what changed is that
+   translucent paint compounds where it overlaps and opaque paint does not, so
+   the drawing can have layers at all. With the old fill, a stroke over the
+   city was a patch of some darker grey nobody had reckoned the contrast of;
+   with this one, every pixel is exactly the colour named here however many
+   times it is painted over.
+
+   Ink text over this is 9.57:1, and over the district edges below - the
+   darkest thing on the screen - 7.25:1. Both are well past Section 8.1's
+   4.5:1 floor for body text. App.branding.test.tsx recomputes all of it from
+   these declarations and from the two palette tokens, so a tone that stopped
+   being ink-over-paper, or a fog laid on thicker, fails the suite rather than
+   the eye. */
 .home-backdrop__city {
-  fill: rgba(28, 26, 23, 0.22);
+  fill: #c4c0b8;
+}
+
+/* The district edges, and this is what makes the backdrop read as a map
+   instead of as an administrative silhouette - an outline with nothing inside
+   it is a shape, not a city. Ink 34% over paper (#aba7a0): a step darker than
+   the fill and nowhere near ink, so the edges are structure seen through fog
+   rather than line work drawn on top of it.
+
+   `non-scaling-stroke` because the artwork's scale is not ours to know: it is
+   whatever preserveAspectRatio="slice" resolves to on this viewport, and a
+   stroke-width in user units would be a hairline on a phone and a fat grey
+   band on a desktop window. A non-scaling stroke is one CSS pixel wherever it
+   lands. */
+.home-backdrop__districts {
+  fill: none;
+  stroke: #aba7a0;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 /* The tagline under the wordmark, in the same capitals and tracking so the
