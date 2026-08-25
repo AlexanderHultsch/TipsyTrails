@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, deleteAccount, updateSettings } from '../api/client.js';
+import { deleteAccount, errorMessage, updateSettings } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { useLogout } from '../auth/useLogout.js';
 import { BottomNav } from '../components/BottomNav.js';
@@ -25,9 +25,7 @@ export function Settings() {
       const updated = await updateSettings({ isAnonymous });
       setUser(updated);
     } catch (err) {
-      setAnonymousError(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      setAnonymousError(errorMessage(err));
     } finally {
       setAnonymousSaving(false);
     }
@@ -41,9 +39,7 @@ export function Settings() {
       await deleteAccount({ password: deletePassword });
       setUser(null);
     } catch (err) {
-      setDeleteError(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      setDeleteError(errorMessage(err));
     } finally {
       setDeleting(false);
     }

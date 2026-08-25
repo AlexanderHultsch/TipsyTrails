@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getCityBoundary, getNeighbourBoundaries, getProgress } from '../api/client.js';
+import {
+  errorMessage,
+  getCityBoundary,
+  getNeighbourBoundaries,
+  getProgress,
+} from '../api/client.js';
 import type { BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { Wordmark } from '../components/Wordmark.js';
@@ -36,7 +41,7 @@ export function CityOverview() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+        setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

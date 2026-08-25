@@ -2,10 +2,10 @@ import { compareBarsByName } from '@tipsytrails/shared';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
-  ApiError,
   cancelVisit,
   createAdminBar,
   deleteAdminBar,
+  errorMessage,
   getAdminBars,
   getAdminUsers,
   getPendingVisits,
@@ -37,8 +37,13 @@ interface BarFormState {
 
 const EMPTY_BAR_FORM: BarFormState = { name: '', address: '', lat: '', lon: '' };
 
-function genericError(err: unknown): string {
-  return err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
+function parseLatLon(form: BarFormState): { lat: number; lon: number } | null {
+  const lat = Number(form.lat);
+  const lon = Number(form.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  return { lat, lon };
 }
 
 // GET /api/admin/bars sends the list ordered by name (SPEC.md Section 9.3),
@@ -55,13 +60,72 @@ function sortedByName(bars: AdminBar[]): AdminBar[] {
   return [...bars].sort(compareBarsByName);
 }
 
-// SPEC.md Section 8.3/9.3, Phase 7 step 3: bar management (list including
-// hidden, filter by source, create, edit, hide, delete) plus the user list.
-// Reachable only via /admin, itself gated by RequireAdmin
-// (auth/route-guards.tsx) - a cosmetic redirect, not a security boundary;
-// every mutation here still goes through requireAdmin server-side
-// (packages/api/src/auth/cookie.ts), which is what actually enforces this.
-export function Admin() {
+// The four fields a bar is described by, rendered identically by the create
+// form and by each row's edit form - one component rather than two copies
+// that could come to disagree about which fields a bar has or which of them
+// are required.
+//
+// Only the element ids differ, and they have to: the create form is on the
+// page once, while an edit form belongs to a particular row and carries that
+// bar's id to stay unique. Each id is a label's `htmlFor` target, so
+// `fieldId` lets the caller that knows which form this is build them.
+function BarFormFields({
+  form,
+  onChange,
+  fieldId,
+}: {
+  form: BarFormState;
+  onChange: (patch: Partial<BarFormState>) => void;
+  fieldId: (field: 'name' | 'address' | 'lat' | 'lon') => string;
+}) {
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={fieldId('name')}>Name</label>
+        <input
+          id={fieldId('name')}
+          value={form.name}
+          onChange={(event) => onChange({ name: event.target.value })}
+          required
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={fieldId('address')}>Address</label>
+        <input
+          id={fieldId('address')}
+          value={form.address}
+          onChange={(event) => onChange({ address: event.target.value })}
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={fieldId('lat')}>Latitude</label>
+        <input
+          id={fieldId('lat')}
+          value={form.lat}
+          onChange={(event) => onChange({ lat: event.target.value })}
+          inputMode="decimal"
+          required
+        />
+      </div>
+      <div className="field">
+        <label htmlFor={fieldId('lon')}>Longitude</label>
+        <input
+          id={fieldId('lon')}
+          value={form.lon}
+          onChange={(event) => onChange({ lon: event.target.value })}
+          inputMode="decimal"
+          required
+        />
+      </div>
+    </>
+  );
+}
+
+// SPEC.md Section 9.3: the bar list including hidden bars, the source filter,
+// and create/edit/hide/delete. All of this screen's state that is not the
+// user list or the visit list lives here, so those two are unaffected by any
+// of it.
+function BarsSection() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [bars, setBars] = useState<AdminBar[]>([]);
   const [barsLoading, setBarsLoading] = useState(true);
@@ -77,14 +141,6 @@ export function Admin() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [usersError, setUsersError] = useState<string | null>(null);
-
-  const [pendingVisits, setPendingVisits] = useState<VisitSummary[]>([]);
-  const [pendingVisitsError, setPendingVisitsError] = useState<string | null>(null);
-  const [cancellingVisitId, setCancellingVisitId] = useState<number | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     setBarsLoading(true);
@@ -94,7 +150,7 @@ export function Admin() {
         if (!cancelled) setBars(result.bars);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setBarsError(genericError(err));
+        if (!cancelled) setBarsError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setBarsLoading(false);
@@ -103,80 +159,6 @@ export function Admin() {
       cancelled = true;
     };
   }, [sourceFilter]);
-
-  useEffect(() => {
-    let cancelled = false;
-    getAdminUsers()
-      .then((result) => {
-        if (!cancelled) setUsers(result.users);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setUsersError(genericError(err));
-      })
-      .finally(() => {
-        if (!cancelled) setUsersLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // SPEC.md Section 7.5's cancel endpoint, reached from a second place. This
-  // is an escape hatch, not a new admin power: GET /api/visits/pending and
-  // POST /api/visits/:id/cancel both act on the *caller's* own visits and
-  // nobody else's (packages/api/src/routes/visits.ts), so this list is the
-  // signed-in admin's own pending visits and no server route was added for
-  // it. It exists because a pending visit that the map's banner cannot get
-  // rid of leaves a player stuck with no other way out, and the admin screen
-  // is a place they can always reach - unlike the banner, which needs a map,
-  // a position and the right screen.
-  useEffect(() => {
-    let cancelled = false;
-    getPendingVisits()
-      .then((result) => {
-        if (!cancelled) setPendingVisits(result.visits);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setPendingVisitsError(genericError(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function handleCancelVisit(visit: VisitSummary) {
-    if (
-      !window.confirm(`Cancel your pending visit to "${visit.barName}"? This cannot be undone.`)
-    ) {
-      return;
-    }
-    setPendingVisitsError(null);
-    setCancellingVisitId(visit.id);
-    try {
-      await cancelVisit(visit.id);
-      setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
-    } catch (err) {
-      // Section 9.5's identical 404 means the visit is not pending, which is
-      // what the click asked for - the same rule the banner follows, from
-      // the same helper, so the two screens cannot disagree about it.
-      if (isVisitAlreadyGone(err)) {
-        setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
-        return;
-      }
-      setPendingVisitsError(genericError(err));
-    } finally {
-      setCancellingVisitId(null);
-    }
-  }
-
-  function parseLatLon(form: BarFormState): { lat: number; lon: number } | null {
-    const lat = Number(form.lat);
-    const lon = Number(form.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      return null;
-    }
-    return { lat, lon };
-  }
 
   async function handleCreateSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -197,7 +179,7 @@ export function Admin() {
       setBars((current) => sortedByName([...current, bar]));
       setCreateForm(EMPTY_BAR_FORM);
     } catch (err) {
-      setCreateError(genericError(err));
+      setCreateError(errorMessage(err));
     } finally {
       setCreating(false);
     }
@@ -238,7 +220,7 @@ export function Admin() {
       setBars((current) => sortedByName(current.map((bar) => (bar.id === barId ? updated : bar))));
       setEditingId(null);
     } catch (err) {
-      setEditError(genericError(err));
+      setEditError(errorMessage(err));
     } finally {
       setSavingEdit(false);
     }
@@ -251,7 +233,7 @@ export function Admin() {
       const updated = await updateAdminBar(bar.id, { status: nextStatus });
       setBars((current) => current.map((entry) => (entry.id === bar.id ? updated : entry)));
     } catch (err) {
-      setRowActionError(genericError(err));
+      setRowActionError(errorMessage(err));
     }
   }
 
@@ -271,289 +253,300 @@ export function Admin() {
       await deleteAdminBar(bar.id);
       setBars((current) => current.filter((entry) => entry.id !== bar.id));
     } catch (err) {
-      setRowActionError(genericError(err));
+      setRowActionError(errorMessage(err));
     }
   }
 
+  return (
+    <section className="admin__section">
+      <h2>Bars</h2>
+
+      <div className="leaderboard__toggle" role="group" aria-label="Filter by source">
+        {SOURCE_FILTERS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={
+              option.value === sourceFilter
+                ? 'leaderboard__toggle-button leaderboard__toggle-button--active'
+                : 'leaderboard__toggle-button'
+            }
+            aria-pressed={option.value === sourceFilter}
+            onClick={() => setSourceFilter(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      {barsLoading && <p role="status">Loading bars…</p>}
+      {barsError && (
+        <p className="error-message" role="alert">
+          {barsError}
+        </p>
+      )}
+      {rowActionError && (
+        <p className="error-message" role="alert">
+          {rowActionError}
+        </p>
+      )}
+      {!barsLoading && bars.length === 0 && <p>No bars match this filter.</p>}
+
+      {bars.length > 0 && (
+        <ul className="admin-bar-list">
+          {bars.map((bar) =>
+            editingId === bar.id ? (
+              <li key={bar.id} className="admin-bar-row">
+                <form
+                  className="admin-bar-row__edit-form"
+                  onSubmit={(event) => void handleEditSubmit(event, bar.id)}
+                >
+                  {editError && (
+                    <p className="error-message" role="alert">
+                      {editError}
+                    </p>
+                  )}
+                  <BarFormFields
+                    form={editForm}
+                    onChange={(patch) => setEditForm((current) => ({ ...current, ...patch }))}
+                    fieldId={(field) => `admin-edit-${field}-${bar.id}`}
+                  />
+                  <div className="admin-bar-row__actions">
+                    <button className="button button--primary" type="submit" disabled={savingEdit}>
+                      Save
+                    </button>
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={cancelEdit}
+                      disabled={savingEdit}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </li>
+            ) : (
+              <li key={bar.id} className="admin-bar-row">
+                <div className="admin-bar-row__info">
+                  <p className="admin-bar-row__name">
+                    {bar.name}
+                    {bar.source === 'community' && (
+                      <span className="admin-bar-row__tag">Community</span>
+                    )}
+                    {bar.status === 'hidden' && (
+                      <span className="admin-bar-row__tag admin-bar-row__tag--hidden">Hidden</span>
+                    )}
+                  </p>
+                  {bar.address && <p className="admin-bar-row__address">{bar.address}</p>}
+                  <p className="admin-bar-row__meta">Source: {bar.source}</p>
+                </div>
+                <div className="admin-bar-row__actions">
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => startEdit(bar)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => void handleToggleStatus(bar)}
+                  >
+                    {bar.status === 'active' ? 'Hide' : 'Unhide'}
+                  </button>
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => void handleDelete(bar)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+
+      <form className="admin-create-form" onSubmit={handleCreateSubmit}>
+        <h3>Add a bar</h3>
+        {createError && (
+          <p className="error-message" role="alert">
+            {createError}
+          </p>
+        )}
+        <BarFormFields
+          form={createForm}
+          onChange={(patch) => setCreateForm((current) => ({ ...current, ...patch }))}
+          fieldId={(field) => `admin-create-${field}`}
+        />
+        <button className="button button--primary" type="submit" disabled={creating}>
+          Create bar
+        </button>
+      </form>
+    </section>
+  );
+}
+
+// SPEC.md Section 7.5's cancel endpoint, reached from a second place. This
+// is an escape hatch, not a new admin power: GET /api/visits/pending and
+// POST /api/visits/:id/cancel both act on the *caller's* own visits and
+// nobody else's (packages/api/src/routes/visits.ts), so this list is the
+// signed-in admin's own pending visits and no server route was added for
+// it. It exists because a pending visit that the map's banner cannot get
+// rid of leaves a player stuck with no other way out, and the admin screen
+// is a place they can always reach - unlike the banner, which needs a map,
+// a position and the right screen.
+function PendingVisitsSection() {
+  const [pendingVisits, setPendingVisits] = useState<VisitSummary[]>([]);
+  const [pendingVisitsError, setPendingVisitsError] = useState<string | null>(null);
+  const [cancellingVisitId, setCancellingVisitId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPendingVisits()
+      .then((result) => {
+        if (!cancelled) setPendingVisits(result.visits);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setPendingVisitsError(errorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleCancelVisit(visit: VisitSummary) {
+    if (
+      !window.confirm(`Cancel your pending visit to "${visit.barName}"? This cannot be undone.`)
+    ) {
+      return;
+    }
+    setPendingVisitsError(null);
+    setCancellingVisitId(visit.id);
+    try {
+      await cancelVisit(visit.id);
+      setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
+    } catch (err) {
+      // Section 9.5's identical 404 means the visit is not pending, which is
+      // what the click asked for - the same rule the banner follows, from
+      // the same helper, so the two screens cannot disagree about it.
+      if (isVisitAlreadyGone(err)) {
+        setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
+        return;
+      }
+      setPendingVisitsError(errorMessage(err));
+    } finally {
+      setCancellingVisitId(null);
+    }
+  }
+
+  return (
+    <section className="admin__section">
+      <h2>Your pending visits</h2>
+      {pendingVisitsError && (
+        <p className="error-message" role="alert">
+          {pendingVisitsError}
+        </p>
+      )}
+      {pendingVisits.length === 0 ? (
+        <p>You have no pending visits.</p>
+      ) : (
+        <ul className="admin-visit-list">
+          {pendingVisits.map((visit) => (
+            <li key={visit.id} className="admin-visit-row">
+              <span className="admin-visit-row__bar">{visit.barName}</span>
+              <button
+                className="button button--secondary admin-visit-row__cancel"
+                type="button"
+                disabled={cancellingVisitId === visit.id}
+                onClick={() => void handleCancelVisit(visit)}
+              >
+                Cancel visit
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// SPEC.md Section 9.3, Phase 7 task brief: "user list with stats". Read-only
+// - nothing on this screen edits a user - so it owns nothing but its own
+// fetch.
+function UsersSection() {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
+  const [usersError, setUsersError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getAdminUsers()
+      .then((result) => {
+        if (!cancelled) setUsers(result.users);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setUsersError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setUsersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <section className="admin__section">
+      <h2>Users</h2>
+      {usersLoading && <p role="status">Loading users…</p>}
+      {usersError && (
+        <p className="error-message" role="alert">
+          {usersError}
+        </p>
+      )}
+      {!usersLoading && users.length > 0 && (
+        <ul className="admin-user-list">
+          {users.map((entry) => (
+            <li key={entry.id} className="admin-user-row">
+              <span className="admin-user-row__name">
+                {entry.username}
+                {entry.isAdmin && <span className="admin-bar-row__tag">Admin</span>}
+              </span>
+              <span className="admin-user-row__stat">{entry.areaPercent.toFixed(1)}% explored</span>
+              <span className="admin-user-row__stat">{entry.barsMastered} mastered</span>
+              <span className="admin-user-row__stat">{entry.badgeCount} badges</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// SPEC.md Section 8.3/9.3, Phase 7 step 3: bar management (list including
+// hidden, filter by source, create, edit, hide, delete) plus the user list.
+// Reachable only via /admin, itself gated by RequireAdmin
+// (auth/route-guards.tsx) - a cosmetic redirect, not a security boundary;
+// every mutation here still goes through requireAdmin server-side
+// (packages/api/src/auth/cookie.ts), which is what actually enforces this.
+//
+// The three sections below share no state and no request: each fetches what
+// it shows and owns the loading and error state for it, which is why they
+// are three components rather than one with a dozen `useState` calls between
+// them.
+export function Admin() {
   return (
     <main className="screen">
       <BottomNav />
       <div className="screen__content admin">
         <h1>Admin</h1>
-
-        <section className="admin__section">
-          <h2>Bars</h2>
-
-          <div className="leaderboard__toggle" role="group" aria-label="Filter by source">
-            {SOURCE_FILTERS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={
-                  option.value === sourceFilter
-                    ? 'leaderboard__toggle-button leaderboard__toggle-button--active'
-                    : 'leaderboard__toggle-button'
-                }
-                aria-pressed={option.value === sourceFilter}
-                onClick={() => setSourceFilter(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-
-          {barsLoading && <p role="status">Loading bars…</p>}
-          {barsError && (
-            <p className="error-message" role="alert">
-              {barsError}
-            </p>
-          )}
-          {rowActionError && (
-            <p className="error-message" role="alert">
-              {rowActionError}
-            </p>
-          )}
-          {!barsLoading && bars.length === 0 && <p>No bars match this filter.</p>}
-
-          {bars.length > 0 && (
-            <ul className="admin-bar-list">
-              {bars.map((bar) =>
-                editingId === bar.id ? (
-                  <li key={bar.id} className="admin-bar-row">
-                    <form
-                      className="admin-bar-row__edit-form"
-                      onSubmit={(event) => void handleEditSubmit(event, bar.id)}
-                    >
-                      {editError && (
-                        <p className="error-message" role="alert">
-                          {editError}
-                        </p>
-                      )}
-                      <div className="field">
-                        <label htmlFor={`admin-edit-name-${bar.id}`}>Name</label>
-                        <input
-                          id={`admin-edit-name-${bar.id}`}
-                          value={editForm.name}
-                          onChange={(event) =>
-                            setEditForm((current) => ({ ...current, name: event.target.value }))
-                          }
-                          required
-                        />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`admin-edit-address-${bar.id}`}>Address</label>
-                        <input
-                          id={`admin-edit-address-${bar.id}`}
-                          value={editForm.address}
-                          onChange={(event) =>
-                            setEditForm((current) => ({
-                              ...current,
-                              address: event.target.value,
-                            }))
-                          }
-                        />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`admin-edit-lat-${bar.id}`}>Latitude</label>
-                        <input
-                          id={`admin-edit-lat-${bar.id}`}
-                          value={editForm.lat}
-                          onChange={(event) =>
-                            setEditForm((current) => ({ ...current, lat: event.target.value }))
-                          }
-                          inputMode="decimal"
-                          required
-                        />
-                      </div>
-                      <div className="field">
-                        <label htmlFor={`admin-edit-lon-${bar.id}`}>Longitude</label>
-                        <input
-                          id={`admin-edit-lon-${bar.id}`}
-                          value={editForm.lon}
-                          onChange={(event) =>
-                            setEditForm((current) => ({ ...current, lon: event.target.value }))
-                          }
-                          inputMode="decimal"
-                          required
-                        />
-                      </div>
-                      <div className="admin-bar-row__actions">
-                        <button
-                          className="button button--primary"
-                          type="submit"
-                          disabled={savingEdit}
-                        >
-                          Save
-                        </button>
-                        <button
-                          className="button button--secondary"
-                          type="button"
-                          onClick={cancelEdit}
-                          disabled={savingEdit}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  </li>
-                ) : (
-                  <li key={bar.id} className="admin-bar-row">
-                    <div className="admin-bar-row__info">
-                      <p className="admin-bar-row__name">
-                        {bar.name}
-                        {bar.source === 'community' && (
-                          <span className="admin-bar-row__tag">Community</span>
-                        )}
-                        {bar.status === 'hidden' && (
-                          <span className="admin-bar-row__tag admin-bar-row__tag--hidden">
-                            Hidden
-                          </span>
-                        )}
-                      </p>
-                      {bar.address && <p className="admin-bar-row__address">{bar.address}</p>}
-                      <p className="admin-bar-row__meta">Source: {bar.source}</p>
-                    </div>
-                    <div className="admin-bar-row__actions">
-                      <button
-                        className="button button--secondary"
-                        type="button"
-                        onClick={() => startEdit(bar)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="button button--secondary"
-                        type="button"
-                        onClick={() => void handleToggleStatus(bar)}
-                      >
-                        {bar.status === 'active' ? 'Hide' : 'Unhide'}
-                      </button>
-                      <button
-                        className="button button--secondary"
-                        type="button"
-                        onClick={() => void handleDelete(bar)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </li>
-                ),
-              )}
-            </ul>
-          )}
-
-          <form className="admin-create-form" onSubmit={handleCreateSubmit}>
-            <h3>Add a bar</h3>
-            {createError && (
-              <p className="error-message" role="alert">
-                {createError}
-              </p>
-            )}
-            <div className="field">
-              <label htmlFor="admin-create-name">Name</label>
-              <input
-                id="admin-create-name"
-                value={createForm.name}
-                onChange={(event) =>
-                  setCreateForm((current) => ({ ...current, name: event.target.value }))
-                }
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="admin-create-address">Address</label>
-              <input
-                id="admin-create-address"
-                value={createForm.address}
-                onChange={(event) =>
-                  setCreateForm((current) => ({ ...current, address: event.target.value }))
-                }
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="admin-create-lat">Latitude</label>
-              <input
-                id="admin-create-lat"
-                value={createForm.lat}
-                onChange={(event) =>
-                  setCreateForm((current) => ({ ...current, lat: event.target.value }))
-                }
-                inputMode="decimal"
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="admin-create-lon">Longitude</label>
-              <input
-                id="admin-create-lon"
-                value={createForm.lon}
-                onChange={(event) =>
-                  setCreateForm((current) => ({ ...current, lon: event.target.value }))
-                }
-                inputMode="decimal"
-                required
-              />
-            </div>
-            <button className="button button--primary" type="submit" disabled={creating}>
-              Create bar
-            </button>
-          </form>
-        </section>
-
-        <section className="admin__section">
-          <h2>Your pending visits</h2>
-          {pendingVisitsError && (
-            <p className="error-message" role="alert">
-              {pendingVisitsError}
-            </p>
-          )}
-          {pendingVisits.length === 0 ? (
-            <p>You have no pending visits.</p>
-          ) : (
-            <ul className="admin-visit-list">
-              {pendingVisits.map((visit) => (
-                <li key={visit.id} className="admin-visit-row">
-                  <span className="admin-visit-row__bar">{visit.barName}</span>
-                  <button
-                    className="button button--secondary admin-visit-row__cancel"
-                    type="button"
-                    disabled={cancellingVisitId === visit.id}
-                    onClick={() => void handleCancelVisit(visit)}
-                  >
-                    Cancel visit
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="admin__section">
-          <h2>Users</h2>
-          {usersLoading && <p role="status">Loading users…</p>}
-          {usersError && (
-            <p className="error-message" role="alert">
-              {usersError}
-            </p>
-          )}
-          {!usersLoading && users.length > 0 && (
-            <ul className="admin-user-list">
-              {users.map((entry) => (
-                <li key={entry.id} className="admin-user-row">
-                  <span className="admin-user-row__name">
-                    {entry.username}
-                    {entry.isAdmin && <span className="admin-bar-row__tag">Admin</span>}
-                  </span>
-                  <span className="admin-user-row__stat">
-                    {entry.areaPercent.toFixed(1)}% explored
-                  </span>
-                  <span className="admin-user-row__stat">{entry.barsMastered} mastered</span>
-                  <span className="admin-user-row__stat">{entry.badgeCount} badges</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <BarsSection />
+        <PendingVisitsSection />
+        <UsersSection />
       </div>
     </main>
   );

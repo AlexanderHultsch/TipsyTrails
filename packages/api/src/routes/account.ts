@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth, SESSION_COOKIE_NAME } from '../auth/cookie.js';
 import { verifyPassword } from '../auth/password.js';
@@ -6,6 +6,11 @@ import { verifyPassword } from '../auth/password.js';
 // register and login do, so it uses that module's projection rather than a
 // second identical copy of the row shape, the public shape and the mapper —
 // see routes/auth.ts's own comment on them.
+import {
+  sendInvalidCredentials,
+  sendInvalidRequestBody,
+  sendUnauthenticated,
+} from '../http/errors.js';
 import { toPublicUser, type UserRow } from './auth.js';
 
 const settingsSchema = z.object({
@@ -16,20 +21,6 @@ const deleteAccountSchema = z.object({
   password: z.string().min(1),
 });
 
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
-
-// Section 9.5: the same generic failure POST /api/auth/login uses for a
-// wrong password, reused here rather than a new code.
-function sendInvalidCredentials(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'invalid_credentials', message: 'Invalid username or password.' });
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
 export async function accountRoutes(app: FastifyInstance): Promise<void> {
   app.patch('/api/settings', { preHandler: requireAuth }, async (request, reply) => {
     if (request.userId == null) {
@@ -39,7 +30,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = settingsSchema.safeParse(request.body);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestBody(reply);
       return;
     }
 
@@ -70,7 +61,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = deleteAccountSchema.safeParse(request.body);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestBody(reply);
       return;
     }
 

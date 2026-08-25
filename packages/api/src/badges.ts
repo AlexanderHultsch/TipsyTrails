@@ -7,6 +7,7 @@ import {
 } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
+import { loadActiveCity } from './city-grid.js';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 // SPEC.md Section 7.7's badge evaluation job, structured like maintenance.ts's
@@ -58,22 +59,6 @@ export interface BadgeSummary {
   periodKey: string;
   value: number;
   awardedAt: number;
-}
-
-interface CityRow {
-  id: number;
-  playable_cells: number;
-}
-
-// Same query fog.ts's loadActiveCity runs (v1 has exactly one active city,
-// ACTIVE_CITY_SLUG) — duplicated here rather than imported since fog.ts
-// does not export it, and this module only needs `id`/`playable_cells`.
-function loadActiveCity(db: Database.Database): CityRow | null {
-  return (
-    db
-      .prepare<[], CityRow>(`SELECT id, playable_cells FROM cities WHERE is_active = 1 LIMIT 1`)
-      .get() ?? null
-  );
 }
 
 interface ExplorerRow {

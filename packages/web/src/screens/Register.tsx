@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, register } from '../api/client.js';
+import { errorMessage, register } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 
 export function Register() {
@@ -34,7 +34,7 @@ export function Register() {
       setUser(user);
       navigate(user.mustChangePassword ? '/change-password' : '/app', { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }

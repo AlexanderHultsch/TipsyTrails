@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ApiError, getResetQuestion, resetPassword } from '../api/client.js';
+import { errorMessage, getResetQuestion, resetPassword } from '../api/client.js';
 
 type Step = 'username' | 'answer';
 
@@ -25,7 +25,7 @@ export function Reset() {
       setQuestion(result.question);
       setStep('answer');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -39,7 +39,7 @@ export function Reset() {
       await resetPassword({ username, securityAnswer, newPassword });
       setDone(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }

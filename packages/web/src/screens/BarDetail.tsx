@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ApiError, getBar, getCity } from '../api/client.js';
+import { errorMessage, getBar, getCity } from '../api/client.js';
 import type { Bar } from '../api/types.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { CocktailGlass } from '../components/CocktailGlass.js';
@@ -59,7 +59,7 @@ export function BarDetail() {
         if (cancelled) {
           return;
         }
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+        setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) {

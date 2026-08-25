@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ApiError, changePassword } from '../api/client.js';
+import { changePassword, errorMessage } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 
 export function ChangePassword() {
@@ -23,7 +23,7 @@ export function ChangePassword() {
       }
       navigate('/app', { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }

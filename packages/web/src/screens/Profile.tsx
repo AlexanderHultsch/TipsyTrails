@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { BADGE_PERIODS } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
-import { ApiError, getProfile } from '../api/client.js';
+import { errorMessage, getProfile } from '../api/client.js';
 import type { BadgeKind, ProfileResponse } from '../api/types.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
@@ -64,7 +64,7 @@ export function Profile() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+        setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

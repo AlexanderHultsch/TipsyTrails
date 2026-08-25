@@ -1,9 +1,22 @@
 import { compareBarsByName } from '@tipsytrails/shared';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth/cookie.js';
-import { sendBarNotFound, type BarSource, type BarStatus } from './bars.js';
-import { loadActiveCity, loadCityById, resolveCellAndDistrict, toGridParams } from './fog.js';
+import {
+  loadActiveCity,
+  loadCityById,
+  resolveCellAndDistrict,
+  toGridParams,
+} from '../city-grid.js';
+import {
+  sendBarNotFound,
+  sendCityNotFound,
+  sendGridUnavailable,
+  sendInvalidRequestBody,
+  sendOutsideCity,
+  sendUnauthenticated,
+} from '../http/errors.js';
+import type { BarSource, BarStatus } from './bars.js';
 
 // SPEC.md Section 9.3, Phase 7 step 2: the admin area. Every route here sits
 // behind requireAdmin (auth/cookie.ts) — a logged-in non-admin gets 403, an
@@ -107,32 +120,6 @@ function toAdminUserSummary(row: AdminUserRow, playableCells: number): AdminUser
   };
 }
 
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
-
-function sendCityNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'city_not_found', message: 'No active city is configured.' });
-}
-
-function sendOutsideCity(reply: FastifyReply): void {
-  reply.code(422).send({
-    code: 'outside_city',
-    message: 'That position is outside the playable area.',
-  });
-}
-
-function sendGridUnavailable(reply: FastifyReply): void {
-  reply.code(503).send({
-    code: 'grid_unavailable',
-    message: 'The district grid is not loaded on this server.',
-  });
-}
-
 const listBarsQuerySchema = z.object({
   source: z.string().trim().min(1).optional(),
 });
@@ -165,7 +152,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = listBarsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestBody(reply);
       return;
     }
 
@@ -198,7 +185,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = createBarSchema.safeParse(request.body);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestBody(reply);
       return;
     }
     const { name, address, lat, lon } = parsed.data;
@@ -274,7 +261,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = patchBarSchema.safeParse(request.body);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestBody(reply);
       return;
     }
 

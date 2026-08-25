@@ -1,5 +1,6 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../auth/cookie.js';
+import { sendCityNotFound } from '../http/errors.js';
 
 interface CityRow {
   slug: string;
@@ -16,10 +17,6 @@ interface DistrictRow {
   id: number;
   name: string;
   playable_cells: number;
-}
-
-function sendCityNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'city_not_found', message: 'No active city is configured.' });
 }
 
 // SPEC.md Section 9.2: active city metadata + grid parameters, what the web

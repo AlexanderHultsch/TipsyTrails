@@ -11,6 +11,11 @@ import {
   deleteSessionsForUser,
 } from '../auth/session.js';
 import type { Env } from '../env.js';
+import {
+  sendInvalidCredentials,
+  sendInvalidRequestBody,
+  sendUnauthenticated,
+} from '../http/errors.js';
 import { createRateLimiter } from '../http/rate-limit.js';
 
 // A pre-computed argon2id hash with no corresponding password. Verifying
@@ -146,24 +151,12 @@ export function toPublicUser(row: UserRow): PublicUser {
   };
 }
 
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
-
-function sendInvalidCredentials(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'invalid_credentials', message: 'Invalid username or password.' });
-}
-
 function sendInvalidResetAnswer(reply: FastifyReply): void {
   reply.code(401).send({ code: 'invalid_reset', message: 'Invalid username or security answer.' });
 }
 
 function sendInvalidCurrentPassword(reply: FastifyReply): void {
   reply.code(401).send({ code: 'invalid_credentials', message: 'Current password is incorrect.' });
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
 }
 
 export function authRoutes(env: Env) {
@@ -178,7 +171,7 @@ export function authRoutes(env: Env) {
     app.post('/api/auth/register', { preHandler: authRateLimit }, async (request, reply) => {
       const parsed = registerSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { username, password, securityQuestion, securityAnswer } = parsed.data;
@@ -224,7 +217,7 @@ export function authRoutes(env: Env) {
     app.post('/api/auth/login', { preHandler: authRateLimit }, async (request, reply) => {
       const parsed = loginSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { username, password } = parsed.data;
@@ -287,7 +280,7 @@ export function authRoutes(env: Env) {
     app.get('/api/auth/reset/question', { preHandler: resetRateLimits }, async (request, reply) => {
       const parsed = resetQuestionQuerySchema.safeParse(request.query);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { username } = parsed.data;
@@ -305,7 +298,7 @@ export function authRoutes(env: Env) {
     app.post('/api/auth/reset', { preHandler: resetRateLimits }, async (request, reply) => {
       const parsed = resetSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { username, securityAnswer, newPassword } = parsed.data;
@@ -343,7 +336,7 @@ export function authRoutes(env: Env) {
 
       const parsed = changePasswordSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { currentPassword, newPassword } = parsed.data;

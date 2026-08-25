@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ApiError, suggestBar } from '../api/client.js';
+import { errorMessage, suggestBar } from '../api/client.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { MapPicker } from '../map/MapPicker.js';
 import type { PickedPosition } from '../map/MapPicker.js';
@@ -39,7 +39,7 @@ export function SuggestBar() {
       });
       navigate(`/bars/${bar.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }

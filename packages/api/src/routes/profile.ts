@@ -2,8 +2,10 @@ import type { BadgePeriod } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { requireAuth } from '../auth/cookie.js';
+import { loadActiveCity } from '../city-grid.js';
 import { allTimeBarflyValuesByUser, badgesByUser, currentBadgeProgress } from '../badges.js';
 import type { BadgeProgress } from '../badges.js';
+import { sendUnauthenticated } from '../http/errors.js';
 import {
   ANONYMOUS_AVATAR_SEED,
   anonymousDisplayName,
@@ -20,10 +22,6 @@ import {
 
 const PROFILE_BADGE_PERIODS: readonly BadgePeriod[] = ['week', 'month', 'year'];
 
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
 // Section 9.5: "Every 404 in this route must be byte-identical regardless
 // of cause: unknown user, anonymous user addressed by username, malformed
 // handle." One body, used for all three, the same way routes/bars.ts's
@@ -31,19 +29,6 @@ function sendUnauthenticated(reply: FastifyReply): void {
 // discovered by you" (Section 7.4).
 function sendProfileNotFound(reply: FastifyReply): void {
   reply.code(404).send({ code: 'profile_not_found', message: 'That profile does not exist.' });
-}
-
-interface CityRow {
-  id: number;
-  playable_cells: number;
-}
-
-function loadActiveCity(db: Database.Database): CityRow | null {
-  return (
-    db
-      .prepare<[], CityRow>(`SELECT id, playable_cells FROM cities WHERE is_active = 1 LIMIT 1`)
-      .get() ?? null
-  );
 }
 
 interface UserRow {

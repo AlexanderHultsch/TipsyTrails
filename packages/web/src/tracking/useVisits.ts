@@ -15,6 +15,7 @@ import {
   ApiError,
   cancelVisit as postCancelVisit,
   checkIn as postCheckIn,
+  errorMessage,
   getPendingVisits,
 } from '../api/client.js';
 import type { Bar, VisitSummary } from '../api/types.js';
@@ -215,9 +216,7 @@ export function useVisits(
       setPendingVisits((current) => [...current.filter((v) => v.id !== visit.id), visit]);
       return true;
     } catch (err) {
-      setCheckInError(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      setCheckInError(errorMessage(err));
       return false;
     } finally {
       setCheckingIn(false);
@@ -258,9 +257,7 @@ export function useVisits(
         setPendingVisits((current) => current.filter((visit) => visit.id !== visitId));
         return true;
       }
-      setCancelError(
-        err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
-      );
+      setCancelError(errorMessage(err));
       return false;
     } finally {
       setCancellingVisitId(null);

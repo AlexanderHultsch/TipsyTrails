@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyCookie from '@fastify/cookie';
@@ -9,7 +9,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { ACTIVE_CITY_SLUG } from './active-city.js';
 import { mustChangePasswordGate } from './auth/password-gate.js';
 import type { Env } from './env.js';
-import { loadDistrictIdByGridIndex } from './fog/district-index.js';
+import { loadDistrictIdByGridIndex, loadGrid } from './fog/district-index.js';
+import type { AcceptedPosition } from './last-accepted.js';
 import { createOriginCheck } from './http/csrf.js';
 import { applySecurityHeaders } from './http/security-headers.js';
 import { resolveVapidConfig } from './push/config.js';
@@ -19,7 +20,7 @@ import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
-import { fogRoutes, type AcceptedPosition } from './routes/fog.js';
+import { fogRoutes } from './routes/fog.js';
 import { healthRoutes } from './routes/health.js';
 import { leaderboardRoutes } from './routes/leaderboard.js';
 import { profileRoutes } from './routes/profile.js';
@@ -55,18 +56,6 @@ declare module 'fastify' {
 }
 
 const defaultWebRoot = fileURLToPath(new URL('../public', import.meta.url));
-
-function loadGrid(gridPath: string): Uint16Array {
-  const fileBuffer = readFileSync(gridPath);
-  // Copied into a fresh, zero-offset ArrayBuffer so the Uint16Array view is
-  // guaranteed 2-byte aligned regardless of where Node placed the Buffer's
-  // backing allocation.
-  const copy = fileBuffer.buffer.slice(
-    fileBuffer.byteOffset,
-    fileBuffer.byteOffset + fileBuffer.byteLength,
-  );
-  return new Uint16Array(copy);
-}
 
 export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   const app = Fastify({

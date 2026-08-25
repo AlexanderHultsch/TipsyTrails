@@ -5,9 +5,10 @@ import {
   CONFIG,
 } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
+import { loadActiveCity, type CityRow } from '../city-grid.js';
 import {
   allTimeBarflyValuesByUser,
   badgesByUser,
@@ -15,6 +16,7 @@ import {
   explorerValuesByUser,
   type MetricStanding,
 } from '../badges.js';
+import { sendCityNotFound, sendInvalidRequestQuery, sendUnauthenticated } from '../http/errors.js';
 import { ANONYMOUS_AVATAR_SEED, anonymousDisplayName } from './anonymity.js';
 
 // SPEC.md Section 7.8: the public leaderboard, ranked by area explored or
@@ -33,34 +35,6 @@ const leaderboardQuerySchema = z.object({
   period: z.enum(['all', 'week', 'month']).default('all'),
   page: z.coerce.number().int().positive().default(1),
 });
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request query is invalid.' });
-}
-
-function sendCityNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'city_not_found', message: 'No active city is configured.' });
-}
-
-interface CityRow {
-  id: number;
-  playable_cells: number;
-}
-
-// Same query badges.ts's own loadActiveCity runs (v1 has exactly one active
-// city, ACTIVE_CITY_SLUG) — duplicated per that module's own precedent
-// (badges.ts does not export it, and this route only needs `id`/`playable_cells`).
-function loadActiveCity(db: Database.Database): CityRow | null {
-  return (
-    db
-      .prepare<[], CityRow>(`SELECT id, playable_cells FROM cities WHERE is_active = 1 LIMIT 1`)
-      .get() ?? null
-  );
-}
 
 interface UserRow {
   id: number;
@@ -179,7 +153,7 @@ export async function leaderboardRoutes(app: FastifyInstance): Promise<void> {
 
     const parsed = leaderboardQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      sendInvalidRequest(reply);
+      sendInvalidRequestQuery(reply);
       return;
     }
     const { metric, period, page } = parsed.data;

@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { ACTIVE_CITY_SLUG } from '../active-city.js';
 import type { Env } from '../env.js';
-import { loadDistrictIdByGridIndex } from '../fog/district-index.js';
+import { loadDistrictIdByGridIndex, loadGrid } from '../fog/district-index.js';
 import { resolveSeedDir } from '../routes/static-data.js';
 
 // Seeds (or updates) the `bars` table from `data/seed/<slug>/bars.json`
@@ -42,20 +42,6 @@ type SeedBar = z.infer<typeof barSchema>;
 
 interface CityIdRow {
   id: number;
-}
-
-// Mirrors `app.ts`'s `loadGrid` verbatim (SPEC.md Section 5.2's `grid.bin`
-// format). Reimplemented rather than imported: `app.ts` is the top-level
-// wiring file that assembles routes onto a `FastifyInstance`, and nothing
-// else in the `db/` layer depends on it — importing from it here would
-// point that dependency backwards for the sake of one eight-line helper.
-function loadGrid(gridPath: string): Uint16Array {
-  const fileBuffer = readFileSync(gridPath);
-  const copy = fileBuffer.buffer.slice(
-    fileBuffer.byteOffset,
-    fileBuffer.byteOffset + fileBuffer.byteLength,
-  );
-  return new Uint16Array(copy);
 }
 
 function districtIdForCell(

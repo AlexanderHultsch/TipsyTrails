@@ -3,8 +3,8 @@ import type Database from 'better-sqlite3';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
-import { sendBarNotFound } from './bars.js';
-import type { AcceptedPosition } from './fog.js';
+import { sendBarNotFound, sendInvalidRequestBody, sendUnauthenticated } from '../http/errors.js';
+import type { AcceptedPosition } from '../last-accepted.js';
 
 // SPEC.md Sections 5.7, 7.5, 9.2: check-in (`POST /api/visits`), the
 // pending-visit banner (`GET /api/visits/pending`) and the deliberate way
@@ -64,14 +64,6 @@ export function toVisitSummary(row: VisitRow): VisitSummary {
     remainingS: Math.max(0, DERIVED.VISIT_REQUIRED_S - row.confirmed_s),
     status: row.status,
   };
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
 }
 
 // No last accepted sample on record for this user (never sampled this
@@ -153,7 +145,7 @@ export function visitsRoutes(lastAccepted: ReadonlyMap<number, AcceptedPosition>
 
       const parsed = checkInSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
 

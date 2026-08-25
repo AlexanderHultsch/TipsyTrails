@@ -41,6 +41,18 @@ export class ApiError extends Error {
 const NETWORK_ERROR_MESSAGE = 'Could not reach the server. Check your connection and try again.';
 const UNKNOWN_ERROR_MESSAGE = 'Something went wrong. Please try again.';
 
+// What every screen renders in its error slot after a failed call: the
+// server's own message when the failure came back through `request` above
+// (including the network case, which `ApiError`s itself), and the generic
+// fallback for anything else that could reach a `catch`.
+//
+// Here, beside the `ApiError` it tests for and the message it falls back to,
+// so that rewording either reaches every screen at once instead of most of
+// them.
+export function errorMessage(err: unknown): string {
+  return err instanceof ApiError ? err.message : UNKNOWN_ERROR_MESSAGE;
+}
+
 interface ApiErrorBody {
   code?: string;
   message?: string;

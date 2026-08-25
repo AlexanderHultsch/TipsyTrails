@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, getDistrictBoundaries, getProgress } from '../api/client.js';
+import { errorMessage, getDistrictBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeature, BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { centerOfGeometry, pointsOfGeometry, svgPathOfGeometry } from '../geo/geojson-path.js';
@@ -80,7 +80,7 @@ export function DistrictOverview() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+        setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

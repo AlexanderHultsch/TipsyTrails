@@ -2,8 +2,16 @@ import { findConflictingBar } from '@tipsytrails/shared';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
+import { loadActiveCity, resolveCellAndDistrict, toGridParams } from '../city-grid.js';
+import {
+  sendBarNotFound,
+  sendCityNotFound,
+  sendGridUnavailable,
+  sendInvalidRequestBody,
+  sendOutsideCity,
+  sendUnauthenticated,
+} from '../http/errors.js';
 import { createRateLimiter } from '../http/rate-limit.js';
-import { loadActiveCity, resolveCellAndDistrict, toGridParams } from './fog.js';
 
 // SPEC.md Sections 5.7, 7.4, 9.2, 9.5: `GET /api/bars` and `GET /api/bars/:id`
 // answer only from bars the requesting user has discovered — every query in
@@ -90,45 +98,6 @@ export function toBarSummary(row: DiscoveredBarRow): BarSummary {
     discoveredAt: row.discovered_at,
     mastered: row.mastered === 1,
   };
-}
-
-// SPEC.md Section 9.5: identical for "does not exist" and "not discovered by
-// you" — a 403 would confirm existence and defeat Section 7.4. Exported so
-// routes/visits.ts can send the exact same body for the same reason
-// (Sections 7.4, 9.5: a check-in attempt must not become an existence
-// oracle either) rather than duplicating it.
-export function sendBarNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'bar_not_found', message: 'That bar does not exist.' });
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
-
-function sendCityNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'city_not_found', message: 'No active city is configured.' });
-}
-
-// SPEC.md Section 5.1: "Positions outside the active city's bounding box are
-// silently ignored by all endpoints" describes read/derive endpoints like
-// `POST /api/samples`; a submission is a write the user must be told about,
-// so this route rejects rather than silently ignores.
-function sendOutsideCity(reply: FastifyReply): void {
-  reply.code(422).send({
-    code: 'outside_city',
-    message: 'That position is outside the playable area.',
-  });
-}
-
-function sendGridUnavailable(reply: FastifyReply): void {
-  reply.code(503).send({
-    code: 'grid_unavailable',
-    message: 'The district grid is not loaded on this server.',
-  });
 }
 
 // 409, in the style of POST /api/auth/register's `username_taken` (also a
@@ -284,7 +253,7 @@ export async function barsRoutes(app: FastifyInstance): Promise<void> {
 
       const parsed = suggestBarSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
       const { name, address, lat, lon } = parsed.data;

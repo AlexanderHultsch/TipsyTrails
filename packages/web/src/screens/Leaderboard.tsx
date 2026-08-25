@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ApiError, getLeaderboard } from '../api/client.js';
+import { errorMessage, getLeaderboard } from '../api/client.js';
 import type { LeaderboardMetric, LeaderboardPeriod, LeaderboardResponse } from '../api/types.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { Avatar } from '../components/Avatar.js';
@@ -59,7 +59,7 @@ export function Leaderboard() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+        setError(errorMessage(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

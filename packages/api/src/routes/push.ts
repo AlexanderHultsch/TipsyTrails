@@ -1,6 +1,7 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
+import { sendInvalidRequestBody, sendUnauthenticated } from '../http/errors.js';
 
 // SPEC.md Sections 5.9, 9.2, Phase 5 step 5: the subscription endpoints and
 // the one piece of Web Push config the client needs to call
@@ -11,14 +12,6 @@ import { requireAuth } from '../auth/cookie.js';
 // because no existing endpoint's shape is a natural home for it, and
 // `GET /api/city` (routes/city.ts) already establishes the pattern of a
 // small `requireAuth`, read-only, boot-config endpoint this mirrors.
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
 
 const subscribeSchema = z.object({
   endpoint: z.url(),
@@ -51,7 +44,7 @@ export function pushRoutes(vapidPublicKey: string | null) {
 
       const parsed = subscribeSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
 
@@ -83,7 +76,7 @@ export function pushRoutes(vapidPublicKey: string | null) {
 
       const parsed = unsubscribeSchema.safeParse(request.body);
       if (!parsed.success) {
-        sendInvalidRequest(reply);
+        sendInvalidRequestBody(reply);
         return;
       }
 

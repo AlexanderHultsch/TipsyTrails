@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import { loadGridMeta } from '../db/seed-city.js';
@@ -6,6 +6,28 @@ import { loadGridMeta } from '../db/seed-city.js';
 interface DistrictRow {
   id: number;
   name: string;
+}
+
+/**
+ * Reads `grid.bin` (SPEC.md Section 5.2) — the per-cell district *index*
+ * grid that `loadDistrictIdByGridIndex` below resolves to database ids. The
+ * two halves of that seed data are loaded from one module so that a reader
+ * of either finds the other.
+ *
+ * Both callers are above this layer (`app.ts`, which decorates the Fastify
+ * instance with the result, and `db/seed-bars.ts`, which needs the same grid
+ * to place a seeded bar), so neither has to reach into the other for it.
+ */
+export function loadGrid(gridPath: string): Uint16Array {
+  const fileBuffer = readFileSync(gridPath);
+  // Copied into a fresh, zero-offset ArrayBuffer so the Uint16Array view is
+  // guaranteed 2-byte aligned regardless of where Node placed the Buffer's
+  // backing allocation.
+  const copy = fileBuffer.buffer.slice(
+    fileBuffer.byteOffset,
+    fileBuffer.byteOffset + fileBuffer.byteLength,
+  );
+  return new Uint16Array(copy);
 }
 
 /**

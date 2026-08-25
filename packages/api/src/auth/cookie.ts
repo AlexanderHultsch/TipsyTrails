@@ -2,6 +2,7 @@ import { DERIVED } from '@tipsytrails/shared';
 import type { CookieSerializeOptions } from '@fastify/cookie';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Env } from '../env.js';
+import { sendUnauthenticated } from '../http/errors.js';
 import { getSession } from './session.js';
 
 export const SESSION_COOKIE_NAME = 'tt_session';
@@ -32,10 +33,6 @@ function sessionCookieOptions(env: Env): CookieSerializeOptions {
 
 export function setSessionCookie(reply: FastifyReply, env: Env, sessionId: string): void {
   reply.setCookie(SESSION_COOKIE_NAME, sessionId, sessionCookieOptions(env));
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
 }
 
 function sendForbidden(reply: FastifyReply): void {

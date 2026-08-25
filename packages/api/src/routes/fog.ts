@@ -11,12 +11,20 @@ import {
 } from '@tipsytrails/shared';
 import type { GridParams, LatLon } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
+import { loadActiveCity, toGridParams } from '../city-grid.js';
 import { cellsWithinRevealRadius } from '../fog/reveal.js';
 import { isBitSet, maskByteLength, setBit } from '../fog/mask.js';
+import {
+  sendCityNotFound,
+  sendGridUnavailable,
+  sendInvalidRequestBody,
+  sendUnauthenticated,
+} from '../http/errors.js';
 import { createRateLimiter } from '../http/rate-limit.js';
+import type { AcceptedPosition } from '../last-accepted.js';
 import {
   bindMasteredUserId,
   DISCOVERED_BAR_COLUMNS,
@@ -31,107 +39,6 @@ import { toVisitSummary, type VisitSummary } from './visits.js';
 // together because all three read and write the same `fog_state` /
 // `fog_district_progress` / `fog_daily_progress` triple and share the
 // active-city/grid lookups below — one coherent unit, per the phase brief.
-
-// Exported so routes/bars.ts's suggest handler (SPEC.md Section 11.3) can
-// place a submitted position against the same active city and grid this
-// route uses, rather than a second copy of "how do I get a GridParams" —
-// task brief: "reuse the projection the sample handler already uses rather
-// than a second copy."
-export interface CityRow {
-  id: number;
-  origin_lat: number;
-  origin_lon: number;
-  grid_width: number;
-  grid_height: number;
-  cell_size_m: number;
-  playable_cells: number;
-}
-
-export function loadActiveCity(db: Database.Database): CityRow | null {
-  return (
-    db
-      .prepare<[], CityRow>(
-        `SELECT id, origin_lat, origin_lon, grid_width, grid_height, cell_size_m, playable_cells FROM cities WHERE is_active = 1 LIMIT 1`,
-      )
-      .get() ?? null
-  );
-}
-
-// Exported so routes/admin.ts's move-a-bar handler (SPEC.md Section 9.3) can
-// recompute against the city a bar actually belongs to, not assumed to be
-// the active one — the same CityRow shape loadActiveCity returns.
-export function loadCityById(db: Database.Database, cityId: number): CityRow | null {
-  return (
-    db
-      .prepare<[number], CityRow>(
-        `SELECT id, origin_lat, origin_lon, grid_width, grid_height, cell_size_m, playable_cells FROM cities WHERE id = ?`,
-      )
-      .get(cityId) ?? null
-  );
-}
-
-export function toGridParams(city: CityRow): GridParams {
-  return {
-    origin_lat: city.origin_lat,
-    origin_lon: city.origin_lon,
-    grid_width: city.grid_width,
-    grid_height: city.grid_height,
-    cell_size_m: city.cell_size_m,
-  };
-}
-
-// Exported so routes/bars.ts's suggest handler and routes/admin.ts's
-// create/move-bar handlers share one computation (Phase 7 step 2 task
-// brief: "reuse the cell/district computation the suggest handler already
-// does rather than writing a third copy"). Order matches the code this was
-// lifted from: outside-city is checked before grid availability, since a
-// position outside the grid never needs the district lookup at all.
-//
-// The union itself is internal - both call sites switch on `status` on the
-// value the function hands back, and neither writes the name down.
-type CellDistrictResult =
-  | { status: 'ok'; cellIndex: number; districtId: number | null }
-  | { status: 'outside_city' }
-  | { status: 'grid_unavailable' };
-
-export function resolveCellAndDistrict(
-  grid: GridParams,
-  districtGrid: Uint16Array | null,
-  districtIdByGridIndex: Map<number, number> | null,
-  lat: number,
-  lon: number,
-): CellDistrictResult {
-  const cellIndex = toCell(lat, lon, grid);
-  if (cellIndex === null) {
-    return { status: 'outside_city' };
-  }
-  if (!districtGrid || !districtIdByGridIndex) {
-    return { status: 'grid_unavailable' };
-  }
-  const districtIndex = districtGrid[cellIndex];
-  const districtId =
-    districtIndex !== NO_DISTRICT ? (districtIdByGridIndex.get(districtIndex) ?? null) : null;
-  return { status: 'ok', cellIndex, districtId };
-}
-
-function sendUnauthenticated(reply: FastifyReply): void {
-  reply.code(401).send({ code: 'unauthenticated', message: 'Authentication required.' });
-}
-
-function sendInvalidRequest(reply: FastifyReply): void {
-  reply.code(400).send({ code: 'invalid_request', message: 'The request body is invalid.' });
-}
-
-function sendCityNotFound(reply: FastifyReply): void {
-  reply.code(404).send({ code: 'city_not_found', message: 'No active city is configured.' });
-}
-
-function sendGridUnavailable(reply: FastifyReply): void {
-  reply.code(503).send({
-    code: 'grid_unavailable',
-    message: 'The district grid is not loaded on this server.',
-  });
-}
 
 interface FogStateRow {
   mask: Buffer;
@@ -195,14 +102,6 @@ const samplesBodySchema = z.object({
   samples: z.array(sampleSchema).max(CONFIG.SAMPLE_MAX_BATCH),
 });
 
-// Exported so routes/visits.ts (Phase 5 step 1, Section 7.5 step 2) can read
-// the same last-accepted-sample state this teleport guard maintains,
-// without a second copy of it — Section 10.2 forbids persisting positions,
-// so there must be exactly one instance of this map per running server.
-export interface AcceptedPosition extends LatLon {
-  atMs: number;
-}
-
 interface ActiveBarRow {
   id: number;
   lat: number;
@@ -239,12 +138,10 @@ interface VisitProgress {
   touched: boolean;
 }
 
-// SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation
-// rule: "the previous accepted position lives in memory only ... discarded
-// on restart." A plain in-memory Map, recreated every time this plugin is
-// registered (i.e. every `buildApp` call, exactly once per process — a
-// restart is a fresh process and a fresh Map), never written to the
-// database.
+// SPEC.md Section 7.2's teleport guard, as a speed: the distance from the
+// previous accepted sample over the time between the two, in km/h. A batch
+// whose timestamps do not advance yields Infinity if it also moved, so a
+// zero-time jump is caught by the same threshold as any other.
 function impliedSpeedKmh(previous: AcceptedPosition, next: LatLon & { timestamp: number }): number {
   const distanceM = haversineDistanceM(previous, next);
   const dtS = (next.timestamp - previous.atMs) / 1000;
@@ -252,6 +149,237 @@ function impliedSpeedKmh(previous: AcceptedPosition, next: LatLon & { timestamp:
     return distanceM > 0 ? Infinity : 0;
   }
   return (distanceM / dtS) * 3.6;
+}
+
+// The three write steps `POST /api/samples` ends with, and the load its
+// visit step starts from. Each is exactly one transaction, and the handler
+// decides whether to run it — a batch that discovered nothing, touched no
+// visit or revealed no cell opens no transaction at all (SPEC.md Section
+// 5.5). The sample loop between the load and the writes stays inline in the
+// handler: its accumulators are genuinely intertwined, and reading that part
+// in place is the point of it.
+
+// SPEC.md Section 7.5 steps 3-4: the caller's own open pending visits,
+// loaded once per request the same way `activeBars` is. Keyed by bar id,
+// since `idx_visits_one_pending` allows at most one pending visit per
+// (user, bar).
+function loadPendingVisitProgress(
+  db: Database.Database,
+  userId: number,
+): Map<number, VisitProgress> {
+  const rows = db
+    .prepare<[number], PendingVisitRow>(
+      `SELECT visits.id AS id, visits.bar_id AS bar_id, bars.name AS bar_name,
+              bars.lat AS bar_lat, bars.lon AS bar_lon,
+              visits.started_at AS started_at, visits.last_sample_at AS last_sample_at,
+              visits.onsite_samples AS onsite_samples, visits.confirmed_s AS confirmed_s
+       FROM visits
+       JOIN bars ON bars.id = visits.bar_id
+       WHERE visits.user_id = ? AND visits.status = 'pending'`,
+    )
+    .all(userId);
+  return new Map<number, VisitProgress>(
+    rows.map((row) => [
+      row.bar_id,
+      {
+        id: row.id,
+        barId: row.bar_id,
+        barName: row.bar_name,
+        bar: { lat: row.bar_lat, lon: row.bar_lon },
+        startedAt: row.started_at,
+        lastSampleAt: row.last_sample_at,
+        onsiteSamples: row.onsite_samples,
+        confirmedS: row.confirmed_s,
+        status: 'pending',
+        completedAt: null,
+        touched: false,
+      },
+    ]),
+  );
+}
+
+// SPEC.md Section 7.4: discovery is permanent and independent of fog state,
+// so this runs (and is returned) whether or not the batch revealed any fog
+// at all — never gated behind `revealCandidates`. The caller gates only on
+// there being a candidate at all, so a batch that passed no bar opens no
+// transaction.
+function applyDiscoveries(
+  db: Database.Database,
+  userId: number,
+  candidateBarIds: ReadonlySet<number>,
+  nowS: number,
+): BarSummary[] {
+  return db.transaction((): BarSummary[] => {
+    const insertDiscovery = db.prepare(
+      'INSERT OR IGNORE INTO bar_discoveries (user_id, bar_id, discovered_at) VALUES (?, ?, ?)',
+    );
+    const newlyDiscoveredIds: number[] = [];
+    for (const barId of candidateBarIds) {
+      const result = insertDiscovery.run(userId, barId, nowS);
+      if (result.changes > 0) {
+        newlyDiscoveredIds.push(barId);
+      }
+    }
+    if (newlyDiscoveredIds.length === 0) {
+      return [];
+    }
+    const placeholders = newlyDiscoveredIds.map(() => '?').join(', ');
+    // routes/bars.ts's own column list, not a second copy of it — the same
+    // reason `toBarSummary` is shared: `newBars` is one of the three
+    // surfaces a `bars` row reaches the client through (SPEC.md Section
+    // 9.2), and a field selected in two of them and forgotten in the third
+    // is exactly the drift that sharing prevents. Section 5.7's `mastered`
+    // rides along with it. It binds by name, so the anonymous parameters
+    // below are unaffected by it and stay the id list followed by the user
+    // id.
+    //
+    // A bar in this list was discovered by the INSERT a few lines up, so in
+    // practice it cannot be mastered yet — a completed visit needs a
+    // check-in, and a check-in needs the bar to be discovered. The flag is
+    // still selected rather than assumed: `newBars` is a `Bar` like the
+    // other two surfaces' and has to answer the same way they would, and an
+    // assumption here is one more thing that could come to disagree with
+    // them.
+    const rows = db
+      .prepare<unknown[], DiscoveredBarRow>(
+        `SELECT ${DISCOVERED_BAR_COLUMNS}
+         FROM bars
+         JOIN bar_discoveries ON bar_discoveries.bar_id = bars.id
+         WHERE bars.id IN (${placeholders}) AND bar_discoveries.user_id = ?`,
+      )
+      .all(...newlyDiscoveredIds, userId, bindMasteredUserId(userId));
+    return rows.map(toBarSummary);
+  })();
+}
+
+// SPEC.md Section 7.5 steps 3-4: persists every pending visit the batch
+// touched — updated, completed, or (a late sample on an already-stale
+// visit) expired — in one transaction. A visit that expires here is written
+// but, like `GET /api/visits/pending`'s own lazily-expired rows, not
+// reported back as a "visit update".
+function applyVisitUpdates(
+  db: Database.Database,
+  visitProgressByBarId: ReadonlyMap<number, VisitProgress>,
+): VisitSummary[] {
+  return db.transaction((): VisitSummary[] => {
+    const updates: VisitSummary[] = [];
+    for (const visit of visitProgressByBarId.values()) {
+      if (!visit.touched) {
+        continue;
+      }
+      if (visit.status === 'expired') {
+        db.prepare(`UPDATE visits SET status = 'expired' WHERE id = ?`).run(visit.id);
+        continue;
+      }
+      db.prepare(
+        `UPDATE visits SET last_sample_at = ?, onsite_samples = ?, confirmed_s = ?, status = ?, completed_at = ?
+         WHERE id = ?`,
+      ).run(
+        visit.lastSampleAt,
+        visit.onsiteSamples,
+        visit.confirmedS,
+        visit.status,
+        visit.completedAt,
+        visit.id,
+      );
+      updates.push(
+        toVisitSummary({
+          id: visit.id,
+          bar_id: visit.barId,
+          bar_name: visit.barName,
+          started_at: visit.startedAt,
+          last_sample_at: visit.lastSampleAt,
+          onsite_samples: visit.onsiteSamples,
+          confirmed_s: visit.confirmedS,
+          status: visit.status,
+        }),
+      );
+    }
+    return updates;
+  })();
+}
+
+// SPEC.md Section 5.5: sets the bits the batch earned and updates the three
+// counters that hang off them (`fog_state`, `fog_district_progress`,
+// `fog_daily_progress`) in one transaction, returning how many cells were
+// actually new.
+//
+// The parameter list is wide because the work needs all of it: the district
+// grid and its id lookup are two separate server-instance fields, and the
+// mask's length comes from the grid params while its row comes from the city
+// id. Passed rather than closed over, so the one place fog bits are written
+// states what it depends on.
+function applyReveal(
+  db: Database.Database,
+  userId: number,
+  cityId: number,
+  grid: GridParams,
+  districtGrid: Uint16Array,
+  districtIdByGridIndex: Map<number, number>,
+  revealCandidates: ReadonlySet<number>,
+  nowMs: number,
+): number {
+  return db.transaction((): number => {
+    const existing = readFogRow(db, userId, cityId);
+    const mask = existing ? existing.mask : Buffer.alloc(maskByteLength(grid));
+    const baselineRevealed = existing ? existing.revealedCells : 0;
+
+    let newCellsCount = 0;
+    const perDistrictIncrements = new Map<number, number>();
+
+    for (const index of revealCandidates) {
+      if (isBitSet(mask, index)) {
+        continue;
+      }
+      setBit(mask, index);
+      newCellsCount++;
+
+      const districtIndex = districtGrid[index];
+      if (districtIndex !== NO_DISTRICT) {
+        const districtId = districtIdByGridIndex.get(districtIndex);
+        if (districtId != null) {
+          perDistrictIncrements.set(districtId, (perDistrictIncrements.get(districtId) ?? 0) + 1);
+        }
+      }
+    }
+
+    // "A batch that reveals nothing must not write at all" (SPEC.md Section
+    // 5.5) — including the case where every candidate cell was already
+    // revealed.
+    if (newCellsCount === 0) {
+      return 0;
+    }
+
+    const nowS = Math.floor(nowMs / 1000);
+    db.prepare(
+      `INSERT INTO fog_state (user_id, city_id, mask, revealed_cells, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, city_id) DO UPDATE SET
+         mask = excluded.mask,
+         revealed_cells = excluded.revealed_cells,
+         updated_at = excluded.updated_at`,
+    ).run(userId, cityId, mask, baselineRevealed + newCellsCount, nowS);
+
+    const upsertDistrict = db.prepare(
+      `INSERT INTO fog_district_progress (user_id, district_id, revealed_cells)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, district_id) DO UPDATE SET
+         revealed_cells = revealed_cells + excluded.revealed_cells`,
+    );
+    for (const [districtId, increment] of perDistrictIncrements) {
+      upsertDistrict.run(userId, districtId, increment);
+    }
+
+    const day = berlinDateString(nowMs);
+    db.prepare(
+      `INSERT INTO fog_daily_progress (user_id, city_id, day, revealed_cells)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, city_id, day) DO UPDATE SET
+         revealed_cells = revealed_cells + excluded.revealed_cells`,
+    ).run(userId, cityId, day, newCellsCount);
+
+    return newCellsCount;
+  })();
 }
 
 // SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation
@@ -321,7 +449,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
 
         const parsed = samplesBodySchema.safeParse(request.body);
         if (!parsed.success) {
-          sendInvalidRequest(reply);
+          sendInvalidRequestBody(reply);
           return;
         }
 
@@ -380,39 +508,7 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           .all(city.id);
         const discoveryCandidateIds = new Set<number>();
 
-        // SPEC.md Section 7.5 steps 3-4: the caller's own open pending
-        // visits, loaded once per request the same way `activeBars` is above.
-        // Keyed by bar id, since `idx_visits_one_pending` allows at most one
-        // pending visit per (user, bar).
-        const pendingVisitRows = db
-          .prepare<[number], PendingVisitRow>(
-            `SELECT visits.id AS id, visits.bar_id AS bar_id, bars.name AS bar_name,
-                    bars.lat AS bar_lat, bars.lon AS bar_lon,
-                    visits.started_at AS started_at, visits.last_sample_at AS last_sample_at,
-                    visits.onsite_samples AS onsite_samples, visits.confirmed_s AS confirmed_s
-             FROM visits
-             JOIN bars ON bars.id = visits.bar_id
-             WHERE visits.user_id = ? AND visits.status = 'pending'`,
-          )
-          .all(userId);
-        const visitProgressByBarId = new Map<number, VisitProgress>(
-          pendingVisitRows.map((row) => [
-            row.bar_id,
-            {
-              id: row.id,
-              barId: row.bar_id,
-              barName: row.bar_name,
-              bar: { lat: row.bar_lat, lon: row.bar_lon },
-              startedAt: row.started_at,
-              lastSampleAt: row.last_sample_at,
-              onsiteSamples: row.onsite_samples,
-              confirmedS: row.confirmed_s,
-              status: 'pending',
-              completedAt: null,
-              touched: false,
-            },
-          ]),
-        );
+        const visitProgressByBarId = loadPendingVisitProgress(db, userId);
 
         for (const sample of sorted) {
           // 1. accuracy
@@ -500,167 +596,28 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           lastAccepted.set(userId, previous);
         }
 
-        // SPEC.md Section 7.4: discovery is permanent and independent of fog
-        // state, so it runs (and is returned) whether or not this batch
-        // revealed any fog at all — never gated behind `revealCandidates`.
-        const applyDiscoveries = db.transaction((): BarSummary[] => {
-          const insertDiscovery = db.prepare(
-            'INSERT OR IGNORE INTO bar_discoveries (user_id, bar_id, discovered_at) VALUES (?, ?, ?)',
-          );
-          const nowS = Math.floor(nowMs / 1000);
-          const newlyDiscoveredIds: number[] = [];
-          for (const barId of discoveryCandidateIds) {
-            const result = insertDiscovery.run(userId, barId, nowS);
-            if (result.changes > 0) {
-              newlyDiscoveredIds.push(barId);
-            }
-          }
-          if (newlyDiscoveredIds.length === 0) {
-            return [];
-          }
-          const placeholders = newlyDiscoveredIds.map(() => '?').join(', ');
-          // routes/bars.ts's own column list, not a second copy of it — the
-          // same reason `toBarSummary` is shared: `newBars` is one of the
-          // three surfaces a `bars` row reaches the client through (SPEC.md
-          // Section 9.2), and a field selected in two of them and forgotten
-          // in the third is exactly the drift that sharing prevents.
-          // Section 5.7's `mastered` rides along with it. It binds by name,
-          // so the anonymous parameters below are unaffected by it and stay
-          // the id list followed by the user id.
-          //
-          // A bar in this list was discovered by the INSERT a few lines up,
-          // so in practice it cannot be mastered yet — a completed visit
-          // needs a check-in, and a check-in needs the bar to be discovered.
-          // The flag is still selected rather than assumed: `newBars` is a
-          // `Bar` like the other two surfaces' and has to answer the same
-          // way they would, and an assumption here is one more thing that
-          // could come to disagree with them.
-          const rows = db
-            .prepare<unknown[], DiscoveredBarRow>(
-              `SELECT ${DISCOVERED_BAR_COLUMNS}
-             FROM bars
-             JOIN bar_discoveries ON bar_discoveries.bar_id = bars.id
-             WHERE bars.id IN (${placeholders}) AND bar_discoveries.user_id = ?`,
-            )
-            .all(...newlyDiscoveredIds, userId, bindMasteredUserId(userId));
-          return rows.map(toBarSummary);
-        });
-        const newBars = discoveryCandidateIds.size > 0 ? applyDiscoveries() : [];
+        const newBars =
+          discoveryCandidateIds.size > 0
+            ? applyDiscoveries(db, userId, discoveryCandidateIds, nowS)
+            : [];
 
-        // SPEC.md Section 7.5 steps 3-4: persists every pending visit this
-        // batch touched — updated, completed, or (a late sample on an
-        // already-stale visit) expired — in one transaction. A visit that
-        // expires here is written but, like `GET /api/visits/pending`'s own
-        // lazily-expired rows, not reported back as a "visit update".
-        const applyVisitUpdates = db.transaction((): VisitSummary[] => {
-          const updates: VisitSummary[] = [];
-          for (const visit of visitProgressByBarId.values()) {
-            if (!visit.touched) {
-              continue;
-            }
-            if (visit.status === 'expired') {
-              db.prepare(`UPDATE visits SET status = 'expired' WHERE id = ?`).run(visit.id);
-              continue;
-            }
-            db.prepare(
-              `UPDATE visits SET last_sample_at = ?, onsite_samples = ?, confirmed_s = ?, status = ?, completed_at = ?
-               WHERE id = ?`,
-            ).run(
-              visit.lastSampleAt,
-              visit.onsiteSamples,
-              visit.confirmedS,
-              visit.status,
-              visit.completedAt,
-              visit.id,
-            );
-            updates.push(
-              toVisitSummary({
-                id: visit.id,
-                bar_id: visit.barId,
-                bar_name: visit.barName,
-                started_at: visit.startedAt,
-                last_sample_at: visit.lastSampleAt,
-                onsite_samples: visit.onsiteSamples,
-                confirmed_s: visit.confirmedS,
-                status: visit.status,
-              }),
-            );
-          }
-          return updates;
-        });
         const anyVisitTouched = Array.from(visitProgressByBarId.values()).some((v) => v.touched);
-        const visitUpdates = anyVisitTouched ? applyVisitUpdates() : [];
+        const visitUpdates = anyVisitTouched ? applyVisitUpdates(db, visitProgressByBarId) : [];
 
         if (revealCandidates.size === 0) {
           return { newCells: 0, newBars, visitUpdates, tooFastToReveal };
         }
 
-        const applyReveal = db.transaction((): number => {
-          const existing = readFogRow(db, userId, city.id);
-          const mask = existing ? existing.mask : Buffer.alloc(maskByteLength(grid));
-          const baselineRevealed = existing ? existing.revealedCells : 0;
-
-          let newCellsCount = 0;
-          const perDistrictIncrements = new Map<number, number>();
-
-          for (const index of revealCandidates) {
-            if (isBitSet(mask, index)) {
-              continue;
-            }
-            setBit(mask, index);
-            newCellsCount++;
-
-            const districtIndex = districtGrid[index];
-            if (districtIndex !== NO_DISTRICT) {
-              const districtId = districtIdByGridIndex.get(districtIndex);
-              if (districtId != null) {
-                perDistrictIncrements.set(
-                  districtId,
-                  (perDistrictIncrements.get(districtId) ?? 0) + 1,
-                );
-              }
-            }
-          }
-
-          // "A batch that reveals nothing must not write at all" (SPEC.md
-          // Section 5.5) — including the case where every candidate cell was
-          // already revealed.
-          if (newCellsCount === 0) {
-            return 0;
-          }
-
-          const nowS = Math.floor(nowMs / 1000);
-          db.prepare(
-            `INSERT INTO fog_state (user_id, city_id, mask, revealed_cells, updated_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(user_id, city_id) DO UPDATE SET
-             mask = excluded.mask,
-             revealed_cells = excluded.revealed_cells,
-             updated_at = excluded.updated_at`,
-          ).run(userId, city.id, mask, baselineRevealed + newCellsCount, nowS);
-
-          const upsertDistrict = db.prepare(
-            `INSERT INTO fog_district_progress (user_id, district_id, revealed_cells)
-           VALUES (?, ?, ?)
-           ON CONFLICT(user_id, district_id) DO UPDATE SET
-             revealed_cells = revealed_cells + excluded.revealed_cells`,
-          );
-          for (const [districtId, increment] of perDistrictIncrements) {
-            upsertDistrict.run(userId, districtId, increment);
-          }
-
-          const day = berlinDateString(nowMs);
-          db.prepare(
-            `INSERT INTO fog_daily_progress (user_id, city_id, day, revealed_cells)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(user_id, city_id, day) DO UPDATE SET
-             revealed_cells = revealed_cells + excluded.revealed_cells`,
-          ).run(userId, city.id, day, newCellsCount);
-
-          return newCellsCount;
-        });
-
-        const newCells = applyReveal();
+        const newCells = applyReveal(
+          db,
+          userId,
+          city.id,
+          grid,
+          districtGrid,
+          districtIdByGridIndex,
+          revealCandidates,
+          nowMs,
+        );
         return { newCells, newBars, visitUpdates, tooFastToReveal };
       },
     );
