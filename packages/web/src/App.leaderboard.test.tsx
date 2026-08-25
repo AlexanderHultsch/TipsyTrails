@@ -983,7 +983,13 @@ describe('badge placeholders', () => {
 
     const note = container.querySelector('.badge-shelf__note')?.textContent ?? '';
     expect(note).toContain('Explore new ground, master new bars.');
-    expect(note).toContain('no fixed score wins one');
+    expect(note).toContain(
+      'Each badge goes to whoever does the most of it in its week, month or year.',
+    );
+    // Cut at the owner's direction, from here and from Section 7.7 with it:
+    // the sentence above already denies there is a score to reach, so the
+    // clause was restating its own premise.
+    expect(note).not.toContain('no fixed score');
 
     const section = container.querySelector('.badge-shelf__heading')?.closest('.profile__section');
     expect(section?.querySelector('h2')?.textContent).toBe('Badges');

@@ -397,15 +397,17 @@ export function BadgeShelf({
           {/* The answer to "what do I have to do to get that?", given once for
               the whole group rather than six times, and given in words because
               the honest answer is not a number. A badge is a competition
-              decided at the end of its period (Section 7.7), so no score
-              secures one; the last clause says that outright, because a player
-              left to assume there is a hidden number would simply invent one.
-              Naming the two activities is as specific as this may get: the
-              threshold, the player's distance from it and their standing are
-              all things Section 7.7 keeps off the screen. */}
+              decided at the end of its period (Section 7.7). The clause that
+              used to close this line - "no fixed score wins one" - is gone at
+              the owner's direction, from here and from Section 7.7 with it:
+              the sentence that remains already says a badge goes to whoever
+              does the most, which leaves no score to hunt for. Naming the two
+              activities is as specific as this may get: the threshold, the
+              player's distance from it and their standing are all things
+              Section 7.7 keeps off the screen. */}
           <p className="badge-shelf__note">
             Explore new ground, master new bars. Each badge goes to whoever does the most of it in
-            its week, month or year; no fixed score wins one.
+            its week, month or year.
           </p>
         </>
       )}
