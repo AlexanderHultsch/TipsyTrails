@@ -261,6 +261,11 @@ export interface AdminUser {
   isAdmin: boolean;
   isAnonymous: boolean;
   mustChangePassword: boolean;
+  // Section 7.8: this account is skipped by GET /api/leaderboard and by the
+  // badge job's candidate sets. It still plays, and still sees its own
+  // figures on its own profile - the flag decides who is ranked, not who may
+  // play. Also the precondition POST /api/admin/teleport refuses without.
+  excludedFromRankings: boolean;
   createdAt: number;
   lastSeenAt: number | null;
   areaRevealedCells: number;

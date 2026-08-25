@@ -2655,6 +2655,26 @@ button:focus-visible,
   font-size: 0.875rem;
 }
 
+/* SPEC.md Section 7.8's ranking toggle. Pushed to the end of the row so the
+   figures stay together and the one control that changes who can win is not
+   mixed in among them. `flex-basis: 100%` at narrow widths would wrap it
+   under the stats; `margin-left: auto` keeps it at the far end wherever the
+   row happens to break. */
+.admin-user-row__toggle {
+  margin-left: auto;
+}
+
+/* The sentence under a section that says what the controls in it actually
+   do. Used by the users section (what "not ranked" costs an account) and by
+   the teleport section (that it counts). Set at the same 0.875rem the other
+   secondary lines on this screen use (`.admin-bar-row__meta`), in full ink
+   rather than drawn back: it is the copy that stops a switch changing who
+   wins without saying so, which is not a line to make faint. */
+.admin__note {
+  font-size: 0.875rem;
+  margin: 0.75rem 0 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

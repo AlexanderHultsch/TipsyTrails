@@ -17,6 +17,7 @@ import { resolveVapidConfig } from './push/config.js';
 import { createWebPushSender, type PushSender } from './push/sender.js';
 import { accountRoutes } from './routes/account.js';
 import { adminRoutes } from './routes/admin.js';
+import { adminTeleportRoutes } from './routes/admin-teleport.js';
 import { authRoutes } from './routes/auth.js';
 import { barsRoutes } from './routes/bars.js';
 import { cityRoutes } from './routes/city.js';
@@ -139,6 +140,25 @@ export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   app.register(authRoutes(env));
   app.register(accountRoutes);
   app.register(adminRoutes);
+  // SPEC.md Sections 9.3, 10.1: the admin teleport's second gate, and the
+  // reason it is expressed as a registration rather than as a check inside
+  // the handler. Without `ADMIN_TELEPORT_ENABLED=true` the plugin is never
+  // registered, so `POST /api/admin/teleport` is a route this server does
+  // not have — the SPA fallback below answers 404 — instead of a route that
+  // exists and says no. The code ships inert on a production box, and a
+  // stolen admin session finds nothing to reach.
+  //
+  // It shares the one `lastAccepted` map for the same reason fogRoutes and
+  // visitsRoutes do: a teleport has to be what the next real sample is
+  // compared against, and check-in has to see where the teleport landed.
+  if (env.ADMIN_TELEPORT_ENABLED === 'true') {
+    app.log.warn(
+      'ADMIN_TELEPORT_ENABLED is set: POST /api/admin/teleport is registered. It moves an ' +
+        "admin's position without the speed guards and is intended for testing only; unset the " +
+        'variable to remove the route.',
+    );
+    app.register(adminTeleportRoutes(lastAccepted));
+  }
   app.register(cityRoutes);
   app.register(fogRoutes(lastAccepted));
   app.register(barsRoutes);

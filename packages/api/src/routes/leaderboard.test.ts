@@ -445,3 +445,109 @@ describe('paging', () => {
     expect(Math.max(...page1Ranks) + 1).toBe(Math.min(...page2Ranks));
   });
 });
+
+// SPEC.md Sections 7.7/7.8: `users.excluded_from_rankings` (rankings.ts).
+// An excluded account still plays — it reveals fog, masters bars, and reads
+// its own figures on its own profile — but it does not appear in the two
+// places that rank people. This suite covers the leaderboard half; the badge
+// half is in badges.test.ts, and both are fed from the one column.
+describe('accounts excluded from the rankings', () => {
+  function exclude(userId: number): void {
+    db.prepare('UPDATE users SET excluded_from_rankings = 1 WHERE id = ?').run(userId);
+  }
+
+  it('leaves an excluded user out of the entries entirely', async () => {
+    const { cookie, userId: viewerId } = await registerUser('viewer');
+    const cheatId = insertUser('tester');
+    insertFogState(viewerId, 100, 1000);
+    insertFogState(cheatId, 5000, 1000); // the top score, by a mile
+    exclude(cheatId);
+
+    const response = await getLeaderboard(cookie, '?metric=area&period=all');
+
+    const ids = (response.json().entries as LeaderboardEntry[]).map((entry) => entry.userId);
+    expect(ids).toContain(viewerId);
+    expect(ids).not.toContain(cheatId);
+  });
+
+  it('does not take a rank with it: the next user is rank 1', async () => {
+    const { cookie, userId: viewerId } = await registerUser('viewer');
+    const cheatId = insertUser('tester');
+    insertFogState(viewerId, 100, 1000);
+    insertFogState(cheatId, 5000, 1000);
+    exclude(cheatId);
+
+    const response = await getLeaderboard(cookie, '?metric=area&period=all');
+
+    expect(entryFor(response, viewerId).rank).toBe(1);
+  });
+
+  // A page count that includes a user nobody can see is its own bug, which
+  // is why the filter is in the query behind `totalUsers` rather than
+  // applied to the rows afterwards.
+  it('is left out of totalUsers and totalPages as well as out of the rows', async () => {
+    const { cookie, userId: viewerId } = await registerUser('viewer');
+    insertFogState(viewerId, 10, 1000);
+    // Enough excluded users that, if any of them were counted, page 2 would
+    // exist and be empty.
+    for (let i = 0; i < CONFIG.LEADERBOARD_PAGE_SIZE; i++) {
+      const userId = insertUser(`tester-${i}`);
+      insertFogState(userId, 100 + i, 1000);
+      exclude(userId);
+    }
+
+    const response = await getLeaderboard(cookie, '?metric=area&period=all');
+
+    expect(response.json().totalUsers).toBe(1);
+    expect(response.json().totalPages).toBe(1);
+    expect(response.json().entries).toHaveLength(1);
+  });
+
+  it('applies to the bars metric and to the period filters, not only to all-time area', async () => {
+    const { cookie, userId: viewerId } = await registerUser('viewer');
+    const cheatId = insertUser('tester');
+    exclude(cheatId);
+    const barA = seedBar('The Anchor');
+    const barB = seedBar('The Bell');
+    const weekKey = badgePeriodKey('week', Date.now());
+    const { startS } = badgePeriodBoundaries('week', weekKey);
+    insertCompletedVisit(cheatId, barA, startS + 60);
+    insertCompletedVisit(cheatId, barB, startS + 120);
+    insertCompletedVisit(viewerId, barA, startS + 180);
+    const [day] = badgePeriodDays('week', weekKey);
+    insertDailyProgress(cheatId, day, 4000);
+    insertDailyProgress(viewerId, day, 10);
+
+    for (const query of [
+      '?metric=bars&period=all',
+      '?metric=bars&period=week',
+      '?metric=area&period=week',
+    ]) {
+      const response = await getLeaderboard(cookie, query);
+      const ids = (response.json().entries as LeaderboardEntry[]).map((entry) => entry.userId);
+      expect(ids, query).not.toContain(cheatId);
+      expect(ids, query).toContain(viewerId);
+    }
+  });
+
+  it('comes straight back when the flag is cleared', async () => {
+    const { cookie, userId: viewerId } = await registerUser('viewer');
+    const cheatId = insertUser('tester');
+    insertFogState(viewerId, 100, 1000);
+    insertFogState(cheatId, 5000, 1000);
+    exclude(cheatId);
+
+    expect(
+      (await getLeaderboard(cookie, '?metric=area&period=all')).json()
+        .entries as LeaderboardEntry[],
+    ).toHaveLength(1);
+
+    db.prepare('UPDATE users SET excluded_from_rankings = 0 WHERE id = ?').run(cheatId);
+
+    const after = await getLeaderboard(cookie, '?metric=area&period=all');
+    expect((after.json().entries as LeaderboardEntry[]).map((entry) => entry.userId)).toEqual([
+      cheatId,
+      viewerId,
+    ]);
+  });
+});

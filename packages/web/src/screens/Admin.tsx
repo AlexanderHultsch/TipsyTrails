@@ -2,6 +2,8 @@ import { compareBarsByName } from '@tipsytrails/shared';
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
+  adminTeleport,
+  ApiError,
   cancelVisit,
   createAdminBar,
   deleteAdminBar,
@@ -10,9 +12,18 @@ import {
   getAdminUsers,
   getPendingVisits,
   updateAdminBar,
+  updateAdminUser,
 } from '../api/client.js';
-import type { AdminBar, AdminUser, BarSource, VisitSummary } from '../api/types.js';
+import type {
+  AdminBar,
+  AdminUser,
+  BarSource,
+  SamplesResponse,
+  VisitSummary,
+} from '../api/types.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { MapPicker } from '../map/MapPicker.js';
+import type { PickedPosition } from '../map/MapPicker.js';
 import { isVisitAlreadyGone } from '../tracking/useVisits.js';
 
 // The bar sources the API can actually report, plus the no-filter option -
@@ -488,13 +499,18 @@ function PendingVisitsSection() {
   );
 }
 
-// SPEC.md Section 9.3, Phase 7 task brief: "user list with stats". Read-only
-// - nothing on this screen edits a user - so it owns nothing but its own
-// fetch.
+// SPEC.md Section 9.3, Phase 7 task brief: "user list with stats", plus the
+// one thing on this screen that edits a user - Section 7.8's ranking
+// exclusion. Everything else about a user stays read-only.
 function UsersSection() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [usersError, setUsersError] = useState<string | null>(null);
+  // Shared by every row's toggle, like BarsSection's `rowActionError` above
+  // and for the same reason: the click comes straight off a row, so one
+  // banner over the list is the only place the failure has to go.
+  const [rowActionError, setRowActionError] = useState<string | null>(null);
+  const [savingUserId, setSavingUserId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -513,6 +529,26 @@ function UsersSection() {
     };
   }, []);
 
+  // Like BarsSection's hide/unhide, this asks for no confirmation: the
+  // opposite of whatever the row shows is one more tap away, and the server
+  // accepts only the two states. What it must never be is silent - the flag
+  // decides who can win a badge, so the row says so in words as well as in
+  // the button's label.
+  async function handleToggleExcluded(user: AdminUser) {
+    setRowActionError(null);
+    setSavingUserId(user.id);
+    try {
+      const updated = await updateAdminUser(user.id, {
+        excludedFromRankings: !user.excludedFromRankings,
+      });
+      setUsers((current) => current.map((entry) => (entry.id === user.id ? updated : entry)));
+    } catch (err) {
+      setRowActionError(errorMessage(err));
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
   return (
     <section className="admin__section">
       <h2>Users</h2>
@@ -522,6 +558,11 @@ function UsersSection() {
           {usersError}
         </p>
       )}
+      {rowActionError && (
+        <p className="error-message" role="alert">
+          {rowActionError}
+        </p>
+      )}
       {!usersLoading && users.length > 0 && (
         <ul className="admin-user-list">
           {users.map((entry) => (
@@ -529,28 +570,153 @@ function UsersSection() {
               <span className="admin-user-row__name">
                 {entry.username}
                 {entry.isAdmin && <span className="admin-bar-row__tag">Admin</span>}
+                {entry.excludedFromRankings && (
+                  <span className="admin-bar-row__tag admin-bar-row__tag--hidden">Not ranked</span>
+                )}
               </span>
               <span className="admin-user-row__stat">{entry.areaPercent.toFixed(1)}% explored</span>
               <span className="admin-user-row__stat">{entry.barsMastered} mastered</span>
               <span className="admin-user-row__stat">{entry.badgeCount} badges</span>
+              <button
+                className="button button--secondary admin-user-row__toggle"
+                type="button"
+                disabled={savingUserId === entry.id}
+                aria-pressed={entry.excludedFromRankings}
+                onClick={() => void handleToggleExcluded(entry)}
+              >
+                {entry.excludedFromRankings ? 'Include in rankings' : 'Exclude from rankings'}
+              </button>
             </li>
           ))}
         </ul>
+      )}
+      <p className="admin__note">
+        An excluded account still plays and still sees its own figures. It is left out of the
+        leaderboard and cannot win a badge. Badges it already holds are kept.
+      </p>
+    </section>
+  );
+}
+
+// SPEC.md Sections 9.3/10.1: the admin teleport. The map picker is
+// screens/SuggestBar.tsx's own (map/MapPicker.tsx), not a second one - the
+// question is the same question, "which point on the map", and one component
+// answering it in both places is one behaviour to keep right.
+//
+// Nothing here is a security control, and the panel is written so that is
+// obvious. It renders for any admin who reaches this screen, sends the two
+// numbers the picker produced, and reports what the server said. Every gate
+// - the admin check, the environment variable, and the requirement that the
+// account already be excluded from the rankings - is applied server-side on
+// every request (packages/api/src/routes/admin-teleport.ts). Hiding this
+// panel would protect nothing, so it is not offered as protection.
+//
+// The map is mounted only once the admin asks for it. A MapLibre instance is
+// not free, this screen is mostly about bars and users, and on a server that
+// never enabled teleport the map would be a WebGL context built for a button
+// that answers 404.
+function TeleportSection() {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [position, setPosition] = useState<PickedPosition | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<SamplesResponse | null>(null);
+  // The server said this route does not exist, which for this route means
+  // the deployment did not enable it. Kept apart from `error` because it is
+  // not a failure to retry: the message replaces the control rather than
+  // sitting above it.
+  const [unavailable, setUnavailable] = useState(false);
+
+  async function handleTeleport() {
+    if (!position) {
+      return;
+    }
+    setError(null);
+    setResult(null);
+    setMoving(true);
+    try {
+      setResult(await adminTeleport({ lat: position.lat, lon: position.lon }));
+    } catch (err) {
+      // A 404 from this route is the environment variable being unset, and
+      // the body carries Fastify's own not-found shape with no `code`
+      // (Section 9.5's first documented exception) - so its message names
+      // the route rather than saying anything useful to a person. Answered
+      // here in words instead of surfaced raw.
+      if (err instanceof ApiError && err.status === 404) {
+        setUnavailable(true);
+        return;
+      }
+      setError(errorMessage(err));
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  return (
+    <section className="admin__section">
+      <h2>Teleport</h2>
+      {unavailable ? (
+        <p role="status">
+          Teleport is not enabled on this server. It is switched on with the ADMIN_TELEPORT_ENABLED
+          environment variable.
+        </p>
+      ) : (
+        <>
+          <p className="admin__note">
+            Moves your own position to a point on the map, ignoring the speed limits. It counts:
+            fog, discoveries and visit progress are all real. Only an account excluded from the
+            rankings may use it.
+          </p>
+          {error && (
+            <p className="error-message" role="alert">
+              {error}
+            </p>
+          )}
+          {pickerOpen ? (
+            <MapPicker value={position} onPick={setPosition} />
+          ) : (
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => setPickerOpen(true)}
+            >
+              Choose a point on the map
+            </button>
+          )}
+          {pickerOpen && (
+            <div className="screen__actions">
+              <button
+                className="button button--primary"
+                type="button"
+                disabled={moving || !position}
+                onClick={() => void handleTeleport()}
+              >
+                Move here
+              </button>
+            </div>
+          )}
+          {result && (
+            <p role="status">
+              Moved. {result.newCells} new cells revealed, {result.newBars.length} bars discovered.
+            </p>
+          )}
+        </>
       )}
     </section>
   );
 }
 
 // SPEC.md Section 8.3/9.3, Phase 7 step 3: bar management (list including
-// hidden, filter by source, create, edit, hide, delete) plus the user list.
-// Reachable only via /admin, itself gated by RequireAdmin
-// (auth/route-guards.tsx) - a cosmetic redirect, not a security boundary;
-// every mutation here still goes through requireAdmin server-side
-// (packages/api/src/auth/cookie.ts), which is what actually enforces this.
+// hidden, filter by source, create, edit, hide, delete), the user list with
+// Section 7.8's ranking toggle, and Section 10.1's teleport. Reachable only
+// via /admin, itself gated by RequireAdmin (auth/route-guards.tsx) - a
+// cosmetic redirect, not a security boundary; every mutation here still goes
+// through requireAdmin server-side (packages/api/src/auth/cookie.ts), which
+// is what actually enforces this.
 //
-// The three sections below share no state and no request: each fetches what
+// The four sections below share no state and no request: each fetches what
 // it shows and owns the loading and error state for it, which is why they
-// are three components rather than one with a dozen `useState` calls between
+// are four components rather than one with a dozen `useState` calls between
 // them.
 export function Admin() {
   return (
@@ -561,6 +727,7 @@ export function Admin() {
         <BarsSection />
         <PendingVisitsSection />
         <UsersSection />
+        <TeleportSection />
       </div>
     </main>
   );

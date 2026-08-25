@@ -193,6 +193,48 @@ describe('loadEnv', () => {
     expect(env.VAPID_SUBJECT).toBeUndefined();
   });
 
+  // SPEC.md Sections 9.3/10.1: the admin teleport's kill switch. Absent is
+  // the ordinary state and means the route is never registered (app.ts), so
+  // "absent parses cleanly to undefined" is the case that matters most —
+  // a throw here would stop every deployment that does not want the feature.
+  it('leaves ADMIN_TELEPORT_ENABLED undefined when absent, without throwing', () => {
+    const env = loadEnv(validEnv);
+
+    expect(env.ADMIN_TELEPORT_ENABLED).toBeUndefined();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['whitespace-only', '   '],
+  ])('treats an %s ADMIN_TELEPORT_ENABLED as absent', (_label, value) => {
+    const env = loadEnv({ ...validEnv, ADMIN_TELEPORT_ENABLED: value });
+
+    expect(env.ADMIN_TELEPORT_ENABLED).toBeUndefined();
+  });
+
+  it.each([
+    ['true', 'true'],
+    ['false', 'false'],
+  ])('preserves the explicit value %s', (_label, value) => {
+    expect(loadEnv({ ...validEnv, ADMIN_TELEPORT_ENABLED: value }).ADMIN_TELEPORT_ENABLED).toBe(
+      value,
+    );
+  });
+
+  // Every one of these is something an operator would plausibly type meaning
+  // "on", and every one of them would silently leave the feature off if the
+  // variable were merely `z.string().optional()` and tested for truthiness.
+  // Failing at boot, naming the variable, is the same reasoning API_PORT's
+  // range check and PUBLIC_ORIGIN's protocol check are built on.
+  it.each([['1'], ['yes'], ['on'], ['TRUE'], ['True'], ['enabled']])(
+    'rejects ADMIN_TELEPORT_ENABLED=%s, naming the variable',
+    (value) => {
+      expect(() => loadEnv({ ...validEnv, ADMIN_TELEPORT_ENABLED: value })).toThrow(
+        /ADMIN_TELEPORT_ENABLED/,
+      );
+    },
+  );
+
   it('falls back to DATABASE_PATH when DB_PATH is empty and DATABASE_PATH is set', () => {
     const env = loadEnv({ ...validEnv, DB_PATH: '' });
 

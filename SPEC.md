@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.40
+**Version:** 1.41
 **Status:** Built and deployed; see _Status_ at the end of this front matter
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -48,7 +48,7 @@ Tipsy Trails is a location-based exploration game for Karlsruhe, Germany, played
 | In what order was this built, and what proves each phase?   | 12                                                            |
 | What is still wrong, unfinished, or deliberately left open? | 14                                                            |
 
-**Section numbers are an interface, and they are frozen.** Code comments cite `Section N.N` 771 times across 43 distinct numbers — `7.3` alone 92 times, `8.3` 70, `7.5` 68, `8.1` 63. Those citations are the codebase's index into this document, and nothing in the test suite would catch them breaking. Rewrite freely _inside_ a section; never renumber, merge, split, reorder or repurpose one. New material goes before Section 0, after Section 15, or under an unnumbered heading inside an existing section. The same applies to the `O`-numbers in Section 14, which code comments also cite.
+**Section numbers are an interface, and they are frozen.** Code comments cite `Section N.N` 884 times across 45 distinct numbers — `7.3` alone 93 times, `8.1` 82, `8.3` 74, `7.5` 72. (The figures are illustrative of the scale and go stale with every block of work; they were 771 across 43 at v1.34 and had drifted to 844 before v1.41 added the rest.) Those citations are the codebase's index into this document, and nothing in the test suite would catch them breaking. Rewrite freely _inside_ a section; never renumber, merge, split, reorder or repurpose one. New material goes before Section 0, after Section 15, or under an unnumbered heading inside an existing section. The same applies to the `O`-numbers in Section 14, which code comments also cite.
 
 **Status.** Phases 0 through 7 are built and deployed: the site answers on the public URL from the Pi, and Section 4.3 records that deployment in detail. Phase 8 is partly done — five of its Definition-of-Done items need a real phone, a real browser or the Pi under load, and are honestly left unticked rather than assumed. The map extract is not yet on the Pi's data volume, so `/tiles/*` currently serves the deliberate error of Section 13.2. Everything known to be missing, wrong, unverified or deliberately deferred is in Section 14 — including two gaps this document leaves open on purpose (O20, O21) rather than by omission.
 
@@ -294,8 +294,13 @@ Every variable the API reads, in one place. `packages/api/src/env.ts` validates 
 | `SEED_DIR` | path to the committed `data/seed` tree | no | `../../data/seed` relative to the compiled server |
 | `TILES_DIR` | directory holding the PMTiles extract | no | `/data/tiles` |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | strings | no | — (all three or none, Section 5.9) |
+| `ADMIN_TELEPORT_ENABLED` | exactly `true` or `false` | no | — (unset = the teleport route is not registered, Sections 9.3, 10.1) |
 
-Three of those checks are stricter than "is it a string", and each is deliberate. `PUBLIC_ORIGIN` is protocol-checked because a `ftp:` or `javascript:` value fails three unrelated things much later and none of them names the variable — the session cookie silently loses its `secure` flag, every state-changing request is refused for a mismatched `Origin`, and Web Push turns itself off. `API_PORT` is range-checked because `app.listen` is otherwise what fails, as a `RangeError` about a value the operator never typed. `SESSION_SECRET`'s length is checked for what it has to *mean*, not for what it has to look like.
+**`ADMIN_TELEPORT_ENABLED` is a kill switch, and its absence is the whole of it.** Without it set to `true`, `buildApp` never registers the admin teleport plugin, so `POST /api/admin/teleport` is a route the server does not have: an unmatched `/api/*` path answering 404 (Section 9.5's first documented envelope exception), not a route that exists and refuses. That is deliberate — a 403 would tell a stolen admin session that there is something there. The code ships inert and a production deployment leaves the variable out.
+
+It is validated as an enum rather than tested for truthiness, for the reason `API_PORT` is range-checked: `1`, `yes`, `on` and `TRUE` are all things an operator would type meaning "on", and every one of them would silently leave the feature off. They fail at boot naming the variable instead. `false` is accepted as a second, explicit way to say off, so a `.env` can record the answer rather than omit it.
+
+Four of those checks are stricter than "is it a string", and each is deliberate. `PUBLIC_ORIGIN` is protocol-checked because a `ftp:` or `javascript:` value fails three unrelated things much later and none of them names the variable — the session cookie silently loses its `secure` flag, every state-changing request is refused for a mismatched `Origin`, and Web Push turns itself off. `API_PORT` is range-checked because `app.listen` is otherwise what fails, as a `RangeError` about a value the operator never typed. `SESSION_SECRET`'s length is checked for what it has to *mean*, not for what it has to look like.
 
 **Two variables carry an alias, and the precedence is not symmetrical.** The Pi's platform supplies `PORT` and `DB_PATH` to every container it runs, so both names are accepted:
 
@@ -512,6 +517,7 @@ CREATE TABLE users (
   is_anonymous         INTEGER NOT NULL DEFAULT 0,
   is_admin             INTEGER NOT NULL DEFAULT 0,
   must_change_password INTEGER NOT NULL DEFAULT 0,
+  excluded_from_rankings INTEGER NOT NULL DEFAULT 0,  -- out of the leaderboard and the badge race, see 7.7/7.8
   age_confirmed_at     INTEGER NOT NULL,
   created_at           INTEGER NOT NULL,
   last_seen_at         INTEGER
@@ -519,6 +525,14 @@ CREATE TABLE users (
 ```
 
 No email address is collected. Username constraints: 3–20 characters, `[a-zA-Z0-9_-]`, case-insensitively unique.
+
+**`excluded_from_rankings` takes an account out of the competition without taking it out of the game.** Added by migration `003_users_excluded_from_rankings.sql`, defaulting to "not excluded" so no existing account and no new registration is ever silently removed from the running — setting it is a deliberate act through `PATCH /api/admin/users/:id` (Section 9.3).
+
+An excluded account plays exactly as before: it reveals fog, discovers bars, masters bars, checks in, and reads its own figures on its own profile. What it does not do is appear in the two places that rank players against each other — `GET /api/leaderboard` (Section 7.8) and the badge job's candidate sets (Section 7.7). It also does not appear in either of them as an *obstacle*: an excluded account cannot be the high scorer that denies a badge to somebody who is still competing.
+
+It exists because the owner tests the game on his own account, and it is also the precondition the admin teleport (Section 9.3) refuses without — which is what makes that feature safe rather than merely gated. Deliberately **not** excluded: the account's own profile figures, the admin user list, and any badge awarded before the flag was set (Section 7.7: awarded badges are a permanent record and are never revoked).
+
+The flag is the one field of a user an admin may write. There is no route that promotes an account to admin, renames one, or clears `must_change_password`; those would be new powers rather than new fields, and Section 13.4's admin story runs through `deploy.sh` and `seedAdmin` instead.
 
 `must_change_password` gates an account until it sets a new password: while it is set, every endpoint except `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` returns 403 with a machine-readable `code: "password_change_required"`, and the client routes to the change-password screen.
 
@@ -1107,6 +1121,12 @@ The threshold is **never shown to users and no endpoint returns it**. Neither is
 
 **Awarding.** Candidates for a period are the users whose value is **greater than or equal to** the threshold for that period. If there are none, the badge is not awarded at all. Otherwise it goes to the candidate with the highest value, and to **every candidate tied at that highest value** — a tie awards all of them rather than being broken. (Section 7.8's "earliest achievement" tie-break orders the leaderboard and has no part in deciding a badge.)
 
+**An account with `excluded_from_rankings` set (Section 5.3) is not a candidate, for either kind.** The exclusion is applied to the candidate set *before* the highest value is found, and the ordering matters: it makes the guarantee two-sided, so an excluded account can neither win a badge nor be the high scorer that denies one to a player still in the competition. The best remaining candidate wins instead, exactly as if the excluded account had never scored.
+
+It is applied to the candidate set and **not** to the per-user value functions those candidates come from, because Section 7.8's leaderboard and the profile read the same functions and an excluded player still reads their own figures on their own profile. One placement covers both `explorer` and `barfly`, since both kinds pass through the same awarding step; two separate filters would be two things that could come to disagree about who is in the running.
+
+Setting the flag revokes nothing. A badge awarded before it was set stays awarded, because badges are a permanent record (below) — the exclusion decides future evaluations and present listings, never the past.
+
 Badges already awarded are a permanent record of the periods a player won and are never revoked. Evaluation runs as a scheduled job shortly after each period closes — weekly Monday 04:00, monthly 1st 04:00, yearly Jan 1st 04:00, Europe/Berlin — and badges are written to the `badges` table.
 
 The job is idempotent through the `UNIQUE (user_id, kind, period, period_key)` constraint plus `INSERT ... ON CONFLICT DO NOTHING`. It takes the period key as an optional argument so a missed period can be re-run by hand.
@@ -1171,6 +1191,10 @@ Ties are broken by earliest achievement, then by `users.id`, so ordering is stab
 A user who never scored on a metric has no achievement instant at all and falls through to the `users.id` tie-break, exactly as a genuine tie does. This tie-break orders a *listing* only; it takes no part in awarding a badge (Section 7.7).
 
 Users with `is_anonymous = 1` appear as `Player #{id}` with a neutral avatar. They remain ranked and their statistics are still recorded — only the display identity is masked. The setting is toggleable at any time and takes effect immediately.
+
+**Users with `excluded_from_rankings = 1` (Section 5.3) do not appear at all, and are not counted.** The two flags are not variations on each other: anonymity masks a row that is still there and still ranked, while exclusion removes the row. The filter therefore sits in the query that lists users, not in a pass over the result, so `totalUsers` and `totalPages` are counted after it — a page count that includes a user nobody can see is its own bug, and an excluded account must not occupy a rank either. The next player up is rank 1.
+
+Everything else about an excluded account is unchanged: it keeps its fog, its mastered bars, its badges and its own profile figures. Only the ranked listing and the badge race (Section 7.7) skip it, and both read the one flag, so an account cannot be ranked in one and scored in the other. Clearing the flag puts the account straight back, with its full history intact.
 
 ### 7.9 Scheduled work
 
@@ -1484,9 +1508,29 @@ The community duplicate guard (Section 11.3) does **not** apply to admin create 
 | PATCH | `/api/admin/bars/:id` | Edit name, address, position, status |
 | DELETE | `/api/admin/bars/:id` | Delete (cascades discoveries and visits) |
 | POST | `/api/admin/bars` | Create bar directly |
-| GET | `/api/admin/users` | User list with stats |
+| GET | `/api/admin/users` | User list with stats, including `excludedFromRankings` |
+| PATCH | `/api/admin/users/:id` | Set or clear `excluded_from_rankings` (Sections 5.3, 7.8) — the only writable field of a user |
+| POST | `/api/admin/teleport` | Move the calling admin's own position to a point, running the sample pipeline with the speed guards off. **Registered only when `ADMIN_TELEPORT_ENABLED=true`** (Section 4.3); otherwise the path does not exist |
 
 Editing a bar's position recomputes `cell_index` and `district_id`. Existing discoveries are not revoked.
+
+#### The ranking toggle
+
+`PATCH /api/admin/users/:id` takes `{ excludedFromRankings?: boolean }` and answers with the same user object `GET /api/admin/users` lists, so the admin screen can put the response straight back into its list. An omitted field means unchanged, exactly as in the bars PATCH; an unknown field is ignored, which is what stops the route becoming a general user editor by accident — there is no `isAdmin` here.
+
+The screen shows the flag as well as setting it: an excluded account is marked in the user list, and the section says in words what exclusion costs. An invisible switch that changes who wins is worse than no switch.
+
+#### The teleport
+
+`POST /api/admin/teleport` takes `{ lat, lon }` and answers with the body `POST /api/samples` answers with — `{ newCells, newBars, visitUpdates, tooFastToReveal }`. It moves the calling admin's own position to that point and runs everything an ordinary accepted sample runs: fog reveal (7.3), bar discovery (7.4), visit progress (7.5). What it writes is real. The point is chosen on the map picker Section 11.3 already specifies for suggesting a bar, reused rather than rebuilt.
+
+**It shares the sample pipeline rather than copying it.** `routes/fog.ts` exposes the loop and the three write steps as one function, and both routes call it; the only difference between them is one boolean parameter, `skipSpeedGuards`. A second copy of that loop would be a second place for Section 7.5's rules to drift.
+
+**Two guards are off and no others.** Section 7.2's teleport guard (`SAMPLE_TELEPORT_SPEED_KMH`) and Section 7.3's reveal-speed gate (`FOG_MAX_SPEED_KMH`) are skipped. Accuracy, clock skew, staleness and the active city's bounding box all still apply. The bounding box in particular is **not** bypassed: there is no fog grid outside Karlsruhe, so a teleport out there would test nothing. Unlike a GPS sample, which Section 5.1 says is silently ignored, a person who tapped a map is told — the route answers `422 outside_city`, the same way the admin create/move-a-bar handlers do.
+
+**`lastAccepted` holds the destination afterwards**, written by the shared pipeline rather than by anything special here. It has to: that map is what the *next* real sample is compared against, so leaving the pre-teleport position in it would make the admin's next genuine sample look like a 300 km/h jump and get it dropped — the feature would break the ordinary sampling it exists to exercise. Clearing it instead would break check-in, which reads the same map (Section 7.5 step 2). A consequence, stated rather than hidden: after teleporting away from where the phone actually is, the next genuine sample from the real location *is* refused by the guard, which is the guard working. Teleport back.
+
+The four gates that stand between a request and any of this are in Section 10.1.
 
 **The bar list comes back ordered by name, and stays that way on screen.** The order is a
 locale-aware, case-insensitive collation of German place names — umlauts belong where a reader
@@ -1615,6 +1659,23 @@ not. The complete set a rebuilder must implement: `bar_not_found`, `city_not_fou
 - No stack traces or SQL errors in responses.
 - Password reset invalidates every existing session of that user.
 - The VAPID private key (Section 5.9) is generated on first boot and persisted in the same directory as the SQLite database — the same volume that already holds every password hash, so this widens no boundary. It is never logged, never returned by any API response, and never committed; `GET /api/push/vapid-public-key` (Section 9.2) serves only the public half.
+
+#### The admin teleport, and why it takes nothing away
+
+The teleport (Section 9.3) skips two anti-cheat guards, and this repository is public (Section 13.4), so the design has to survive being read by whoever wants to cheat.
+
+**Start from what is already true: positions are client-asserted.** `POST /api/samples` accepts a `{ lat, lon, accuracy, speed, timestamp }` straight from the browser, and no web application can prove a location. Anyone holding a session cookie can already claim to be anywhere, today, with no admin flag and no new code. What stops casual abuse is friction plus the two guards. So the teleport hands a determined attacker no new capability; what it must not do is lower that friction for everyone else, or weaken the guards on the path the public uses.
+
+**The single rule the design is built on: `POST /api/samples` has no bypass parameter.** Not `{ teleport: true }`, not `{ skipGuards: true }`, not a header. A check the request can switch off is not a check, because the check then depends on the caller. The bypass is a property of a **separate, admin-only route**, and the server decides it from the session. In the code the difference is a function parameter the public handler passes as a literal `false`, reachable from nothing in the request body.
+
+**Four gates hold independently, and none of them is the client.**
+
+1. **`requireAdmin`**, the same preHandler every other `/api/admin/*` route uses: 403 for a signed-in non-admin, 401 for an anonymous caller.
+2. **`ADMIN_TELEPORT_ENABLED`** (Section 4.3). Unset, the plugin is never registered and the path answers **404, not 403** — the code ships inert, and a stolen admin session on a production box reaches nothing.
+3. **The calling account must already carry `excluded_from_rankings`** (Section 5.3). This is the gate that makes the feature safe rather than merely gated: teleport is refused for every account still in the competition, so no amount of teleporting can ever produce a leaderboard place or a badge. It is checked before the request body is parsed, and refused with `422 not_excluded_from_rankings` naming the reason and the fix.
+4. **All of it is server-side.** The admin screen's panel is a convenience; hiding it protects nothing and is not offered as protection. Every gate is re-applied on every request whatever the browser believes.
+
+Each gate is separately mutation-tested: removing any one of them fails a specific test, and so does applying the bypass to `POST /api/samples`.
 
 ### 10.2 Data minimisation
 
@@ -1984,6 +2045,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 
 A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
 
+- **v1.41** — `users.excluded_from_rankings` (migration 003) takes an account out of the leaderboard and out of the badge race without taking it out of the game, set from a toggle on the admin user list; and `POST /api/admin/teleport` moves an admin's own position to a point on the map picker, running the shared sample pipeline with the two speed guards off behind four independent gates — `requireAdmin`, the `ADMIN_TELEPORT_ENABLED` variable whose absence means the route is not registered, the exclusion above, and no client-side gate anywhere. `POST /api/samples` keeps exactly the validation it had. Sections 4.3, 5.3, 7.7, 7.8, 9.3, 10.1.
 - **v1.40** — The explorer badge gains a case: a ring with a north-pointing needle, because the bare compass rose it replaced reads as a star at 1.25 rem and the month modifier above it is a star. The More sheet's bug item says "Report a bug on GitHub" and nothing else, with the new-tab warning kept in its accessible name and the GitHub-account line dropped from the screen. The map's wordmark and OSM attribution plates drop from 0.85 to 0.6 and 0.5, measured against the darkest ground the ink style can produce rather than against the fog. Sections 7.7, 8.3, 8.4.
 - **v1.39** — The badge note drops its closing "no fixed score wins one" clause at the owner's direction, on the shelf and in Section 7.7 alike. O15 (fog shimmer) closed: the owner has confirmed the application working in the field, which is the only place it could ever have been confirmed.
 - **v1.38** — The badges are redrawn: six names of the owner's own instead of a kind word joined to a period word, a compass rose and a highball that is deliberately not the martini, the period carried by a star or a crown above the pictogram instead of by a ring count, and a placeholder that is the same artwork drawn back in ink inside a dashed frame. The sheet loses its description and keeps one sentence. The chrome wordmark becomes a link to the start screen — inert on `/app` and when signed out — and leads the map's top row, which moves the status icons and their explanation panel to the opposite corner. Sections 7.7, 8.1, 8.3.
@@ -2046,4 +2108,4 @@ Kept only where a future reader might otherwise re-propose the reverted thing an
 
 ---
 
-_End of specification v1.33_
+_End of specification v1.41_

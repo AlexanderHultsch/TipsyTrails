@@ -394,3 +394,105 @@ describe('currentBadgeProgress', () => {
     );
   });
 });
+
+// SPEC.md Sections 7.7/7.8: `users.excluded_from_rankings` (rankings.ts),
+// the other half of the exclusion routes/leaderboard.test.ts covers. The
+// filter sits in `awardCandidates`, which both kinds pass through, so
+// `explorer` and `barfly` are covered by one placement rather than by two
+// filters that could come to disagree — and both are tested here for it.
+describe('evaluateBadges — accounts excluded from the rankings', () => {
+  const THRESHOLD_CELLS = Math.ceil((CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS);
+
+  function exclude(userId: number): void {
+    db.prepare('UPDATE users SET excluded_from_rankings = 1 WHERE id = ?').run(userId);
+  }
+
+  it('does not award the explorer badge to an excluded user who would otherwise win it', () => {
+    const tester = insertUser('tester');
+    insertDailyProgress(tester, PERIOD_DAYS[0], THRESHOLD_CELLS * 10);
+    exclude(tester);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(result.awarded).toEqual([]);
+    expect(badgeCount()).toBe(0);
+  });
+
+  it('does not award the barfly badge to an excluded user who would otherwise win it', () => {
+    const tester = insertUser('tester');
+    const bar = seedBar('The Anchor');
+    insertCompletedVisit(tester, bar, PERIOD_START_S + 60);
+    exclude(tester);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(result.awarded.filter((award) => award.kind === 'barfly')).toEqual([]);
+  });
+
+  // The two-sided half of the guarantee, and the reason the filter runs
+  // BEFORE `topValue` is computed rather than after: an excluded account
+  // must not be able to deny a badge to somebody who is still competing by
+  // out-scoring them.
+  it('lets the best remaining user win the explorer badge instead of denying it to everyone', () => {
+    const tester = insertUser('tester');
+    const alex = insertUser('alex');
+    insertDailyProgress(tester, PERIOD_DAYS[0], THRESHOLD_CELLS * 10);
+    insertDailyProgress(alex, PERIOD_DAYS[0], THRESHOLD_CELLS);
+    exclude(tester);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(
+      result.awarded.filter((award) => award.kind === 'explorer').map((a) => a.userId),
+    ).toEqual([alex]);
+    expect(badgeRow(alex, 'explorer')?.value).toBeCloseTo((THRESHOLD_CELLS / PLAYABLE_CELLS) * 100);
+    expect(badgeRow(tester, 'explorer')).toBeUndefined();
+  });
+
+  it('lets the best remaining user win the barfly badge too', () => {
+    const tester = insertUser('tester');
+    const alex = insertUser('alex');
+    const barA = seedBar('The Anchor');
+    const barB = seedBar('The Bell');
+    insertCompletedVisit(tester, barA, PERIOD_START_S + 60);
+    insertCompletedVisit(tester, barB, PERIOD_START_S + 120);
+    insertCompletedVisit(alex, barA, PERIOD_START_S + 180);
+    exclude(tester);
+
+    const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(result.awarded.filter((award) => award.kind === 'barfly').map((a) => a.userId)).toEqual([
+      alex,
+    ]);
+    expect(badgeRow(alex, 'barfly')?.value).toBe(1);
+  });
+
+  // Section 7.7: awarded badges are a permanent record and are never
+  // revoked. Excluding an account afterwards decides future evaluations, not
+  // past ones.
+  it('leaves a badge already awarded in place when the flag is set afterwards', () => {
+    const tester = insertUser('tester');
+    insertDailyProgress(tester, PERIOD_DAYS[0], THRESHOLD_CELLS * 10);
+
+    evaluateBadges(db, PERIOD, PERIOD_KEY);
+    expect(badgeRow(tester, 'explorer')).toBeDefined();
+
+    exclude(tester);
+    evaluateBadges(db, PERIOD, PERIOD_KEY);
+
+    expect(badgeRow(tester, 'explorer')).toBeDefined();
+  });
+
+  // The exclusion must not reach the value functions themselves: they are
+  // shared with routes/profile.ts, and Section 7.8 keeps an excluded
+  // player's own figures on their own profile.
+  it('still reports an excluded user their own current-period value', () => {
+    const tester = insertUser('tester');
+    insertDailyProgress(tester, PERIOD_DAYS[0], THRESHOLD_CELLS * 10);
+    exclude(tester);
+
+    const progress = currentBadgeProgress(db, tester, PERIOD, PERIOD_START_S * 1000 + 1000);
+
+    expect(progress.find((entry) => entry.kind === 'explorer')?.value).toBeGreaterThan(0);
+  });
+});

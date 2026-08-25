@@ -238,6 +238,24 @@ function adminGetUsers(cookie: string): Promise<LightMyRequestResponse> {
   });
 }
 
+function adminPatchUser(
+  cookie: string,
+  userId: number,
+  body: Record<string, unknown>,
+): Promise<LightMyRequestResponse> {
+  return injectWithOrigin({
+    method: 'PATCH',
+    url: `/api/admin/users/${userId}`,
+    headers: { cookie },
+    payload: body,
+  });
+}
+
+function userIdByName(name: string): number {
+  return db.prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?').get(name)!
+    .id;
+}
+
 beforeEach(() => {
   tempRoot = join(tmpdir(), `tipsytrails-admin-test-fixture-${randomUUID()}`);
   cpSync(REAL_CITIES_DIR, join(tempRoot, 'cities'), { recursive: true });
@@ -275,6 +293,7 @@ describe('admin guard', () => {
     { method: 'PATCH', url: '/api/admin/bars/1' },
     { method: 'DELETE', url: '/api/admin/bars/1' },
     { method: 'GET', url: '/api/admin/users' },
+    { method: 'PATCH', url: '/api/admin/users/1' },
   ];
 
   it.each(requests)('returns 401 unauthenticated for $method $url', async ({ method, url }) => {
@@ -621,6 +640,172 @@ describe('GET /api/admin/users', () => {
     const response = await adminGetUsers(adminCookie);
     const shy = response.json().users.find((user: { username: string }) => user.username === 'shy');
     expect(shy).toMatchObject({ username: 'shy', isAnonymous: true });
+  });
+
+  // SPEC.md Sections 7.8/9.3: an invisible switch that changes who wins is
+  // worse than no switch, so the flag has to be readable on the list the
+  // admin already looks at, not only writable through the PATCH below.
+  it('reports excludedFromRankings for every user, defaulting to false', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    db.prepare('UPDATE users SET excluded_from_rankings = 1 WHERE username = ?').run('boss');
+
+    const users = (await adminGetUsers(adminCookie)).json().users;
+
+    expect(
+      users.find((user: { username: string }) => user.username === 'boss').excludedFromRankings,
+    ).toBe(true);
+    expect(
+      users.find((user: { username: string }) => user.username === 'walker').excludedFromRankings,
+    ).toBe(false);
+  });
+});
+
+// SPEC.md Sections 7.8, 9.3: the only thing an admin may change about a
+// user. Shaped like PATCH /api/admin/bars/:id — optional fields, omitted
+// means unchanged, the full updated object in the response.
+describe('PATCH /api/admin/users/:id', () => {
+  it('sets and clears excludedFromRankings, answering with the updated user', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+
+    const excluded = await adminPatchUser(adminCookie, walkerId, { excludedFromRankings: true });
+    expect(excluded.statusCode).toBe(200);
+    expect(excluded.json()).toMatchObject({
+      id: walkerId,
+      username: 'walker',
+      excludedFromRankings: true,
+    });
+
+    const restored = await adminPatchUser(adminCookie, walkerId, { excludedFromRankings: false });
+    expect(restored.json().excludedFromRankings).toBe(false);
+  });
+
+  it('persists the change, so the list agrees with the response', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+
+    await adminPatchUser(adminCookie, walkerId, { excludedFromRankings: true });
+
+    const users = (await adminGetUsers(adminCookie)).json().users;
+    expect(users.find((user: { id: number }) => user.id === walkerId).excludedFromRankings).toBe(
+      true,
+    );
+  });
+
+  it('answers with the same shape GET /api/admin/users sends for the same user', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+
+    const patched = await adminPatchUser(adminCookie, walkerId, {});
+    const listed = (await adminGetUsers(adminCookie))
+      .json()
+      .users.find((user: { id: number }) => user.id === walkerId);
+
+    expect(patched.json()).toEqual(listed);
+  });
+
+  it('leaves a user untouched when the body names no field', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+    await adminPatchUser(adminCookie, walkerId, { excludedFromRankings: true });
+
+    const response = await adminPatchUser(adminCookie, walkerId, {});
+
+    expect(response.json().excludedFromRankings).toBe(true);
+  });
+
+  it('never sends a password or security-answer hash', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+
+    const body = (
+      await adminPatchUser(adminCookie, userIdByName('walker'), { excludedFromRankings: true })
+    ).json();
+
+    expect(body).not.toHaveProperty('passwordHash');
+    expect(body).not.toHaveProperty('password_hash');
+    expect(body).not.toHaveProperty('securityAnswerHash');
+    expect(body).not.toHaveProperty('security_answer_hash');
+  });
+
+  it('rejects a non-boolean excludedFromRankings with 400', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+
+    const response = await adminPatchUser(adminCookie, userIdByName('walker'), {
+      excludedFromRankings: 'yes',
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  // What it deliberately does not offer: this is one flag, not a general
+  // user editor. `is_admin` is not a field of `patchUserSchema`, so zod
+  // strips it and the row is unchanged — the alternative would be a route
+  // that can promote accounts, which is a power Section 13.4's admin story
+  // does not grant.
+  it('ignores fields it does not define, including isAdmin', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+
+    const response = await adminPatchUser(adminCookie, walkerId, {
+      isAdmin: true,
+      username: 'usurper',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ username: 'walker', isAdmin: false });
+    const row = db
+      .prepare<[number], { is_admin: number; username: string }>(
+        'SELECT is_admin, username FROM users WHERE id = ?',
+      )
+      .get(walkerId);
+    expect(row).toMatchObject({ is_admin: 0, username: 'walker' });
+  });
+
+  it.each([
+    ['an unknown id', '999999'],
+    ['a non-numeric id', 'abc'],
+  ])('answers 404 for %s', async (_label, id) => {
+    const adminCookie = await registerAdmin('boss');
+
+    const response = await injectWithOrigin({
+      method: 'PATCH',
+      url: `/api/admin/users/${id}`,
+      headers: { cookie: adminCookie },
+      payload: { excludedFromRankings: true },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe('user_not_found');
+  });
+
+  // SPEC.md Section 7.7: "Badges already awarded are a permanent record ...
+  // and are never revoked." Excluding an account decides future evaluations
+  // and present listings; it does not reach into the past.
+  it('revokes no badge already awarded', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    const walkerId = userIdByName('walker');
+    db.prepare(
+      `INSERT INTO badges (user_id, kind, period, period_key, value, awarded_at)
+       VALUES (?, 'barfly', 'week', '2026-W32', 3, 0)`,
+    ).run(walkerId);
+
+    await adminPatchUser(adminCookie, walkerId, { excludedFromRankings: true });
+
+    const count = db
+      .prepare<[number], { count: number }>(
+        'SELECT COUNT(*) AS count FROM badges WHERE user_id = ?',
+      )
+      .get(walkerId);
+    expect(count?.count).toBe(1);
   });
 });
 

@@ -62,7 +62,11 @@ describe('runMigrations', () => {
     const db = openDatabase(dbPath);
 
     const firstRun = runMigrations(db, migrationsDir);
-    expect(firstRun).toEqual(['001_init.sql', '002_clear_admin_must_change_password.sql']);
+    expect(firstRun).toEqual([
+      '001_init.sql',
+      '002_clear_admin_must_change_password.sql',
+      '003_users_excluded_from_rankings.sql',
+    ]);
 
     const secondRun = runMigrations(db, migrationsDir);
     expect(secondRun).toEqual([]);
@@ -70,7 +74,7 @@ describe('runMigrations', () => {
     const row = db
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(row?.count).toBe(2);
+    expect(row?.count).toBe(3);
 
     db.close();
   });
@@ -109,7 +113,10 @@ describe('runMigrations', () => {
     expect(flagOf(2)).toBe(1);
 
     const applied = runMigrations(db, migrationsDir);
-    expect(applied).toEqual(['002_clear_admin_must_change_password.sql']);
+    expect(applied).toEqual([
+      '002_clear_admin_must_change_password.sql',
+      '003_users_excluded_from_rankings.sql',
+    ]);
 
     expect(flagOf(1)).toBe(0);
     // Non-admins are outside the migration's scope: the gate still holds for

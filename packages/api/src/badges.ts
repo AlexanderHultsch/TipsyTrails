@@ -8,6 +8,7 @@ import {
 import type { BadgePeriod } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import { loadActiveCity } from './city-grid.js';
+import { excludedFromRankingsUserIds } from './rankings.js';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
 // SPEC.md Section 7.7's badge evaluation job, structured like maintenance.ts's
@@ -164,8 +165,10 @@ interface InsertedRow {
 }
 
 // Section 7.7's competition: the threshold is a floor, not a target, so the
-// candidates are everyone at or above it — and among those, only the highest
-// value wins the period. Everyone tied at that top value wins; the
+// candidates are everyone at or above it — minus the accounts Section 7.8's
+// exclusion flag takes out of the competition entirely (rankings.ts) — and
+// among those, only the highest value wins the period. Everyone tied at that
+// top value wins; the
 // `achievedAtS` tie-break belongs to Section 7.8's leaderboard ordering and
 // is deliberately not used to break a tie into a single winner here.
 // Equality is compared exactly: both metrics derive every user's value from
@@ -179,6 +182,19 @@ interface InsertedRow {
 // `RETURNING` tells us which rows this call actually inserted (as opposed to
 // ones that conflicted), which is how the result below reports only genuine
 // new awards on a second run.
+//
+// The exclusion is applied HERE, and that placement is the whole of it.
+// Both kinds' candidate sets pass through this one function, so `explorer`
+// and `barfly` are covered by construction rather than by two filters that
+// could come to disagree. It is deliberately not applied inside
+// `explorerValuesByUser`/`barflyValuesByUser` above: those two are shared
+// with routes/leaderboard.ts and routes/profile.ts, and Section 7.8 is
+// explicit that an excluded player still reads their own figures on their
+// own profile — filtering at the source would have taken those away too.
+//
+// Filtering before `topValue` is computed, not after, is what makes the
+// guarantee two-sided: an excluded account can neither win a badge nor be
+// the high scorer that denies one to somebody who is still competing.
 function awardCandidates(
   db: Database.Database,
   kind: BadgeKind,
@@ -186,9 +202,12 @@ function awardCandidates(
   periodKey: string,
   awardedAt: number,
   values: Map<number, MetricStanding>,
+  excluded: ReadonlySet<number>,
 ): BadgeAward[] {
   const threshold: number = CONFIG.BADGE_THRESHOLDS[kind][period];
-  const candidates = [...values].filter(([, standing]) => standing.value >= threshold);
+  const candidates = [...values].filter(
+    ([userId, standing]) => !excluded.has(userId) && standing.value >= threshold,
+  );
   if (candidates.length === 0) {
     return [];
   }
@@ -231,15 +250,23 @@ export function evaluateBadges(
   const { startS, endS } = badgePeriodBoundaries(period, periodKey);
   const awarded: BadgeAward[] = [];
 
+  // Section 7.8's exclusion, read once for the whole evaluation and handed
+  // to both kinds — the flag cannot change halfway through a single pass,
+  // and two reads would only give the two kinds two chances to see it
+  // differently.
+  const excluded = excludedFromRankingsUserIds(db);
+
   const city = loadActiveCity(db);
   if (city) {
     const days = badgePeriodDays(period, periodKey);
     const explorerValues = explorerValuesByUser(db, city.id, city.playable_cells, days);
-    awarded.push(...awardCandidates(db, 'explorer', period, periodKey, endS, explorerValues));
+    awarded.push(
+      ...awardCandidates(db, 'explorer', period, periodKey, endS, explorerValues, excluded),
+    );
   }
 
   const barflyValues = barflyValuesByUser(db, startS, endS);
-  awarded.push(...awardCandidates(db, 'barfly', period, periodKey, endS, barflyValues));
+  awarded.push(...awardCandidates(db, 'barfly', period, periodKey, endS, barflyValues, excluded));
 
   return { period, periodKey, awarded };
 }

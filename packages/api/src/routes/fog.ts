@@ -14,7 +14,7 @@ import type Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../auth/cookie.js';
-import { loadActiveCity, toGridParams } from '../city-grid.js';
+import { loadActiveCity, toGridParams, type CityRow } from '../city-grid.js';
 import { cellsWithinRevealRadius } from '../fog/reveal.js';
 import { isBitSet, maskByteLength, setBit } from '../fog/mask.js';
 import {
@@ -382,6 +382,238 @@ function applyReveal(
   })();
 }
 
+/** One position sample, exactly as `sampleSchema` above accepts it. */
+export type SampleInput = z.infer<typeof sampleSchema>;
+
+/** What a processed batch produces — `POST /api/samples`'s response body. */
+export interface SampleBatchResult {
+  newCells: number;
+  newBars: BarSummary[];
+  visitUpdates: VisitSummary[];
+  tooFastToReveal: boolean;
+}
+
+export interface SampleBatchInput {
+  db: Database.Database;
+  userId: number;
+  city: CityRow;
+  districtGrid: Uint16Array;
+  districtIdByGridIndex: Map<number, number>;
+  // The one shared `lastAccepted` map (app.ts). Written by this function,
+  // read here and by routes/visits.ts's check-in proximity test.
+  lastAccepted: Map<number, AcceptedPosition>;
+  samples: SampleInput[];
+  nowMs: number;
+  // SPEC.md Section 7.2's teleport guard and Section 7.3's reveal-speed
+  // gate, both off for this batch.
+  //
+  // This is a parameter of the FUNCTION and never a field of a sample, and
+  // that distinction is the whole security design of the admin teleport
+  // (routes/admin-teleport.ts). A check the caller can switch off is not a
+  // check: if this rode in on the request body, every guard on the public
+  // path would depend on what the request asked for. `POST /api/samples`
+  // below therefore passes `false` as a literal, with nothing between the
+  // request and this field, and the only caller that passes `true` is a
+  // route the server admits on the strength of the session alone.
+  skipSpeedGuards: boolean;
+}
+
+// SPEC.md Section 7.2's per-sample gates and Sections 7.3/7.4/7.5's three
+// write steps, as one function rather than as the body of one handler,
+// because two routes now have to run all of it: `POST /api/samples` below
+// and the admin teleport (routes/admin-teleport.ts). A second copy of this
+// loop would be a second place for Section 7.5's rules to drift, which is
+// the thing this module has been careful about since the visit steps were
+// written — the same reason `toVisitSummary` and `DISCOVERED_BAR_COLUMNS`
+// are imported from the routes that own them rather than restated here.
+//
+// `skipSpeedGuards` is the ONLY difference between the two callers. Every
+// other gate — accuracy, clock skew, staleness, the bounding box — applies
+// to both, and so does every write. The teleport does not get a cheaper
+// pipeline; it gets the same one with two speed tests turned off.
+//
+// The loop's accumulators are genuinely intertwined, which is why it stays
+// one function rather than four: `previous` feeds the next iteration's
+// guard, the discovery set and the visit map are built across iterations,
+// and the reveal candidates are the union over the accepted samples.
+export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
+  const {
+    db,
+    userId,
+    city,
+    districtGrid,
+    districtIdByGridIndex,
+    lastAccepted,
+    samples,
+    nowMs,
+    skipSpeedGuards,
+  } = input;
+
+  const grid = toGridParams(city);
+  const nowS = Math.floor(nowMs / 1000);
+
+  // "Ordering within a batch is by client timestamp" (Section 7.2 step 2).
+  const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp);
+
+  let previous = lastAccepted.get(userId) ?? null;
+  const revealCandidates = new Set<number>();
+
+  // SPEC.md Section 7.3, "what the player is told": whether the sample
+  // that ends this batch was refused a reveal because of its speed.
+  //
+  // The last accepted sample decides, and that is the whole rule for a
+  // mixed batch. The client renders this as a present-tense banner, and
+  // the last accepted sample is the most recent thing known about where
+  // the player is now — a batch that starts on a moving train and ends
+  // on the platform reports `false`, because by the end of it the
+  // player was walking. `false` for a batch with no accepted samples at
+  // all, for the same reason: nothing in it was refused for speed, and
+  // a banner is not entitled to assert a speed no sample established.
+  // `false` for a teleport batch too, and for that same reason once more:
+  // with the gate off, nothing was refused.
+  //
+  // Deliberately server-side and not derived from `position.speed` in
+  // the browser: the rule that decides is this one, including the case
+  // the client cannot reproduce — a sample carrying no speed, where the
+  // server derives it from the previous accepted sample, which the
+  // client does not keep.
+  let tooFastToReveal = false;
+
+  // SPEC.md Section 7.4: discovery is checked against every accepted
+  // sample, independent of the reveal-speed gate below — a sample too
+  // fast to reveal fog still discovers a bar it passes. Loaded once per
+  // request rather than per sample; a city's active bar count is small
+  // enough that this beats a spatial query per sample.
+  const activeBars = db
+    .prepare<[number], ActiveBarRow>(
+      `SELECT id, lat, lon FROM bars WHERE city_id = ? AND status = 'active'`,
+    )
+    .all(city.id);
+  const discoveryCandidateIds = new Set<number>();
+
+  const visitProgressByBarId = loadPendingVisitProgress(db, userId);
+
+  for (const sample of sorted) {
+    // 1. accuracy
+    if (sample.accuracy > CONFIG.FOG_MAX_ACCURACY_M) {
+      continue;
+    }
+    // 2. clock skew / staleness, against server time
+    const skewMs = sample.timestamp - nowMs;
+    if (skewMs > CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS) {
+      continue;
+    }
+    if (nowMs - sample.timestamp > CONFIG.SAMPLE_MAX_AGE_MS) {
+      continue;
+    }
+    // 3. inside the active city's bounding box (Section 5.1: the box is
+    // derived from origin/grid/cell_size via toCell, never stored). Not
+    // skippable by anything: a teleport outside the box would land on
+    // ground that has no fog grid, no cells and no districts, so there is
+    // nothing there to test against and nothing to write.
+    if (toCell(sample.lat, sample.lon, grid) === null) {
+      continue;
+    }
+    // 4. teleport guard against the previous accepted sample
+    let derivedSpeedKmh: number | null = null;
+    if (previous) {
+      derivedSpeedKmh = impliedSpeedKmh(previous, sample);
+      if (!skipSpeedGuards && derivedSpeedKmh > CONFIG.SAMPLE_TELEPORT_SPEED_KMH) {
+        continue;
+      }
+    }
+
+    // 5. accepted.
+    previous = { lat: sample.lat, lon: sample.lon, atMs: sample.timestamp };
+
+    for (const bar of activeBars) {
+      if (haversineDistanceM(sample, bar) <= CONFIG.BAR_DISCOVERY_RADIUS_M) {
+        discoveryCandidateIds.add(bar.id);
+      }
+    }
+
+    // SPEC.md Section 7.5 steps 3-4: like discovery above, and unlike
+    // the reveal-speed gate below, this runs for every accepted sample
+    // regardless of speed — someone standing still at a bar produces
+    // samples with no meaningful speed. The radius uses this sample's
+    // own accuracy (`onsiteRadiusM`), not `LAST_ACCEPTED_ONSITE_RADIUS_M`
+    // (routes/visits.ts's separate, no-accuracy case).
+    const sampleOnsiteRadiusM = onsiteRadiusM(sample.accuracy);
+    for (const visit of visitProgressByBarId.values()) {
+      if (visit.status !== 'pending') {
+        continue;
+      }
+      if (!isOnSite(sample, visit.bar, sampleOnsiteRadiusM)) {
+        continue;
+      }
+      if (isVisitExpired(nowS, visit.lastSampleAt)) {
+        visit.status = 'expired';
+        visit.touched = true;
+        continue;
+      }
+      visit.onsiteSamples += 1;
+      visit.lastSampleAt = nowS;
+      visit.confirmedS = nowS - visit.startedAt;
+      visit.touched = true;
+      if (isVisitComplete(visit.confirmedS, visit.onsiteSamples)) {
+        visit.status = 'completed';
+        visit.completedAt = nowS;
+      }
+    }
+
+    // Reveal speed: from the sample where present (Geolocation API
+    // speed is m/s), otherwise derived from the previous accepted
+    // sample; neither available -> the sample reveals (Section 7.3).
+    //
+    // One expression drives both the reveal and what the client is
+    // told, so the banner cannot come to disagree with the rule it is
+    // reporting on — that disagreement is exactly what a second,
+    // client-side copy of this test would have introduced.
+    const revealSpeedKmh = sample.speed != null ? sample.speed * 3.6 : derivedSpeedKmh;
+    tooFastToReveal =
+      !skipSpeedGuards && revealSpeedKmh !== null && revealSpeedKmh >= CONFIG.FOG_MAX_SPEED_KMH;
+    if (!tooFastToReveal) {
+      for (const index of cellsWithinRevealRadius(sample, grid)) {
+        revealCandidates.add(index);
+      }
+    }
+  }
+
+  // SPEC.md Section 7.2/10.2: what the NEXT sample is compared against.
+  // A teleport writes here exactly like a walk does, and has to: leaving
+  // the pre-teleport position in place would make the admin's next genuine
+  // sample look like a 300 km/h jump from it and be refused by the guard
+  // at step 4 — the feature would break the ordinary sampling that is the
+  // whole point of testing with it. Clearing the entry instead would break
+  // check-in, which reads this map and answers `no_recent_sample` when it
+  // is empty (routes/visits.ts).
+  if (previous) {
+    lastAccepted.set(userId, previous);
+  }
+
+  const newBars =
+    discoveryCandidateIds.size > 0 ? applyDiscoveries(db, userId, discoveryCandidateIds, nowS) : [];
+
+  const anyVisitTouched = Array.from(visitProgressByBarId.values()).some((v) => v.touched);
+  const visitUpdates = anyVisitTouched ? applyVisitUpdates(db, visitProgressByBarId) : [];
+
+  if (revealCandidates.size === 0) {
+    return { newCells: 0, newBars, visitUpdates, tooFastToReveal };
+  }
+
+  const newCells = applyReveal(
+    db,
+    userId,
+    city.id,
+    grid,
+    districtGrid,
+    districtIdByGridIndex,
+    revealCandidates,
+    nowMs,
+  );
+  return { newCells, newBars, visitUpdates, tooFastToReveal };
+}
+
 // SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation
 // rule: "the previous accepted position lives in memory only ... discarded
 // on restart." A plain in-memory Map, created once per `buildApp` call (a
@@ -463,162 +695,25 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
           sendGridUnavailable(reply);
           return;
         }
-        const districtGrid = request.server.grid;
-        const districtIdByGridIndex = request.server.districtIdByGridIndex;
-
-        const grid = toGridParams(city);
-        const userId = request.userId;
-        const nowMs = Date.now();
-        const nowS = Math.floor(nowMs / 1000);
-
-        // "Ordering within a batch is by client timestamp" (Section 7.2 step 2).
-        const sorted = [...parsed.data.samples].sort((a, b) => a.timestamp - b.timestamp);
-
-        let previous = lastAccepted.get(userId) ?? null;
-        const revealCandidates = new Set<number>();
-
-        // SPEC.md Section 7.3, "what the player is told": whether the sample
-        // that ends this batch was refused a reveal because of its speed.
-        //
-        // The last accepted sample decides, and that is the whole rule for a
-        // mixed batch. The client renders this as a present-tense banner, and
-        // the last accepted sample is the most recent thing known about where
-        // the player is now — a batch that starts on a moving train and ends
-        // on the platform reports `false`, because by the end of it the
-        // player was walking. `false` for a batch with no accepted samples at
-        // all, for the same reason: nothing in it was refused for speed, and
-        // a banner is not entitled to assert a speed no sample established.
-        //
-        // Deliberately server-side and not derived from `position.speed` in
-        // the browser: the rule that decides is this one, including the case
-        // the client cannot reproduce — a sample carrying no speed, where the
-        // server derives it from the previous accepted sample, which the
-        // client does not keep.
-        let tooFastToReveal = false;
-
-        // SPEC.md Section 7.4: discovery is checked against every accepted
-        // sample, independent of the reveal-speed gate below — a sample too
-        // fast to reveal fog still discovers a bar it passes. Loaded once per
-        // request rather than per sample; a city's active bar count is small
-        // enough that this beats a spatial query per sample.
-        const activeBars = db
-          .prepare<[number], ActiveBarRow>(
-            `SELECT id, lat, lon FROM bars WHERE city_id = ? AND status = 'active'`,
-          )
-          .all(city.id);
-        const discoveryCandidateIds = new Set<number>();
-
-        const visitProgressByBarId = loadPendingVisitProgress(db, userId);
-
-        for (const sample of sorted) {
-          // 1. accuracy
-          if (sample.accuracy > CONFIG.FOG_MAX_ACCURACY_M) {
-            continue;
-          }
-          // 2. clock skew / staleness, against server time
-          const skewMs = sample.timestamp - nowMs;
-          if (skewMs > CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS) {
-            continue;
-          }
-          if (nowMs - sample.timestamp > CONFIG.SAMPLE_MAX_AGE_MS) {
-            continue;
-          }
-          // 3. inside the active city's bounding box (Section 5.1: the box is
-          // derived from origin/grid/cell_size via toCell, never stored).
-          if (toCell(sample.lat, sample.lon, grid) === null) {
-            continue;
-          }
-          // 4. teleport guard against the previous accepted sample
-          let derivedSpeedKmh: number | null = null;
-          if (previous) {
-            derivedSpeedKmh = impliedSpeedKmh(previous, sample);
-            if (derivedSpeedKmh > CONFIG.SAMPLE_TELEPORT_SPEED_KMH) {
-              continue;
-            }
-          }
-
-          // 5. accepted.
-          previous = { lat: sample.lat, lon: sample.lon, atMs: sample.timestamp };
-
-          for (const bar of activeBars) {
-            if (haversineDistanceM(sample, bar) <= CONFIG.BAR_DISCOVERY_RADIUS_M) {
-              discoveryCandidateIds.add(bar.id);
-            }
-          }
-
-          // SPEC.md Section 7.5 steps 3-4: like discovery above, and unlike
-          // the reveal-speed gate below, this runs for every accepted sample
-          // regardless of speed — someone standing still at a bar produces
-          // samples with no meaningful speed. The radius uses this sample's
-          // own accuracy (`onsiteRadiusM`), not `LAST_ACCEPTED_ONSITE_RADIUS_M`
-          // (routes/visits.ts's separate, no-accuracy case).
-          const sampleOnsiteRadiusM = onsiteRadiusM(sample.accuracy);
-          for (const visit of visitProgressByBarId.values()) {
-            if (visit.status !== 'pending') {
-              continue;
-            }
-            if (!isOnSite(sample, visit.bar, sampleOnsiteRadiusM)) {
-              continue;
-            }
-            if (isVisitExpired(nowS, visit.lastSampleAt)) {
-              visit.status = 'expired';
-              visit.touched = true;
-              continue;
-            }
-            visit.onsiteSamples += 1;
-            visit.lastSampleAt = nowS;
-            visit.confirmedS = nowS - visit.startedAt;
-            visit.touched = true;
-            if (isVisitComplete(visit.confirmedS, visit.onsiteSamples)) {
-              visit.status = 'completed';
-              visit.completedAt = nowS;
-            }
-          }
-
-          // Reveal speed: from the sample where present (Geolocation API
-          // speed is m/s), otherwise derived from the previous accepted
-          // sample; neither available -> the sample reveals (Section 7.3).
-          //
-          // One expression drives both the reveal and what the client is
-          // told, so the banner cannot come to disagree with the rule it is
-          // reporting on — that disagreement is exactly what a second,
-          // client-side copy of this test would have introduced.
-          const revealSpeedKmh = sample.speed != null ? sample.speed * 3.6 : derivedSpeedKmh;
-          tooFastToReveal = revealSpeedKmh !== null && revealSpeedKmh >= CONFIG.FOG_MAX_SPEED_KMH;
-          if (!tooFastToReveal) {
-            for (const index of cellsWithinRevealRadius(sample, grid)) {
-              revealCandidates.add(index);
-            }
-          }
-        }
-
-        if (previous) {
-          lastAccepted.set(userId, previous);
-        }
-
-        const newBars =
-          discoveryCandidateIds.size > 0
-            ? applyDiscoveries(db, userId, discoveryCandidateIds, nowS)
-            : [];
-
-        const anyVisitTouched = Array.from(visitProgressByBarId.values()).some((v) => v.touched);
-        const visitUpdates = anyVisitTouched ? applyVisitUpdates(db, visitProgressByBarId) : [];
-
-        if (revealCandidates.size === 0) {
-          return { newCells: 0, newBars, visitUpdates, tooFastToReveal };
-        }
-
-        const newCells = applyReveal(
+        // `skipSpeedGuards: false`, written here as a literal and reachable
+        // from nowhere else. SPEC.md Section 10.1: this route's validation is
+        // exactly what it has always been, and no field of `request.body`
+        // has any say over which checks run — the parsed body reaches
+        // `processSampleBatch` as `samples` and as nothing else. The admin
+        // teleport (routes/admin-teleport.ts) is a separate route the server
+        // admits on the strength of the session, which is the only way a
+        // bypass can exist without the caller choosing it.
+        return processSampleBatch({
           db,
-          userId,
-          city.id,
-          grid,
-          districtGrid,
-          districtIdByGridIndex,
-          revealCandidates,
-          nowMs,
-        );
-        return { newCells, newBars, visitUpdates, tooFastToReveal };
+          userId: request.userId,
+          city,
+          districtGrid: request.server.grid,
+          districtIdByGridIndex: request.server.districtIdByGridIndex,
+          lastAccepted,
+          samples: parsed.data.samples,
+          nowMs: Date.now(),
+          skipSpeedGuards: false,
+        });
       },
     );
 

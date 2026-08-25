@@ -3,6 +3,7 @@ import type { BoundaryFeatureCollection } from './geo-types.js';
 import type {
   AdminBar,
   AdminBarsResponse,
+  AdminUser,
   AdminUsersResponse,
   Bar,
   BarSource,
@@ -436,6 +437,39 @@ export function deleteAdminBar(id: number): Promise<{ ok: true }> {
 // GET /api/admin/users (Section 9.3): the user list with stats.
 export function getAdminUsers(): Promise<AdminUsersResponse> {
   return request<AdminUsersResponse>('/api/admin/users');
+}
+
+// PATCH /api/admin/users/:id (Section 9.3): the one field of a user an admin
+// may change - whether the account is ranked (Section 7.8). Answers with the
+// full updated user, the same shape `getAdminUsers` lists, so the caller can
+// put the response straight back into its list.
+export function updateAdminUser(
+  id: number,
+  input: { excludedFromRankings: boolean },
+): Promise<AdminUser> {
+  return request<AdminUser>(`/api/admin/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+// POST /api/admin/teleport (Sections 9.3/10.1): moves the calling admin's
+// own position to a chosen point, running the same fog reveal, bar discovery
+// and visit progress an ordinary sample runs - hence the `SamplesResponse`
+// return type, which is the same body POST /api/samples answers with.
+//
+// It exists only when the server was started with ADMIN_TELEPORT_ENABLED,
+// and answers 404 otherwise: the route is not registered rather than
+// registered and refusing (packages/api/src/app.ts). Callers must treat that
+// 404 as "the feature is off here" rather than as a failure - see
+// screens/Admin.tsx. Nothing in this file decides whether teleport is
+// allowed; every one of its four gates is enforced server-side, and this
+// function's only job is to carry two numbers and report what came back.
+export function adminTeleport(input: { lat: number; lon: number }): Promise<SamplesResponse> {
+  return request<SamplesResponse>('/api/admin/teleport', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 // Served by packages/api/src/routes/static-data.ts at

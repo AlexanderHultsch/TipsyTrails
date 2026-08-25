@@ -703,3 +703,274 @@ describe('admin bar list ordering', () => {
     expect(listedBarNames()).toEqual(['Änderungsbar', 'Bergbräustube']);
   });
 });
+
+function adminUser(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    username: 'walker',
+    isAdmin: false,
+    isAnonymous: false,
+    mustChangePassword: false,
+    excludedFromRankings: false,
+    createdAt: 1_700_000_000,
+    lastSeenAt: null,
+    areaRevealedCells: 0,
+    areaPercent: 0,
+    barsMastered: 0,
+    badgeCount: 0,
+    ...overrides,
+  };
+}
+
+// SPEC.md Section 7.8/9.3: the ranking exclusion, on the screen. The flag
+// decides who can win a badge, so an admin has to be able to see which
+// accounts carry it as well as set it — an invisible switch that changes who
+// wins is worse than no switch.
+describe('admin ranking exclusion', () => {
+  function stubAdminScreen(
+    users: Record<string, unknown>[],
+    onPatch?: (id: string, body: unknown) => Response,
+  ) {
+    return stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars: [] });
+      }
+      if (url === '/api/admin/users' && init?.method === undefined) {
+        return jsonResponse(200, { users });
+      }
+      if (url.startsWith('/api/admin/users/') && init?.method === 'PATCH') {
+        const id = url.slice('/api/admin/users/'.length);
+        return (onPatch ?? (() => jsonResponse(500, {})))(id, JSON.parse(init.body as string));
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+  }
+
+  function toggleFor(username: string): HTMLButtonElement {
+    const row = Array.from(container.querySelectorAll('.admin-user-row')).find((element) =>
+      element.querySelector('.admin-user-row__name')?.textContent?.startsWith(username),
+    );
+    if (!row) {
+      throw new Error(`no row for ${username}`);
+    }
+    return row.querySelector('.admin-user-row__toggle') as HTMLButtonElement;
+  }
+
+  it('marks an excluded account in the list and leaves an included one unmarked', async () => {
+    stubAdminScreen([
+      adminUser({ id: 7, username: 'walker' }),
+      adminUser({ id: 8, username: 'tester', excludedFromRankings: true }),
+    ]);
+
+    await renderApp('/admin');
+
+    const tags = Array.from(container.querySelectorAll('.admin-user-row')).map((row) =>
+      Array.from(row.querySelectorAll('.admin-bar-row__tag')).map((tag) => tag.textContent),
+    );
+    expect(tags).toEqual([[], ['Not ranked']]);
+  });
+
+  it('excludes an account and reflects the server response in the row', async () => {
+    let user = adminUser({ id: 7, username: 'walker' });
+    stubAdminScreen([user], (id, body) => {
+      expect(id).toBe('7');
+      expect(body).toEqual({ excludedFromRankings: true });
+      user = { ...user, excludedFromRankings: true };
+      return jsonResponse(200, user);
+    });
+
+    await renderApp('/admin');
+    expect(toggleFor('walker').textContent).toBe('Exclude from rankings');
+
+    await click(toggleFor('walker'));
+
+    expect(toggleFor('walker').textContent).toBe('Include in rankings');
+    expect(toggleFor('walker').getAttribute('aria-pressed')).toBe('true');
+    expect(container.querySelector('.admin-bar-row__tag--hidden')?.textContent).toBe('Not ranked');
+  });
+
+  it('puts an account back and asks the server for exactly that', async () => {
+    let user = adminUser({ id: 7, username: 'walker', excludedFromRankings: true });
+    stubAdminScreen([user], (_id, body) => {
+      expect(body).toEqual({ excludedFromRankings: false });
+      user = { ...user, excludedFromRankings: false };
+      return jsonResponse(200, user);
+    });
+
+    await renderApp('/admin');
+    await click(toggleFor('walker'));
+
+    expect(toggleFor('walker').textContent).toBe('Exclude from rankings');
+    expect(container.querySelector('.admin-bar-row__tag--hidden')).toBeNull();
+  });
+
+  it("surfaces the server's message when the change is refused, leaving the row alone", async () => {
+    stubAdminScreen([adminUser({ id: 7, username: 'walker' })], () =>
+      jsonResponse(403, { code: 'forbidden', message: 'Administrator access required.' }),
+    );
+
+    await renderApp('/admin');
+    await click(toggleFor('walker'));
+
+    expect(container.querySelector('.error-message')?.textContent).toBe(
+      'Administrator access required.',
+    );
+    expect(toggleFor('walker').textContent).toBe('Exclude from rankings');
+  });
+});
+
+// SPEC.md Sections 9.3/10.1: the teleport panel. Nothing here is a security
+// control — every gate is server-side — so these tests are about the panel
+// carrying the server's answer honestly, including the answer "this server
+// does not have that route".
+describe('admin teleport', () => {
+  function stubAdminScreen(onTeleport: (body: unknown) => Response) {
+    return stubFetch((url, init) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser({ isAdmin: true });
+      }
+      if (url === '/api/admin/bars' && init?.method === undefined) {
+        return jsonResponse(200, { bars: [] });
+      }
+      if (url === '/api/admin/users' && init?.method === undefined) {
+        return jsonResponse(200, { users: [] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: [] });
+      }
+      if (url === '/api/city') {
+        return jsonResponse(200, { districts: [] });
+      }
+      if (url === '/api/admin/teleport' && init?.method === 'POST') {
+        return onTeleport(JSON.parse(init.body as string));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+  }
+
+  function openPicker(): void {
+    const open = Array.from(container.querySelectorAll('.admin__section button')).find(
+      (button) => button.textContent === 'Choose a point on the map',
+    ) as HTMLButtonElement;
+    act(() => {
+      open.click();
+    });
+  }
+
+  function moveButton(): HTMLButtonElement {
+    return Array.from(container.querySelectorAll('.admin__section button')).find(
+      (button) => button.textContent === 'Move here',
+    ) as HTMLButtonElement;
+  }
+
+  // The map is a MapLibre instance; it is not built until it is asked for,
+  // so the admin screen does not pay for a WebGL context it usually does not
+  // need. GET /api/city is the picker's own request, which is why the stub
+  // above answers it and why no test that never opens the picker sees it.
+  it('mounts no map picker until the admin asks for one', async () => {
+    stubAdminScreen(() => jsonResponse(200, {}));
+
+    await renderApp('/admin');
+
+    expect(container.querySelector('.map-picker')).toBeNull();
+
+    openPicker();
+
+    expect(container.querySelector('.map-picker')).not.toBeNull();
+  });
+
+  it('sends the picked point and reports what the server did', async () => {
+    let sent: unknown = null;
+    stubAdminScreen((body) => {
+      sent = body;
+      return jsonResponse(200, {
+        newCells: 12,
+        newBars: [communityBar()],
+        visitUpdates: [],
+        tooFastToReveal: false,
+      });
+    });
+
+    await renderApp('/admin');
+    openPicker();
+
+    expect(moveButton().disabled).toBe(true);
+
+    act(() => {
+      mapInstances[mapInstances.length - 1].fire('click', {
+        lngLat: { lat: 49.0135, lng: 8.4044 },
+      });
+    });
+
+    expect(moveButton().disabled).toBe(false);
+    await click(moveButton());
+
+    expect(sent).toEqual({ lat: 49.0135, lon: 8.4044 });
+    const status = Array.from(container.querySelectorAll('[role="status"]')).map(
+      (element) => element.textContent,
+    );
+    expect(status.join(' ')).toContain('12 new cells revealed, 1 bars discovered');
+  });
+
+  // A 404 here is the environment variable being unset (app.ts never
+  // registers the route), and Fastify's own not-found body carries no `code`
+  // and a message naming the route. The panel answers in words instead.
+  it('says the feature is off when the route does not exist, without showing the raw 404', async () => {
+    stubAdminScreen(() =>
+      jsonResponse(404, {
+        message: 'Route POST:/api/admin/teleport not found',
+        error: 'Not Found',
+        statusCode: 404,
+      }),
+    );
+
+    await renderApp('/admin');
+    openPicker();
+    act(() => {
+      mapInstances[mapInstances.length - 1].fire('click', {
+        lngLat: { lat: 49.0135, lng: 8.4044 },
+      });
+    });
+    await click(moveButton());
+
+    const text = container.querySelector('.admin__section:last-of-type')?.textContent ?? '';
+    expect(text).toContain('Teleport is not enabled on this server');
+    expect(text).toContain('ADMIN_TELEPORT_ENABLED');
+    expect(text).not.toContain('Route POST');
+    expect(container.querySelector('.map-picker')).toBeNull();
+  });
+
+  // Gate 3 refused it. The server's own wording names the reason and the
+  // fix, so the panel shows it rather than inventing its own sentence.
+  it("shows the server's reason when the account is still in the rankings", async () => {
+    stubAdminScreen(() =>
+      jsonResponse(422, {
+        code: 'not_excluded_from_rankings',
+        message:
+          'Teleport is refused for an account that still counts in the rankings. ' +
+          'Exclude this account from the leaderboard and badges first, in Admin → Users.',
+      }),
+    );
+
+    await renderApp('/admin');
+    openPicker();
+    act(() => {
+      mapInstances[mapInstances.length - 1].fire('click', {
+        lngLat: { lat: 49.0135, lng: 8.4044 },
+      });
+    });
+    await click(moveButton());
+
+    expect(container.querySelector('.error-message')?.textContent).toContain(
+      'still counts in the rankings',
+    );
+    // Still usable: this is a state the admin can fix and retry from.
+    expect(container.querySelector('.map-picker')).not.toBeNull();
+  });
+});

@@ -46,17 +46,38 @@ const envSchema = z.object({
   VAPID_PUBLIC_KEY: z.string().transform(emptyToUndefined).optional(),
   VAPID_PRIVATE_KEY: z.string().transform(emptyToUndefined).optional(),
   VAPID_SUBJECT: z.string().transform(emptyToUndefined).optional(),
+  // SPEC.md Sections 9.3, 10.1: the kill switch for the admin teleport
+  // (routes/admin-teleport.ts). Absent — the ordinary state, and what a
+  // production deployment ships with — means app.ts does not register the
+  // route at all, so the path answers 404 rather than 403 and a stolen
+  // admin session reaches nothing.
+  //
+  // An enum rather than "any truthy string", for the reason PUBLIC_ORIGIN is
+  // protocol-checked and API_PORT range-checked: the variable is checked for
+  // what it has to mean. `ADMIN_TELEPORT_ENABLED=1`, `=yes` or `=TRUE` are
+  // all things an operator would reasonably type expecting the feature on,
+  // and every one of them would silently leave it off. This fails at boot,
+  // naming the variable, instead. `false` is accepted and is a second, equally
+  // explicit way to say off — it exists so the variable can stay in a `.env`
+  // with the answer written down rather than being deleted and forgotten.
+  ADMIN_TELEPORT_ENABLED: z.enum(['true', 'false']).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const { API_PORT, PORT, DATABASE_PATH, DB_PATH, TILES_DIR, ...rest } = source;
+  const { API_PORT, PORT, DATABASE_PATH, DB_PATH, TILES_DIR, ADMIN_TELEPORT_ENABLED, ...rest } =
+    source;
   const normalised = {
     ...rest,
     API_PORT: emptyToUndefined(API_PORT) ?? emptyToUndefined(PORT),
     DATABASE_PATH: emptyToUndefined(DATABASE_PATH) ?? emptyToUndefined(DB_PATH),
     TILES_DIR: emptyToUndefined(TILES_DIR),
+    // Normalised like TILES_DIR above rather than left to the enum: a `.env`
+    // line of `ADMIN_TELEPORT_ENABLED=` (the shape `.env.example` documents,
+    // names and no values) reaches here as an empty string, and an empty
+    // string has to mean absent — off — not a boot failure.
+    ADMIN_TELEPORT_ENABLED: emptyToUndefined(ADMIN_TELEPORT_ENABLED),
   };
   const result = envSchema.safeParse(normalised);
   if (!result.success) {

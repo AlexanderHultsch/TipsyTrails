@@ -1,0 +1,23 @@
+-- Adds the ranking exclusion flag to `users`. See SPEC.md Section 5.3 for the
+-- column and Sections 7.7/7.8 for what it does: an excluded account still
+-- plays in every way -- it reveals fog, discovers bars, masters bars, and
+-- reads its own figures on its own profile -- but is skipped by the two
+-- surfaces that rank people against each other, `GET /api/leaderboard` and
+-- the badge evaluation job's candidate sets.
+
+-- DEFAULT 0 is load-bearing rather than a formality. Every row that already
+-- exists, and every INSERT that does not name the column (db/seed-admin.ts,
+-- routes/auth.ts's register handler, every test fixture), has to mean "still
+-- in the competition": nobody may be taken out of the running by a schema
+-- change, and taking somebody out has to be a deliberate act through
+-- PATCH /api/admin/users/:id (Section 9.3).
+--
+-- NOT NULL for the same reason the other flags on this table are: the
+-- queries that read it (routes/leaderboard.ts, badges.ts, the admin teleport
+-- precondition) test it as a two-valued flag, and a third state would make
+-- "not excluded" and "unknown" answer differently in three places.
+--
+-- SQLite adds a column with a constant default in place, without rewriting
+-- the table, so this is cheap on a live database and needs no data
+-- migration of its own -- unlike 002, which had rows to correct.
+ALTER TABLE users ADD COLUMN excluded_from_rankings INTEGER NOT NULL DEFAULT 0;

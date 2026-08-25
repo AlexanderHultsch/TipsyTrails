@@ -17,6 +17,7 @@ import {
   type MetricStanding,
 } from '../badges.js';
 import { sendCityNotFound, sendInvalidRequestQuery, sendUnauthenticated } from '../http/errors.js';
+import { RANKED_USERS_SQL } from '../rankings.js';
 import { ANONYMOUS_AVATAR_SEED, anonymousDisplayName } from './anonymity.js';
 
 // SPEC.md Section 7.8: the public leaderboard, ranked by area explored or
@@ -26,6 +27,12 @@ import { ANONYMOUS_AVATAR_SEED, anonymousDisplayName } from './anonymity.js';
 // badge job scores users against (Section 7.7), reused rather than
 // duplicated so a user's leaderboard standing and their badges can never
 // disagree on the same number.
+//
+// Who is listed is a second thing the two must agree on, and they do:
+// `users.excluded_from_rankings` (rankings.ts) is applied here to the user
+// list and in badges.ts to the candidate sets, so an account taken out of
+// the competition is out of both at once and cannot be ranked in one and
+// scored in the other.
 
 const leaderboardQuerySchema = z.object({
   // "All-time by default" (Section 7.8) settles `period`; the metric default
@@ -43,9 +50,24 @@ interface UserRow {
   is_anonymous: number;
 }
 
-function loadAllUsers(db: Database.Database): UserRow[] {
+// SPEC.md Section 7.8: every user who is in the competition — which since
+// migration 003 is not every user. The filter is in the SQL rather than
+// applied to the result, and that is what makes the paging right as well as
+// the rows: `totalUsers` and `totalPages` below are counted off this list,
+// so an excluded account that was filtered out afterwards would still have
+// been paid for with a page number, and a page count that includes a user
+// nobody can see is its own bug.
+//
+// Not named `loadAllUsers` any more, deliberately — it stopped being all of
+// them, and a name that says "all" is the kind of thing a later reader
+// trusts instead of checking.
+function loadRankedUsers(db: Database.Database): UserRow[] {
   return db
-    .prepare<[], UserRow>('SELECT id, username, avatar_seed, is_anonymous FROM users ORDER BY id')
+    .prepare<[], UserRow>(
+      `SELECT id, username, avatar_seed, is_anonymous FROM users
+       WHERE ${RANKED_USERS_SQL}
+       ORDER BY id`,
+    )
     .all();
 }
 
@@ -166,7 +188,7 @@ export async function leaderboardRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const metricStandings = loadMetricStandings(db, metric, period, city, Date.now());
-    const users = loadAllUsers(db);
+    const users = loadRankedUsers(db);
     const sorted = buildStandings(users, metricStandings).sort(compareStandings);
 
     const pageSize = CONFIG.LEADERBOARD_PAGE_SIZE;

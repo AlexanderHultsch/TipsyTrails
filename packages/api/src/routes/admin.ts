@@ -1,5 +1,6 @@
 import { compareBarsByName } from '@tipsytrails/shared';
-import type { FastifyInstance } from 'fastify';
+import type Database from 'better-sqlite3';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAdmin } from '../auth/cookie.js';
 import {
@@ -71,18 +72,17 @@ function toAdminBarSummary(row: BarRow): AdminBarSummary {
   };
 }
 
-// SPEC.md Section 9.3, Phase 7 task brief: "user list with stats". Kept
-// cheap — one query, no per-user round trip — and deliberately excludes
-// password_hash and security_answer_hash (never sent to any client). The
-// username is the real one, not the anonymous handle: Section 7.8's
-// anonymity is a display choice for other players, not a shield from the
-// admin who already moderates their submissions.
+// SPEC.md Section 9.3, Phase 7 task brief: "user list with stats", and
+// since the ranking exclusion (Section 7.8) the one user field an admin can
+// also write. `loadAdminUsers` below is the single query behind both, and
+// its comment states what the shape deliberately leaves out.
 interface AdminUserRow {
   id: number;
   username: string;
   is_admin: number;
   is_anonymous: number;
   must_change_password: number;
+  excluded_from_rankings: number;
   created_at: number;
   last_seen_at: number | null;
   revealed_cells: number;
@@ -96,6 +96,11 @@ interface AdminUserSummary {
   isAdmin: boolean;
   isAnonymous: boolean;
   mustChangePassword: boolean;
+  // SPEC.md Sections 7.7/7.8: this account is left out of the leaderboard
+  // and out of the badge job's candidate sets. Deliberately surfaced on the
+  // admin user list and not only accepted by the PATCH below: an invisible
+  // switch that changes who wins is worse than no switch.
+  excludedFromRankings: boolean;
   createdAt: number;
   lastSeenAt: number | null;
   areaRevealedCells: number;
@@ -111,6 +116,7 @@ function toAdminUserSummary(row: AdminUserRow, playableCells: number): AdminUser
     isAdmin: Boolean(row.is_admin),
     isAnonymous: Boolean(row.is_anonymous),
     mustChangePassword: Boolean(row.must_change_password),
+    excludedFromRankings: Boolean(row.excluded_from_rankings),
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
     areaRevealedCells: row.revealed_cells,
@@ -118,6 +124,59 @@ function toAdminUserSummary(row: AdminUserRow, playableCells: number): AdminUser
     barsMastered: row.bars_mastered,
     badgeCount: row.badge_count,
   };
+}
+
+// The list query and the single-row query the PATCH below answers with, as
+// one statement with one optional filter rather than two SELECTs. The two
+// have to produce byte-identical user objects — the Admin screen replaces a
+// row in its list with the PATCH's response — and two copies of a
+// three-way-joined column list is precisely how they would stop.
+//
+// Kept cheap the way the list always was: one query, no per-user round trip,
+// and deliberately no `password_hash` or `security_answer_hash` (never sent
+// to any client). The username is the real one, not the anonymous handle:
+// Section 7.8's anonymity is a display choice for other players, not a
+// shield from the admin who already moderates their submissions.
+function loadAdminUsers(
+  db: Database.Database,
+  cityId: number | null,
+  userId?: number,
+): AdminUserRow[] {
+  const filter = userId === undefined ? '' : 'WHERE users.id = ?';
+  const statement = db.prepare<unknown[], AdminUserRow>(
+    `SELECT
+       users.id AS id,
+       users.username AS username,
+       users.is_admin AS is_admin,
+       users.is_anonymous AS is_anonymous,
+       users.must_change_password AS must_change_password,
+       users.excluded_from_rankings AS excluded_from_rankings,
+       users.created_at AS created_at,
+       users.last_seen_at AS last_seen_at,
+       COALESCE(fog_state.revealed_cells, 0) AS revealed_cells,
+       COALESCE(mastered.bars_mastered, 0) AS bars_mastered,
+       COALESCE(badge_counts.badge_count, 0) AS badge_count
+     FROM users
+     LEFT JOIN fog_state ON fog_state.user_id = users.id AND fog_state.city_id = ?
+     LEFT JOIN (
+       SELECT user_id, COUNT(DISTINCT bar_id) AS bars_mastered
+       FROM visits WHERE status = 'completed' GROUP BY user_id
+     ) mastered ON mastered.user_id = users.id
+     LEFT JOIN (
+       SELECT user_id, COUNT(*) AS badge_count FROM badges GROUP BY user_id
+     ) badge_counts ON badge_counts.user_id = users.id
+     ${filter}
+     ORDER BY users.id`,
+  );
+  return userId === undefined ? statement.all(cityId) : statement.all(cityId, userId);
+}
+
+// SPEC.md Section 9.5's reasoning, applied to a user: one body for "no such
+// user" and nothing else, since the only route that can send it already sits
+// behind `requireAdmin` and the admin may see every user there is. Only this
+// module sends it, so it stays here rather than in http/errors.ts.
+function sendUserNotFound(reply: FastifyReply): void {
+  reply.code(404).send({ code: 'user_not_found', message: 'That user does not exist.' });
 }
 
 const listBarsQuerySchema = z.object({
@@ -142,6 +201,13 @@ const patchBarSchema = z
   .refine((data) => (data.lat === undefined) === (data.lon === undefined), {
     message: 'lat and lon must be provided together',
   });
+
+// SPEC.md Sections 7.8, 9.3. One optional boolean, and a body naming nothing
+// at all is accepted as a no-op that answers with the user unchanged — the
+// same reading `patchBarSchema` above has of an omitted field.
+const patchUserSchema = z.object({
+  excludedFromRankings: z.boolean().optional(),
+});
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/admin/bars', { preHandler: requireAdmin }, async (request, reply) => {
@@ -380,32 +446,67 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const cityId = city ? city.id : null;
     const playableCells = city ? city.playable_cells : 0;
 
-    const rows = db
-      .prepare<[number | null], AdminUserRow>(
-        `SELECT
-           users.id AS id,
-           users.username AS username,
-           users.is_admin AS is_admin,
-           users.is_anonymous AS is_anonymous,
-           users.must_change_password AS must_change_password,
-           users.created_at AS created_at,
-           users.last_seen_at AS last_seen_at,
-           COALESCE(fog_state.revealed_cells, 0) AS revealed_cells,
-           COALESCE(mastered.bars_mastered, 0) AS bars_mastered,
-           COALESCE(badge_counts.badge_count, 0) AS badge_count
-         FROM users
-         LEFT JOIN fog_state ON fog_state.user_id = users.id AND fog_state.city_id = ?
-         LEFT JOIN (
-           SELECT user_id, COUNT(DISTINCT bar_id) AS bars_mastered
-           FROM visits WHERE status = 'completed' GROUP BY user_id
-         ) mastered ON mastered.user_id = users.id
-         LEFT JOIN (
-           SELECT user_id, COUNT(*) AS badge_count FROM badges GROUP BY user_id
-         ) badge_counts ON badge_counts.user_id = users.id
-         ORDER BY users.id`,
-      )
-      .all(cityId);
-
+    const rows = loadAdminUsers(db, cityId);
     return { users: rows.map((row) => toAdminUserSummary(row, playableCells)) };
+  });
+
+  // SPEC.md Sections 7.8 and 9.3: the one thing an admin may change about a
+  // user — whether the account takes part in the rankings. Shaped like the
+  // bars PATCH above: an optional field per property, an omitted field
+  // meaning "leave as-is", the full updated object in the response.
+  //
+  // What it deliberately does NOT offer is anything else about a user. There
+  // is no `isAdmin` here, no `username`, no password reset and no way to
+  // clear `must_change_password`: promoting an account is a decision this
+  // document has not made (Section 13.4's admin story runs through
+  // `deploy.sh` and `seedAdmin`), and each of those would be a new power
+  // rather than a new field. One flag is the whole of the change.
+  //
+  // Setting the flag revokes no badge already awarded. Section 7.7 is
+  // explicit that awarded badges are a permanent record and are never
+  // revoked, so this handler touches only `users` and never `badges` — the
+  // exclusion decides future evaluations and present listings, not the past.
+  app.patch('/api/admin/users/:id', { preHandler: requireAdmin }, async (request, reply) => {
+    if (request.userId == null) {
+      sendUnauthenticated(reply);
+      return;
+    }
+
+    const { id } = request.params as { id: string };
+    const targetId = Number(id);
+    if (!Number.isInteger(targetId)) {
+      sendUserNotFound(reply);
+      return;
+    }
+
+    const parsed = patchUserSchema.safeParse(request.body);
+    if (!parsed.success) {
+      sendInvalidRequestBody(reply);
+      return;
+    }
+
+    const db = request.server.db;
+    const existing = db
+      .prepare<[number], { id: number }>('SELECT id FROM users WHERE id = ?')
+      .get(targetId);
+    if (!existing) {
+      sendUserNotFound(reply);
+      return;
+    }
+
+    const { excludedFromRankings } = parsed.data;
+    if (excludedFromRankings !== undefined) {
+      db.prepare('UPDATE users SET excluded_from_rankings = ? WHERE id = ?').run(
+        excludedFromRankings ? 1 : 0,
+        targetId,
+      );
+    }
+
+    const city = loadActiveCity(db);
+    const row = loadAdminUsers(db, city ? city.id : null, targetId)[0];
+    if (!row) {
+      throw new Error('user row missing immediately after update');
+    }
+    return toAdminUserSummary(row, city ? city.playable_cells : 0);
   });
 }
