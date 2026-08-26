@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.44
+**Version:** 1.45
 **Status:** Built and deployed; see _Status_ at the end of this front matter
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -439,7 +439,11 @@ docker compose exec -T tipsy-trails npm run seed:admin -- --rotate-password
 
 The `--` before the flag is npm's argument separator and is **required**: without it npm consumes `--rotate-password` as its own option and the script never sees it — which is the silent no-op again, so it is worth getting right in one place rather than debugging on the Pi. The flag's spelling is exactly `--rotate-password`, all lower case, one hyphen between the two words; it takes no value, and `--rotate-password=true` is not accepted.
 
-**What it does.** With the flag, if the account is missing it is created exactly as without the flag; if the account exists, its stored password hash is rewritten from the current `ADMIN_PASSWORD`. Nothing else about the account is touched — not `must_change_password` (Section 5.3 explains why that stays 0), not `is_admin`, not the security question or its answer hash. Without the flag, an existing account's password is never written, on any run, by any means.
+**What it does.** With the flag, if the account is missing it is created exactly as without the flag; if the account exists, its stored password hash is rewritten from the current `ADMIN_PASSWORD` **and every session that account holds is deleted**, so whoever was signed in under the old password is signed out. Nothing else about the account is touched — not `must_change_password` (Section 5.3 explains why that stays 0), not `is_admin`, not the security question or its answer hash. Without the flag, an existing account's password is never written and no session is ever ended, on any run, by any means.
+
+**Why it revokes, and what that costs.** A rotation that wrote only the hash would leave a session opened under the *old* password valid for the rest of its 90-day sliding expiry (Section 5.4). That is tolerable for routine hygiene and useless in the case that matters — a rotation happening *because* the old password leaked, where the stolen cookie is the whole problem and the new password does nothing about it. `--set-password` is a deliberate operator action rather than a side effect of a deploy, so the intent behind it is taken to be that the old credential stops working everywhere. The cost is that the operator is signed out of this site's admin session by their own rotation and signs in again with the password they just chose; the message on the run says so, which is the point of saying it.
+
+Two limits on that, both deliberate. It ends the sessions of **the admin account only** — `ADMIN_USER`'s row and nobody else's — so no player is signed out by a rotation. And it keeps no session back: the equivalent in the app, `POST /api/auth/change-password`, spares the caller's own tab because a human is standing in it, and there is no such tab here. The hash write and the session delete are one transaction, so a rotation cannot half-happen: either the new password is in force with the old sessions gone, or nothing changed at all and the run reports a failure.
 
 **Pass the flag only from `--set-password`.** An ordinary `deploy.sh` run must keep using the plain form. The reason is that this app lets an admin change their own password from inside the app, and nothing inside the container can tell "the operator rotated `admin.env`" apart from "the admin changed it themselves": in both cases the stored hash simply stops matching `ADMIN_PASSWORD`. Rotating on every deploy would therefore revert a self-chosen password on the next deploy, and so would the tempting-looking rule "rotate only when the stored password differs from `ADMIN_PASSWORD`" — that is the same bug in a disguise, because a self-changed password *is* the differing case. Which of the two happened is only knowable outside the container, at the moment the operator types `--set-password`, which is why it is an argument at that call site and nothing else.
 
@@ -449,7 +453,9 @@ The `--` before the flag is npm's argument separator and is **required**: withou
 
 ```
 exit 0  seed:admin: created the admin account (<user>).
-exit 0  seed:admin: updated the password of the admin account (<user>) from ADMIN_PASSWORD.
+exit 0  seed:admin: updated the password of the admin account (<user>) from
+        ADMIN_PASSWORD and ended its existing sessions, so the old password no
+        longer signs in anywhere.
 exit 0  seed:admin: the admin account (<user>) already exists and its password was
         left unchanged. Re-run with --rotate-password to set it from ADMIN_PASSWORD.
 exit 1  seed:admin: ADMIN_USER and/or ADMIN_PASSWORD are not set, so no admin account
@@ -458,7 +464,7 @@ exit 1  seed:admin: ADMIN_USER and/or ADMIN_PASSWORD are not set, so no admin ac
         docker-compose.yml and the site's .env.
 ```
 
-The second line is reachable only with `--rotate-password`. Only the last exits non-zero, and that is the case the warning line is for: for an `admin: yes` site it means `deploy.sh` wrote the `.env` and it did not reach the process — usually a missing `env_file:` line in the platform's `docker-compose.yml`. "Already exists, not rotated" is the outcome of every ordinary deploy of a healthy site and must not warn, or the operator sees the warning on every run and stops reading it.
+The second of the four is reachable only with `--rotate-password`, and it is the only one that ends a session. Only the last exits non-zero, and that is the case the warning line is for: for an `admin: yes` site it means `deploy.sh` wrote the `.env` and it did not reach the process — usually a missing `env_file:` line in the platform's `docker-compose.yml`. "Already exists, not rotated" is the outcome of every ordinary deploy of a healthy site and must not warn, or the operator sees the warning on every run and stops reading it.
 
 Never printed, on any path: the password itself or its hash. The username is printed, and it is already in clear in `admin.env` and the site's `.env`.
 
@@ -472,7 +478,7 @@ Never printed, on any path: the password itself or its hash. The username is pri
 
 **That volume belongs to root, so the container starts as root and drops privileges itself.** `~/pi-server/data/` is root-owned on the Pi — the owner cannot even `mkdir` inside it from his own shell — so Docker creates `data/tipsy-trails/` as root too. A container running as `node` against it cannot create `/data/db` at all: `initialiseDatabase`'s `mkdirSync` fails with EACCES and the container restart-loops behind a 502.
 
-The root `Dockerfile` therefore does not end with `USER node`. It installs `gosu`, and `docker-entrypoint.sh` runs as root and does four things in order: create the database directory (the dirname of `DATABASE_PATH`/`DB_PATH`), create `TILES_DIR`, `chown -R node:node /data` — which also rescues a `.pmtiles` extract copied in by hand as another user — and then `exec gosu node "$@"`, so the server runs unprivileged as PID 1's successor and receives signals normally. This is the shape the platform's other two sites already use; they are Alpine images and reach for `su-exec` where this Debian one uses `gosu`. `packages/api/src/docker-image.test.ts` fails if any part of that arrangement is removed.
+The root `Dockerfile` therefore does not end with `USER node`. It installs `gosu`, and `docker-entrypoint.sh` runs as root and does four things in order: create the database directory (the dirname of `DATABASE_PATH`/`DB_PATH`), create `TILES_DIR`, `chown -R node:node /data` — which also rescues a `.pmtiles` extract copied in by hand as another user — and then `exec gosu node "$@"`, so the server runs unprivileged as PID 1's successor and receives signals normally. This is the shape the platform's other sites already use. **No count is stated here on purpose:** the platform keeps gaining sites, and a number in this sentence goes stale at the next one — a `dishlist` entry appeared in `sites.conf` on the platform checkout's `env` branch after the 2026-08-19 paste this section was written from, and the maintainer's own re-check, relayed 2026-08-26, listed four sites registered `admin: yes` (`winecashing`, `ginperium`, `tipsy-trails`, `dishlist`). Read `sites.conf` if the current count matters; note that a check filtered on the `admin` column counts the `admin: yes` sites, not every site the platform hosts. What was actually verified is narrower than any count and is deliberately not extended to sites added since: `winecashing` and `ginperium`, the two this section was originally written against, are Alpine images and reach for `su-exec` where this Debian one uses `gosu`. Nothing here is known about `dishlist`'s base image. `packages/api/src/docker-image.test.ts` fails if any part of that arrangement is removed.
 
 One consequence is worth stating: `docker compose exec tipsy-trails npm run seed:admin` does **not** run the entrypoint, so that command runs as root. That is harmless — the server already holds the SQLite connection open and its WAL files exist by then — and self-healing regardless, because the next boot chowns `/data` again.
 
@@ -583,7 +589,7 @@ The gate itself stays in place for any account that legitimately carries the fla
 
 A consequence worth stating plainly: because `seedAdmin` skips an account that already exists and never overwrites a password changed since (Section 13.4), an admin who changes this password inside the app takes it out of the platform's ordinary reach — every subsequent `deploy.sh` run leaves the self-chosen password standing, and boot-time seeding does too, however many times the container restarts.
 
-The platform can take it back, but only by saying so: `npm run seed:admin -- --rotate-password` rewrites `password_hash` from the current `ADMIN_PASSWORD` and is what `deploy.sh --set-password` runs (Section 4.3). That is the whole of the difference between the two, and it is an argument at the call site rather than a rule this app evaluates for itself — from inside the container an operator's rotation and an admin's own change are the same observation, a stored hash that no longer matches `ADMIN_PASSWORD`, so any rule keyed on that difference would revert self-chosen passwords while believing it was rotating.
+The platform can take it back, but only by saying so: `npm run seed:admin -- --rotate-password` rewrites `password_hash` from the current `ADMIN_PASSWORD` — and, in the same transaction, deletes every session that account holds, so the self-chosen password does not survive in a cookie either (Section 5.4). It is what `deploy.sh --set-password` runs (Section 4.3). That is the whole of the difference between the two, and it is an argument at the call site rather than a rule this app evaluates for itself — from inside the container an operator's rotation and an admin's own change are the same observation, a stored hash that no longer matches `ADMIN_PASSWORD`, so any rule keyed on that difference would revert self-chosen passwords while believing it was rotating.
 
 ### 5.4 Sessions
 
@@ -599,6 +605,15 @@ CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 ```
 
 Sliding expiry is **not** refreshed on every request — that would mean a write per request. `expires_at` is extended only when less than `SESSION_REFRESH_THRESHOLD_DAYS` remain. Expired rows are purged by the maintenance job (Section 7.9).
+
+**Everything that ends a session before its expiry.** The four are worth listing together, because "the password changed" and "the sessions ended" are not the same event and the difference between them is where a leaked credential survives:
+
+- `POST /api/auth/logout` deletes the caller's own session row.
+- `POST /api/auth/reset` (the security-question flow) deletes **every** session of that user — the account has just been taken back by someone proving they hold the answer, and none of the old sessions may be assumed to be theirs.
+- `POST /api/auth/change-password` deletes every session of that user **except the caller's own**. A human is standing in that browser tab, and signing them out of the tab they are in would be hostile.
+- `npm run seed:admin -- --rotate-password` (Section 4.3) deletes every session of the admin account, with no exception, in the same transaction as the hash write. It runs from a CLI in a container, so there is no caller session to keep, and the operator's intent in rotating is that the old credential stops working.
+
+Deleting the account (Section 10.6) takes its sessions with it through `ON DELETE CASCADE` above, which is a consequence of the row going rather than a fifth mechanism. Nothing else ends a session early. In particular, boot-time seeding (`initialiseDatabase`, Section 13.4) touches this table not at all: it runs on every container start, and a revocation there would sign the admin out on every restart and every rebuild.
 
 ### 5.5 Fog state
 
@@ -1741,7 +1756,7 @@ not. The complete set a rebuilder must implement: `bar_not_found`, `city_not_fou
 - All input validated with `zod` at the route boundary.
 - Parameterised SQL exclusively.
 - No stack traces or SQL errors in responses.
-- Password reset invalidates every existing session of that user.
+- Password reset invalidates every existing session of that user, and so does an operator's `seed:admin -- --rotate-password` for the admin account (Sections 4.3, 5.4) — a rotation prompted by a leak has to end the sessions the leaked password opened, or it has fixed nothing.
 - The VAPID private key (Section 5.9) is generated on first boot and persisted in the same directory as the SQLite database — the same volume that already holds every password hash, so this widens no boundary. It is never logged, never returned by any API response, and never committed; `GET /api/push/vapid-public-key` (Section 9.2) serves only the public half.
 
 #### The admin teleport, and why it takes nothing away
@@ -2099,7 +2114,7 @@ These are consequences to design around, not reasons to reconsider:
 
 1. **No security through obscurity.** Rate limits, the session model, and the security-question reset flow are all publicly readable. They are specified to hold up under that assumption; the rate limits in Section 9.4 are load-bearing, not decorative — which is precisely why the proxy-header requirement in that section is a correctness issue, not a detail.
 2. **Bar positions are public.** `bars.json` is in the repository, so the "hidden until discovered" mechanic is a gameplay convention, not a secret. This is acceptable — the underlying data is public OSM data regardless. The API still refuses to leak undiscovered bars (Sections 7.4, 9.5), because the convention should not be broken by the app itself.
-3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USER` and `ADMIN_PASSWORD` environment variables. A hard-coded admin credential in a public repository is a critical failure. The account is seeded with `must_change_password = 0`, because on the Pi that credential is chosen by the operator and managed by the platform rather than shipped with the image — Section 5.3 sets out why forcing a change there breaks the managed path in rather than protecting it. Boot-time seeding creates and never overwrites (`seedAdmin` in `packages/api/src/db/seed-admin.ts`, called by `initialiseDatabase`); rewriting an existing account's password is a separate function that only `npm run seed:admin -- --rotate-password` calls, so no container restart can revert a password (Section 4.3).
+3. **The admin account is never in code.** It is seeded on first boot from `ADMIN_USER` and `ADMIN_PASSWORD` environment variables. A hard-coded admin credential in a public repository is a critical failure. The account is seeded with `must_change_password = 0`, because on the Pi that credential is chosen by the operator and managed by the platform rather than shipped with the image — Section 5.3 sets out why forcing a change there breaks the managed path in rather than protecting it. Boot-time seeding creates and never overwrites (`seedAdmin` in `packages/api/src/db/seed-admin.ts`, called by `initialiseDatabase`); rewriting an existing account's password, and ending that account's sessions with it, is a separate function that only `npm run seed:admin -- --rotate-password` calls, so no container restart can revert a password or sign anybody out (Section 4.3).
 4. **Secret scanning.** GitHub secret scanning and push protection are enabled on the repository. Any secret that ever lands in history must be rotated, not merely deleted.
 
 ---
@@ -2131,6 +2146,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 
 A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
 
+- **v1.45** — A rotation ends the sessions held under the old password. `npm run seed:admin -- --rotate-password` now deletes every session of the admin account in the same transaction as the hash write, so a cookie opened under the leaked credential dies with it; the run says so in its one line. Only that account's sessions, and no session is kept back — there is no caller's tab to spare from a CLI, unlike `POST /api/auth/change-password`. Boot-time seeding still cannot reach any of it: `seedAdmin` takes no options, its return type excludes `rotated`, and only the CLI names the rotating function — a revocation on the boot path would sign the admin out on every container restart. Section 4.3 also stops counting the platform's other sites: `dishlist` was added to `sites.conf` after that section was written, so the verified `su-exec` observation now names the two sites it was made against and the count is left to `sites.conf`. Sections 4.3, 5.3, 5.4, 10.1, 13.4.
 - **v1.44** — `npm run seed:admin` gains one flag, `--rotate-password`, and stops reporting two different situations with the same sentence. Without the flag it is unchanged: create the admin account if it is missing, otherwise touch nothing. With it, an existing account's `password_hash` is rewritten from `ADMIN_PASSWORD` and nothing else about the row is — which is how `deploy.sh --set-password` reaches this site, and the only way it can, since from inside the container an operator's rotation and an admin's own password change are the same observation. Boot-time seeding calls a function that has no rotate path at all, so no restart can revert a password. Four outcomes now carry four messages, and exactly one of them — `ADMIN_USER`/`ADMIN_PASSWORD` absent — exits nonzero, so `deploy.sh`'s `|| echo WARN` fires for a real misconfiguration and not on every ordinary deploy. An unrecognised argument aborts the run rather than being ignored. Sections 4.3, 5.3, 13.4.
 - **v1.43** — The admin's teleport picker draws Section 7.3's fog and the admin's discovered bar markers, behind an opt-in on the one map-picker component that Suggest a bar does not pass, so that picker is unchanged. In the teleport picker the markers are decoration and not controls — inert spans, no focus, `pointer-events: none`, the set hidden from assistive technology — because a 44 px marker sitting on a bar would otherwise swallow the one tap the screen exists to make. Undiscovered bars are still not drawn anywhere. Sections 8.3, 9.3.
 - **v1.42** — Teleport becomes a mode the client honours instead of a one-shot it never hears about: `GET` and `DELETE` join the `POST` on `/api/admin/teleport` behind the same registration gate and the same `requireAdmin`, the clear carries no exclusion precondition and drops the caller's last accepted position with the mode, and the map screen stops watching GPS and reports the teleported point as the position while one stands — posting from it on the ordinary cadence through an unchanged `POST /api/samples`. The map says so in a bar across its top band and carries the way out beside the words. The state is in memory beside the previous-accepted-position map: it survives a reload, not a restart. Sections 7.2, 8.3, 9.3, 9.6, 10.2.
@@ -2197,4 +2213,4 @@ Kept only where a future reader might otherwise re-propose the reverted thing an
 
 ---
 
-_End of specification v1.44_
+_End of specification v1.45_

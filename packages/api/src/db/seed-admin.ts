@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { hashPassword } from '../auth/password.js';
+import { deleteSessionsForUser } from '../auth/session.js';
 import type { Env } from '../env.js';
 
 const SEEDED_ADMIN_SECURITY_QUESTION =
@@ -15,8 +16,9 @@ const SEEDED_ADMIN_SECURITY_QUESTION =
 export type SeedAdminOutcome =
   // The account did not exist and was created from ADMIN_USER/ADMIN_PASSWORD.
   | 'seeded'
-  // The account existed and its password_hash was rewritten from
-  // ADMIN_PASSWORD. Only `seedAdminRotatingPassword` can ever return this.
+  // The account existed, its password_hash was rewritten from ADMIN_PASSWORD
+  // and every session it held was deleted. Only `seedAdminRotatingPassword`
+  // can ever return this.
   | 'rotated'
   // The account existed and was left exactly as it was.
   | 'exists'
@@ -38,9 +40,13 @@ export type SeedAdminCreateOnlyOutcome = Exclude<SeedAdminOutcome, 'rotated'>;
  * only way to rotate is to call the other exported function by name, which
  * only `seed-admin-cli.ts` does and only when `--rotate-password` was passed.
  *
- * It never touches an existing row. An admin who changes their own password in
- * the app (`POST /api/auth/change-password`) keeps it across every deploy —
- * see `seedAdminRotatingPassword` for why nothing in here may guess otherwise.
+ * It never touches an existing row, and — since rotation gained the power to
+ * end sessions (v1.45) — it must never touch the `sessions` table either. A
+ * boot-time path that could revoke would sign the admin out on every container
+ * restart and every rebuild, on top of reverting their password: two silent
+ * failures where there was one. An admin who changes their own password in the
+ * app (`POST /api/auth/change-password`) keeps it across every deploy — see
+ * `seedAdminRotatingPassword` for why nothing in here may guess otherwise.
  */
 export async function seedAdmin(
   db: Database.Database,
@@ -84,7 +90,7 @@ export async function seedAdmin(
 
 /**
  * Create the admin account if it does not exist, and otherwise rewrite its
- * `password_hash` from `ADMIN_PASSWORD`.
+ * `password_hash` from `ADMIN_PASSWORD` and end every session it holds.
  *
  * This is an overwrite of a credential and it is deliberately something a
  * caller has to ask for by name. It exists for one caller only: `npm run
@@ -106,6 +112,21 @@ export async function seedAdmin(
  * admin.env" from "the admin changed their own password"; the two look
  * identical from here. That is why the overwrite has to be an explicit act at
  * the call site rather than a condition this file evaluates.
+ *
+ * **It revokes.** Rewriting the hash alone would leave a session opened under
+ * the *old* password valid for the rest of its 90-day sliding expiry (Section
+ * 5.4) — acceptable for routine hygiene, useless when the rotation is
+ * happening *because* the old password leaked, which is the case the operator
+ * cannot afford to get wrong. So this deletes the account's sessions too.
+ *
+ * `deleteSessionsForUser`, not `deleteOtherSessionsForUser`, and the
+ * difference is the whole reason both exist. `POST /api/auth/change-password`
+ * keeps the caller's own session, because there a human is standing in a
+ * browser tab and signing them out of it would be hostile. Here there is no
+ * caller session to keep: this runs from a CLI inside a container, out of
+ * `deploy.sh --set-password`, and the operator's stated intent is precisely
+ * that the old credential stops working everywhere. Keeping "the current one"
+ * would mean keeping an arbitrary one.
  */
 export async function seedAdminRotatingPassword(
   db: Database.Database,
@@ -128,6 +149,14 @@ export async function seedAdminRotatingPassword(
     return created;
   }
 
+  // Everything from here is the rotate path, and it is reached only from
+  // `created === 'exists'` — an account that was already there. The three
+  // other outcomes returned above, and none of them may revoke: 'seeded' has
+  // just minted a user id no session can yet reference, so a delete there
+  // would be a no-op implying something happened; 'exists' without the flag
+  // never arrives here at all (it is `seedAdmin`'s answer to its own caller);
+  // and 'no-credentials' wrote nothing to revoke against.
+  //
   // `password_hash` and nothing else. Not `must_change_password` (Section 5.3:
   // it is 0 on purpose, and setting it would lock the platform out of the only
   // account it manages), not `is_admin`, not `avatar_seed`, and not the
@@ -138,9 +167,44 @@ export async function seedAdminRotatingPassword(
   //
   // Matched on `username` rather than on the id read above because
   // `users.username` is UNIQUE COLLATE NOCASE, so this is the same single row
-  // `seedAdmin` just found, case-insensitively, in one statement.
+  // `seedAdmin` just found, case-insensitively, in one statement. `RETURNING
+  // id` then hands the delete below the id of the row this statement actually
+  // wrote, rather than one re-derived from a second lookup that could in
+  // principle answer differently.
+  //
+  // Argon2 runs before the transaction opens, not inside it: better-sqlite3
+  // transactions are synchronous, and holding the write lock across a
+  // deliberately slow hash would block the booting server's migrations for no
+  // reason.
   const passwordHash = await hashPassword(adminPassword);
-  db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(passwordHash, adminUser);
+
+  // One transaction, because a half-done rotation is worse than either whole:
+  // a hash written without the revocation leaves the leaked password's
+  // sessions alive while the operator is told they are gone, and a revocation
+  // without the hash signs the admin out and hands them back the old password
+  // to sign in with. `db.transaction` is how the rest of this codebase groups
+  // writes that must both land (`routes/account.ts`, `routes/fog.ts`,
+  // `db/migrate.ts`), and it rolls back on a throw.
+  const rotate = db.transaction((hash: string): void => {
+    const updated = db
+      .prepare<[string, string], { id: number }>(
+        'UPDATE users SET password_hash = ? WHERE username = ? RETURNING id',
+      )
+      .get(hash, adminUser);
+    if (!updated) {
+      // The row `seedAdmin` found a moment ago is gone. Nothing in the deploy
+      // flow can do that, so this is loud rather than quiet: the alternative
+      // is reporting a rotation that wrote nothing, which is the exact silent
+      // no-op this script was rebuilt to eliminate. Throwing here also rolls
+      // the transaction back. No secret is named.
+      throw new Error(
+        'seed:admin: the admin account disappeared while its password was being rotated. ' +
+          'Nothing was written and no session was ended.',
+      );
+    }
+    deleteSessionsForUser(db, updated.id);
+  });
+  rotate(passwordHash);
 
   return 'rotated';
 }

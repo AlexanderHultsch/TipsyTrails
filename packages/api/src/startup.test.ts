@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createSession } from './auth/session.js';
 import { openDatabase } from './db/index.js';
 import { loadEnv } from './env.js';
 import { initialiseDatabase } from './startup.js';
@@ -146,6 +147,48 @@ describe('initialiseDatabase', () => {
       .get('admin');
     expect(row?.password_hash).toBe('self-chosen-hash');
     expect(usersCount()).toBe(1);
+  });
+
+  it('signs nobody out, however many times the container restarts', async () => {
+    // Rotation ends the account's sessions (Section 4.3), and boot must stay
+    // structurally unable to reach that: a revocation on this path would sign
+    // the admin out on every restart and every rebuild, with nothing in a log
+    // to say why. `startup.ts` imports `seedAdmin`, which touches the sessions
+    // table not at all.
+    dbPath = join(tmpdir(), `tipsytrails-startup-test-${randomUUID()}.db`);
+    const env = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'correct-horse',
+    });
+
+    const firstDb = await initialiseDatabase(env);
+    const adminId = firstDb
+      .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+      .get('admin')?.id;
+    expect(adminId).toBeDefined();
+    createSession(firstDb, adminId!);
+    firstDb.close();
+
+    // The operator has since rotated the platform's shared credential, so
+    // every restart from here arrives with a different ADMIN_PASSWORD.
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    for (let restart = 0; restart < 3; restart += 1) {
+      const bootDb = await initialiseDatabase(rotatedEnv);
+      bootDb.close();
+    }
+
+    db = openDatabase(dbPath);
+    const sessions = db
+      .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM sessions')
+      .get();
+    expect(sessions?.count).toBe(1);
   });
 
   it('leaves the user table empty when admin variables are absent', async () => {

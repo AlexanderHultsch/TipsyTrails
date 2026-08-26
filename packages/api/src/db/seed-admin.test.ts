@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
+import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildApp } from '../app.js';
 import { verifyPassword } from '../auth/password.js';
+import { createSession } from '../auth/session.js';
 import { loadEnv } from '../env.js';
 import { openDatabase } from './index.js';
 import { runMigrations } from './migrate.js';
@@ -40,6 +43,41 @@ afterEach(() => {
 
 function usersCount(): number {
   return db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM users').get()?.count ?? 0;
+}
+
+// Sessions are counted, never listed: a session id is a bearer credential and
+// has no business in a test's output (Section 4.3 — nothing on this path may
+// print a password, a hash or a session id).
+function sessionsCount(): number {
+  return (
+    db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM sessions').get()?.count ?? 0
+  );
+}
+
+function sessionsCountFor(userId: number): number {
+  return (
+    db
+      .prepare<[number], { count: number }>(
+        'SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?',
+      )
+      .get(userId)?.count ?? 0
+  );
+}
+
+// An ordinary player, so every assertion below can say whose sessions ended
+// and whose did not. Rotation is scoped to one account, and "it deleted the
+// right rows" and "it deleted every row" look identical with only one user in
+// the table.
+function insertPlayer(username: string): number {
+  const now = Math.floor(Date.now() / 1000);
+  const result = db
+    .prepare(
+      `INSERT INTO users
+        (username, password_hash, security_question, security_answer_hash, avatar_seed, age_confirmed_at, created_at)
+       VALUES (?, 'not-a-real-hash', 'First pet?', 'not-a-real-hash', ?, ?, ?)`,
+    )
+    .run(username, randomUUID(), now, now);
+  return Number(result.lastInsertRowid);
 }
 
 interface AdminRow {
@@ -218,6 +256,31 @@ describe('seedAdmin', () => {
     expect(results).toEqual(['exists', 'exists', 'exists']);
     expect(getAdmin().password_hash).toBe('self-chosen-hash');
   });
+
+  it('never ends a session, however many times the container restarts', async () => {
+    // The second half of the same safety property. Rotation revokes; boot
+    // calls this function, and if the revocation could be reached from here
+    // the admin would be signed out on every restart and every rebuild — on
+    // top of having their password reverted.
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    await seedAdmin(db, env);
+    const adminId = getAdmin().id;
+    const playerId = insertPlayer('trailwalker');
+    createSession(db, adminId);
+    createSession(db, playerId);
+
+    const rotatingEnv = loadEnv({
+      ...baseEnv,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    for (let restart = 0; restart < 3; restart += 1) {
+      expect(await seedAdmin(db, rotatingEnv)).toBe('exists');
+    }
+
+    expect(sessionsCountFor(adminId)).toBe(1);
+    expect(sessionsCountFor(playerId)).toBe(1);
+  });
 });
 
 describe('seedAdminRotatingPassword', () => {
@@ -331,5 +394,232 @@ describe('seedAdminRotatingPassword', () => {
 
     expect(result).toBe('no-credentials');
     expect(usersCount()).toBe(0);
+  });
+
+  it("ends every session the admin held, and no other account's", async () => {
+    // A session opened under the old password would otherwise stay valid for
+    // the rest of its 90-day sliding expiry (Section 5.4), which is the whole
+    // of the difference between hygiene and a response to a leak.
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    await seedAdmin(db, env);
+    const adminId = getAdmin().id;
+    const playerId = insertPlayer('trailwalker');
+    // Two, because an operator's phone and laptop are the ordinary case and
+    // "deleted one" must not read as "deleted them all".
+    createSession(db, adminId);
+    createSession(db, adminId);
+    createSession(db, playerId);
+    expect(sessionsCount()).toBe(3);
+
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    const result = await seedAdminRotatingPassword(db, rotatedEnv);
+
+    expect(result).toBe('rotated');
+    expect(sessionsCountFor(adminId)).toBe(0);
+    // Rotating one account's credential is not a reason to sign the city out.
+    expect(sessionsCountFor(playerId)).toBe(1);
+    expect(sessionsCount()).toBe(1);
+  });
+
+  it('ends no session when it creates the account rather than rotating one', async () => {
+    // 'seeded' is not a rotation. The account is new, so it can hold nothing
+    // to revoke, and a delete here would only be a no-op that implies
+    // something happened. Everyone else's sessions are equally not its
+    // business.
+    const playerId = insertPlayer('trailwalker');
+    createSession(db, playerId);
+
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    const result = await seedAdminRotatingPassword(db, env);
+
+    expect(result).toBe('seeded');
+    expect(sessionsCountFor(playerId)).toBe(1);
+    expect(sessionsCount()).toBe(1);
+  });
+
+  it('ends no session when the credentials are absent', async () => {
+    const playerId = insertPlayer('trailwalker');
+    createSession(db, playerId);
+
+    const result = await seedAdminRotatingPassword(
+      db,
+      loadEnv({ ...baseEnv, ADMIN_USER: 'admin' }),
+    );
+
+    expect(result).toBe('no-credentials');
+    expect(sessionsCount()).toBe(1);
+    expect(sessionsCountFor(playerId)).toBe(1);
+  });
+
+  it('writes the hash and ends the sessions in one transaction, or neither', async () => {
+    // The two halves must not be able to half-happen: a hash written without
+    // the revocation leaves the old password's sessions alive while the
+    // operator is told they are gone, and a revocation without the hash signs
+    // the admin out and hands them back the old password to sign in with.
+    // A trigger that refuses the DELETE is the cheapest way to fail the second
+    // write after the first has already been made, and it fails inside the
+    // transaction exactly as a locked database or a disk error would.
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    await seedAdmin(db, env);
+    const adminId = getAdmin().id;
+    createSession(db, adminId);
+    const hashBefore = getAdmin().password_hash;
+
+    db.exec(
+      `CREATE TRIGGER refuse_session_delete BEFORE DELETE ON sessions
+         BEGIN SELECT RAISE(ABORT, 'session delete refused by test'); END`,
+    );
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+
+    try {
+      await expect(seedAdminRotatingPassword(db, rotatedEnv)).rejects.toThrow(
+        /session delete refused by test/,
+      );
+    } finally {
+      db.exec('DROP TRIGGER refuse_session_delete');
+    }
+
+    // Rolled back: the password the operator was never told about is not left
+    // standing, and the session is still the one it was.
+    expect(getAdmin().password_hash).toBe(hashBefore);
+    expect(await verifyPassword(getAdmin().password_hash, 'correct-horse')).toBe(true);
+    expect(sessionsCountFor(adminId)).toBe(1);
+  });
+});
+
+// The claim the operator is being sold is not "a row was deleted", it is "the
+// cookie in the hands of whoever had the old password no longer opens
+// anything". That is only provable against the running app, so this block
+// signs in for real, over HTTP, and asks the server afterwards.
+describe('seedAdminRotatingPassword against a live session', () => {
+  // Private to this describe: buildApp's resolveVapidConfig (Section 5.9)
+  // generates a key file next to DATABASE_PATH, and a path shared with
+  // another test file would mean sharing that key file too.
+  let vapidDir: string;
+  let app: FastifyInstance;
+
+  const origin = baseEnv.PUBLIC_ORIGIN;
+
+  function cookieFrom(response: LightMyRequestResponse): string {
+    const setCookie = response.headers['set-cookie'];
+    const header = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+    if (!header) {
+      throw new Error('expected a Set-Cookie header');
+    }
+    // Only the `name=value` pair, exactly as a browser would send it back.
+    return header.split(';')[0];
+  }
+
+  function login(password: string): Promise<LightMyRequestResponse> {
+    // The CSRF Origin check (Section 10.1) runs in front of this route, so
+    // the header is the one a same-origin request from the SPA would carry.
+    return app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { origin },
+      payload: { username: 'admin', password },
+    });
+  }
+
+  beforeEach(() => {
+    vapidDir = join(tmpdir(), `tipsytrails-seed-admin-app-test-${randomUUID()}`);
+    app = buildApp(
+      loadEnv({ ...baseEnv, NODE_ENV: 'test', DATABASE_PATH: join(vapidDir, 'tipsytrails.db') }),
+      db,
+    );
+  });
+
+  afterEach(() => {
+    rmSync(vapidDir, { recursive: true, force: true });
+  });
+
+  it('leaves a session minted under the old password unable to authenticate', async () => {
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    await seedAdmin(db, env);
+    const adminId = getAdmin().id;
+
+    const signedIn = await login('correct-horse');
+    expect(signedIn.statusCode).toBe(200);
+    const oldCookie = cookieFrom(signedIn);
+    expect(sessionsCountFor(adminId)).toBe(1);
+
+    // It works before the rotation, or the assertion after it proves nothing.
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: oldCookie },
+    });
+    expect(before.statusCode).toBe(200);
+
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    expect(await seedAdminRotatingPassword(db, rotatedEnv)).toBe('rotated');
+
+    // The table, and then the app: the row is gone, and the cookie that row
+    // backed is now worth nothing to a real request.
+    expect(sessionsCountFor(adminId)).toBe(0);
+    const after = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: oldCookie },
+    });
+    expect(after.statusCode).toBe(401);
+
+    // And the rotation itself landed: the old password is dead at the door,
+    // the new one opens it, and the session it opens is a new row.
+    expect((await login('correct-horse')).statusCode).toBe(401);
+    const signedInAgain = await login('the-newly-rotated-shared-password');
+    expect(signedInAgain.statusCode).toBe(200);
+    expect(cookieFrom(signedInAgain)).not.toBe(oldCookie);
+    expect(sessionsCountFor(adminId)).toBe(1);
+  });
+
+  it('leaves a signed-in player exactly where they were', async () => {
+    // The operator rotating the admin credential is not a reason to sign the
+    // city out, and `deleteSessionsForUser` is scoped to one account for
+    // precisely that reason.
+    const env = loadEnv({ ...baseEnv, ADMIN_USER: 'admin', ADMIN_PASSWORD: 'correct-horse' });
+    await seedAdmin(db, env);
+
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/auth/register',
+      headers: { origin },
+      payload: {
+        username: 'trailwalker',
+        password: 'correct horse battery staple',
+        securityQuestion: 'First pet?',
+        securityAnswer: 'Rex',
+        ageConfirmed: true,
+      },
+    });
+    expect(registered.statusCode).toBe(201);
+    const playerCookie = cookieFrom(registered);
+
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    expect(await seedAdminRotatingPassword(db, rotatedEnv)).toBe('rotated');
+
+    const stillSignedIn = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { cookie: playerCookie },
+    });
+    expect(stillSignedIn.statusCode).toBe(200);
+    expect(stillSignedIn.json().username).toBe('trailwalker');
   });
 });

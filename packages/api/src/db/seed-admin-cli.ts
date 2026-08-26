@@ -40,8 +40,9 @@ export const ROTATE_PASSWORD_FLAG = '--rotate-password';
 // Without `--rotate-password` it never resets a password an admin has since
 // changed — that property lives in `seedAdmin` itself (Section 13.4) and this
 // script adds nothing on top of it. With the flag it deliberately does reset
-// it, because the operator has just asked for exactly that through
-// `deploy.sh --set-password`; see `seedAdminRotatingPassword`.
+// it, and ends the account's existing sessions with it, because the operator
+// has just asked for exactly that through `deploy.sh --set-password`; see
+// `seedAdminRotatingPassword`.
 
 /**
  * Parse the script's arguments by hand. One flag, no values, no dependency.
@@ -96,8 +97,14 @@ export function describeSeedAdminOutcome(
     case 'seeded':
       return { message: `seed:admin: created the admin account (${adminUser}).`, exitCode: 0 };
     case 'rotated':
+      // The revocation is named because both readers of this line need it: an
+      // operator rotating a leaked password has to see that the leaked
+      // sessions are actually gone, and one rotating routinely has to know why
+      // the admin was signed out. One line, and no secret in it.
       return {
-        message: `seed:admin: updated the password of the admin account (${adminUser}) from ADMIN_PASSWORD.`,
+        message:
+          `seed:admin: updated the password of the admin account (${adminUser}) from ADMIN_PASSWORD ` +
+          'and ended its existing sessions, so the old password no longer signs in anywhere.',
         exitCode: 0,
       };
     case 'exists':

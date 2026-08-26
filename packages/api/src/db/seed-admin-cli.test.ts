@@ -14,6 +14,7 @@ import {
   runSeedAdminCli,
 } from './seed-admin-cli.js';
 import { verifyPassword } from '../auth/password.js';
+import { createSession } from '../auth/session.js';
 import { loadEnv } from '../env.js';
 import type { SeedAdminOutcome } from './seed-admin.js';
 
@@ -47,16 +48,28 @@ function usersCount(): number {
   return db.prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM users').get()?.count ?? 0;
 }
 
-function getAdmin(): { password_hash: string } {
+function getAdmin(): { id: number; password_hash: string } {
   const row = db
-    .prepare<[string], { password_hash: string }>(
-      'SELECT password_hash FROM users WHERE username = ?',
+    .prepare<[string], { id: number; password_hash: string }>(
+      'SELECT id, password_hash FROM users WHERE username = ?',
     )
     .get('admin');
   if (!row) {
     throw new Error('expected admin row to exist');
   }
   return row;
+}
+
+// Counted, never listed: a session id is a bearer credential and does not
+// belong in test output any more than a password or a hash does.
+function sessionsCountFor(userId: number): number {
+  return (
+    db
+      .prepare<[number], { count: number }>(
+        'SELECT COUNT(*) AS count FROM sessions WHERE user_id = ?',
+      )
+      .get(userId)?.count ?? 0
+  );
 }
 
 describe('runSeedAdminCli', () => {
@@ -263,6 +276,17 @@ describe('describeSeedAdminOutcome', () => {
     expect(describeSeedAdminOutcome('exists', 'admin').message).toContain(ROTATE_PASSWORD_FLAG);
   });
 
+  it('tells the operator, on the rotated line, that the existing sessions were ended', () => {
+    // Both readers need it: after a leak, that the leaked sessions are
+    // actually gone; after routine hygiene, why the admin was signed out.
+    const { message } = describeSeedAdminOutcome('rotated', 'admin');
+
+    expect(message).toMatch(/sessions/i);
+    expect(message).toMatch(/ended/i);
+    // One line, because it is read in a deploy log next to three others.
+    expect(message).not.toContain('\n');
+  });
+
   it('names neither the password nor a hash in any message', () => {
     for (const outcome of outcomes) {
       const { message } = describeSeedAdminOutcome(outcome, 'admin');
@@ -310,6 +334,35 @@ describe('runSeedAdminCli --rotate-password', () => {
 
     expect(usersCount()).toBe(1);
     expect(await verifyPassword(getAdmin().password_hash, 'correct-horse')).toBe(true);
+  });
+
+  it("ends the admin's existing sessions, through the flag and nothing else", async () => {
+    const env = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'correct-horse',
+    });
+    await runSeedAdminCli(env, []);
+    const adminId = getAdmin().id;
+    createSession(db, adminId);
+
+    // An ordinary run first: it finds the account, changes nothing, and must
+    // leave the session alone — this is every deploy of a healthy site, and
+    // it runs on every boot besides.
+    await expect(runSeedAdminCli(env, [])).resolves.toBe(0);
+    expect(sessionsCountFor(adminId)).toBe(1);
+
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+
+    await expect(runSeedAdminCli(rotatedEnv, [ROTATE_PASSWORD_FLAG])).resolves.toBe(0);
+
+    expect(sessionsCountFor(adminId)).toBe(0);
   });
 
   it('still exits 1 with the flag when the credentials are absent', async () => {
