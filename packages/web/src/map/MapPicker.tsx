@@ -3,8 +3,12 @@ import maplibregl from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 import { CONFIG, toCell } from '@tipsytrails/shared';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { LocateButton } from '../components/LocateButton.js';
 import { getLastKnownPosition } from '../tracking/lastKnownPosition.js';
+import { useBarMarkers } from './bars/useBarMarkers.js';
+import { useDiscoveredBars } from './bars/useDiscoveredBars.js';
+import { useFogLayer } from './fog/useFogLayer.js';
 import { inkStyle } from './ink-style.js';
 import { useOwnPositionMarker } from './position/useOwnPositionMarker.js';
 import { useCityMaxBounds } from './useCityMaxBounds.js';
@@ -18,6 +22,19 @@ const INITIAL_ZOOM = 14;
 const PIN_SVG_PATH =
   'M12 2C7.6 2 4 5.6 4 10c0 6 8 12 8 12s8-6 8-12c0-4.4-3.6-8-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z';
 
+// Nothing in a picker discovers a bar or reveals a cell, so neither version
+// counter this map's layers are driven by ever advances here: the fog mask
+// and the bar list are each fetched once, on mount, and the layers below are
+// as static as the pin they sit under. Named rather than repeated as a bare
+// `0` at three call sites, so that reads as the decision it is.
+const NEVER_ADVANCES = 0;
+// The bars whose discovery stamp is playing (map/bars/useBarStamps.ts). A
+// picker runs no stamp - there is no discovery to celebrate on it - so this
+// is permanently empty, and it is a module constant rather than an inline
+// `new Set()` because useBarMarkers keys an effect on the identity of this
+// value.
+const NO_STAMPING: ReadonlySet<number> = new Set<number>();
+
 export interface PickedPosition {
   lat: number;
   lon: number;
@@ -26,6 +43,57 @@ export interface PickedPosition {
 interface MapPickerProps {
   value: PickedPosition | null;
   onPick: (position: PickedPosition) => void;
+  /**
+   * SPEC.md Section 9.3: draw the player's own view of the city into the
+   * picker — Section 7.3's fog over the ground they have not explored, and
+   * their discovered bars as the same cocktail glasses the map screen draws
+   * (Section 7.4).
+   *
+   * Opt-in, and off by default, because it exists for exactly one caller.
+   * The admin's teleport picker is asked to aim *at a bar*, which is
+   * impossible on a map that draws no bars; Suggest a bar is asked to point
+   * at a building the person is standing in front of, where the fog would
+   * cover the streets they are pointing by and a marker would sit on the
+   * spot they are aiming at. Two questions, two maps, one component.
+   */
+  showPlayerView?: boolean;
+}
+
+// The three layers `showPlayerView` adds, as a component rather than as
+// three hooks with a flag threaded through each, so that the caller that
+// does not ask for them mounts nothing at all: no `GET /api/fog`, no
+// `GET /api/bars`, no marker container. A flag inside MapPicker could not
+// buy that - a hook cannot be called conditionally, and useDiscoveredBars
+// fetches the moment it is called.
+//
+// It renders nothing. Everything here attaches to the MapLibre instance
+// directly, which is why it takes the map rather than living in the tree
+// under it.
+function PlayerViewLayers({ map }: { map: maplibregl.Map }) {
+  // Both callers of MapPicker are behind RequireAuth (auth/route-guards.tsx),
+  // so the user is resolved before either mounts; the `null` fallback is for
+  // useFogLayer's own contract, which uses the id to key its offline cache
+  // (map/fog/fog-cache.ts) and disables that cache rather than sharing an
+  // unowned entry when there is no id.
+  const { user } = useCurrentUser();
+  useFogLayer(map, NEVER_ADVANCES, user?.id ?? null);
+  const bars = useDiscoveredBars(NEVER_ADVANCES);
+  // `onSelect: null` — the markers are decoration here and must not be
+  // controls. THIS IS THE POINT OF THE WHOLE FEATURE AND NOT A DETAIL: a
+  // marker is a 44 px tap target sitting exactly on its bar, and the picker
+  // exists to drop the pin exactly on a bar. Left interactive, the one spot
+  // the admin most needs to tap is the one spot the tap cannot reach. A
+  // no-op handler would not fix it - the element still swallows the event -
+  // so the marker layer is told it is not a control at all, which also
+  // settles what it announces and whether it takes focus
+  // (map/bars/bar-markers.ts).
+  //
+  // Discovered bars only, which is what `GET /api/bars` returns. Section
+  // 7.4 keeps an undiscovered bar's position hidden, and an admin-only map
+  // drawing them would be a second place that rule has to be reasoned
+  // about - for a case the admin bar list already covers, with coordinates.
+  useBarMarkers(map, bars, NO_STAMPING, null);
+  return null;
 }
 
 // SPEC.md Section 11.3: "a map picker to place the pin (mandatory - this is
@@ -35,7 +103,10 @@ interface MapPickerProps {
 // positioned DOM element reprojected via map.project on 'move', the same
 // approach map/bars/bar-markers.ts takes for bar markers rather than
 // maplibregl.Marker, for the same testability reason that file states.
-export function MapPicker({ value, onPick }: MapPickerProps) {
+//
+// What it draws is the ink style and the pin, plus - only for a caller that
+// asks - the fog and the discovered bars (`showPlayerView` above).
+export function MapPicker({ value, onPick, showPlayerView = false }: MapPickerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [mapInstance, setMapInstance] = useState<maplibregl.Map | null>(null);
   const [pinPoint, setPinPoint] = useState<{ x: number; y: number } | null>(null);
@@ -202,6 +273,7 @@ export function MapPicker({ value, onPick }: MapPickerProps) {
   return (
     <div className="map-picker">
       <div ref={containerRef} className="map-picker__map" />
+      {showPlayerView && mapInstance && <PlayerViewLayers map={mapInstance} />}
       {pinPoint && (
         <svg
           className="map-picker__pin"

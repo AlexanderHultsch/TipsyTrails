@@ -17,17 +17,27 @@ export function useBarMarkers(
   // (map/bars/useBarStamps.ts), whose markers hand their ink to the stamp
   // for its duration - see BarMarkers.setStamping.
   stampingBarIds: ReadonlySet<number>,
-  onSelect: (bar: Bar) => void,
+  // `null` draws the markers as decoration rather than as controls - see
+  // BarMarkers' own comment for what that changes and why the admin's
+  // teleport picker (map/MapPicker.tsx) needs it. Read through a ref like
+  // the function case, so an inline arrow at a call site does not remount
+  // the marker layer on every render; whether it is null, however, is what
+  // the mode is built from, so *that* is a dependency of the effect below.
+  onSelect: ((bar: Bar) => void) | null,
 ): void {
   const markersRef = useRef<BarMarkers | null>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const interactive = onSelect !== null;
 
   useEffect(() => {
     if (!map) {
       return;
     }
-    const markers = new BarMarkers({ map, onSelect: (bar) => onSelectRef.current(bar) });
+    const markers = new BarMarkers({
+      map,
+      onSelect: interactive ? (bar) => onSelectRef.current?.(bar) : null,
+    });
     markersRef.current = markers;
 
     return () => {
@@ -36,7 +46,7 @@ export function useBarMarkers(
     };
     // Mount-only per map instance, matching useFogLayer.ts's own mount-only
     // effect - a new `map` means a fresh BarMarkers, not an update.
-  }, [map]);
+  }, [map, interactive]);
 
   // Before the bars, and that order is load-bearing: a batch that discovers
   // a bar publishes the stamping id and the refetched list in the same

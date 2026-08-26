@@ -159,6 +159,33 @@ function communityBar(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// GET /api/fog's body is the raw bitmask and its progress rides in a header
+// (api/client.ts), so it cannot be jsonResponse. Same shape as
+// App.test.tsx's own fogResponse helper - there is no shared test-utils
+// module to import one from.
+function fogResponse(mask: Uint8Array, progress: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'X-Fog-Progress': JSON.stringify(progress) }),
+    arrayBuffer: async () => mask.buffer.slice(mask.byteOffset, mask.byteOffset + mask.byteLength),
+  } as unknown as Response;
+}
+
+// A 3x3 grid, which is one byte of mask plus a bit. Small on purpose: no
+// test here reads a cell, only whether the fog layer was built at all.
+const pickerCityMeta = {
+  slug: 'karlsruhe',
+  name: 'Karlsruhe',
+  originLat: 48.94,
+  originLon: 8.275,
+  gridWidth: 3,
+  gridHeight: 3,
+  cellSizeM: 50,
+  playableCells: 9,
+  districts: [],
+};
+
 function adminBar(overrides: Record<string, unknown> = {}) {
   return {
     id: 10,
@@ -283,6 +310,46 @@ describe('suggest a bar', () => {
     );
     // Still on the suggest screen - a rejection must not navigate away.
     expect(container.querySelector('.map-picker')).not.toBeNull();
+  });
+
+  // The other half of Section 9.3's opt-in, and the half that is easy to
+  // lose: the fog and the bar markers belong to the admin's teleport picker
+  // and to nothing else. This screen shares the component with it, so a flag
+  // defaulted the wrong way, or hooks called unconditionally inside
+  // MapPicker, would put a bar marker on the exact spot someone is trying to
+  // point at and hide the streets they are pointing by.
+  //
+  // The proof is the fetches, not the DOM: `useDiscoveredBars` and
+  // `useFogLayer` both fetch the moment they are called and both swallow
+  // their own failures, so a version of this that mounted them anyway would
+  // draw nothing here and still be wrong. The stub answers neither route, so
+  // asking for either is an unexpected request; the assertions below name
+  // the failure rather than leaving it to a silent catch.
+  it("draws neither the fog nor any bar marker - those are the admin picker's", async () => {
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/suggest');
+    await flushLazyScreen();
+    await flushLazyScreen();
+
+    const requested = fetchMock.mock.calls.map(([input]) => input);
+    expect(requested).not.toContain('/api/fog');
+    expect(requested).not.toContain('/api/bars');
+    const mapContainer = mapInstances[mapInstances.length - 1].container;
+    expect(mapContainer.querySelector('canvas.fog-canvas-fallback')).toBeNull();
+    expect(mapContainer.querySelector('.bar-markers')).toBeNull();
+    expect(mapContainer.querySelector('.bar-marker')).toBeNull();
+    // ...and the picker itself is unchanged and still usable.
+    expect(container.querySelector('.map-picker')).not.toBeNull();
+    act(() => {
+      mapInstances[mapInstances.length - 1].fire('click', { lngLat: { lat: 49.011, lng: 8.4045 } });
+    });
+    expect(container.querySelector('.map-picker__status')?.textContent).toContain('Pin placed');
   });
 });
 
@@ -845,7 +912,22 @@ describe('admin teleport', () => {
         return jsonResponse(200, { visits: [] });
       }
       if (url === '/api/city') {
-        return jsonResponse(200, { districts: [] });
+        return jsonResponse(200, pickerCityMeta);
+      }
+      // Section 9.3: the two the teleport picker adds to the picker Suggest
+      // a bar mounts. They are answered here rather than left to throw
+      // because the picker now genuinely asks for them - the suggest side of
+      // that opt-in is proved in its own describe above, where a request for
+      // either is still an unexpected one.
+      if (url === '/api/fog') {
+        return fogResponse(new Uint8Array(2), {
+          revealedCells: 0,
+          playableCells: 9,
+          districts: [],
+        });
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [communityBar({ id: 7, name: 'The Hidden Cellar' })] });
       }
       if (url === '/api/admin/teleport' && init?.method === 'POST') {
         return onTeleport(JSON.parse(init.body as string));
@@ -972,5 +1054,104 @@ describe('admin teleport', () => {
     );
     // Still usable: this is a state the admin can fix and retry from.
     expect(container.querySelector('.map-picker')).not.toBeNull();
+  });
+
+  // SPEC.md Section 9.3, the owner's own words: "I still want to see the
+  // fog, known area and known bars … how should I teleport close to a bar if
+  // I don't see it on the map". The picker used to draw the ink style and
+  // nothing else, so an admin was asked to aim at bars that were not there.
+  //
+  // WHAT THESE THREE CAN AND CANNOT SHOW. jsdom has no WebGL2 and lays
+  // nothing out. The fog assertion is behavioural in the narrow sense that
+  // the mask is really fetched and a real FogController really mounts — but
+  // it mounts the Section 7.3 *fallback*, and its 2D context is null under
+  // jsdom, so not one pixel of fog is drawn or could be checked here. The
+  // marker assertions are behavioural for the fetch and for the elements
+  // that appear; that the markers cannot swallow a tap is a stylesheet fact
+  // and is asserted in stylesheet.test.ts, since nothing here applies
+  // index.css or hit-tests anything.
+  describe('the picker draws the fog and the discovered bars (SPEC.md Section 9.3)', () => {
+    async function openPickerAndSettle() {
+      openPicker();
+      // GET /api/city + GET /api/fog land together, GET /api/bars beside
+      // them, and the fog controller mounts a turn after its pair resolves.
+      await flushLazyScreen();
+      await flushLazyScreen();
+      return mapInstances[mapInstances.length - 1].container;
+    }
+
+    it('fetches the mask and mounts the fog layer on the picker map', async () => {
+      const fetchMock = stubAdminScreen(() => jsonResponse(200, {}));
+
+      await renderApp('/admin');
+      const mapContainer = await openPickerAndSettle();
+
+      expect(fetchMock.mock.calls.map(([input]) => input)).toContain('/api/fog');
+      // The Section 7.3 fallback, because jsdom has no WebGL2 - the same
+      // path App.test.tsx asserts on the map screen, and the same reason.
+      expect(mapContainer.querySelector('canvas.fog-canvas-fallback')).not.toBeNull();
+    });
+
+    it("draws the admin's discovered bars on it", async () => {
+      const fetchMock = stubAdminScreen(() => jsonResponse(200, {}));
+
+      await renderApp('/admin');
+      const mapContainer = await openPickerAndSettle();
+
+      expect(fetchMock.mock.calls.map(([input]) => input)).toContain('/api/bars');
+      const markers = mapContainer.querySelectorAll('.bar-marker');
+      expect(markers).toHaveLength(1);
+      // The existing marker system with its existing marks, not a second
+      // drawing of a bar: this one is a community bar and still carries
+      // Section 11.3's dot.
+      expect(mapContainer.querySelector('.bar-marker--community')).not.toBeNull();
+      expect(mapContainer.querySelector('.bar-marker svg.cocktail-glass')).not.toBeNull();
+    });
+
+    // THE ONE THAT DECIDES WHETHER ANY OF THIS IS USABLE. A marker is 44px
+    // of tap target sitting exactly on its bar, and the picker exists to
+    // drop the pin exactly on a bar. Interactive markers would eat the tap
+    // at precisely the spot the admin most needs, so in this picker they are
+    // not controls at all.
+    it('draws them as decoration, so they are neither tappable, focusable nor announced', async () => {
+      stubAdminScreen(() => jsonResponse(200, {}));
+
+      await renderApp('/admin');
+      const mapContainer = await openPickerAndSettle();
+
+      // Not a button, so there is nothing to tab to and nothing that
+      // announces itself as a control. A `<button>` with a no-op handler
+      // would fail here, and rightly: it would still take focus, still be
+      // announced, and still swallow the tap.
+      expect(mapContainer.querySelectorAll('button.bar-marker')).toHaveLength(0);
+      const marker = mapContainer.querySelector('.bar-marker') as HTMLElement;
+      expect(marker.tagName).toBe('SPAN');
+      expect(marker.classList.contains('bar-marker--decorative')).toBe(true);
+      expect(marker.hasAttribute('aria-label')).toBe(false);
+      expect(marker.hasAttribute('aria-describedby')).toBe(false);
+      // Hidden as one set rather than attribute by attribute, so a marker
+      // added by a later fetch cannot arrive announced.
+      expect(mapContainer.querySelector('.bar-markers')?.getAttribute('aria-hidden')).toBe('true');
+    });
+
+    // The tap still reaches the map, which is the whole reason the markers
+    // gave up their interactivity.
+    it('still places the pin where the map was tapped', async () => {
+      stubAdminScreen(() => jsonResponse(200, {}));
+
+      await renderApp('/admin');
+      await openPickerAndSettle();
+
+      act(() => {
+        mapInstances[mapInstances.length - 1].fire('click', {
+          lngLat: { lat: 49.0135, lng: 8.4044 },
+        });
+      });
+
+      expect(container.querySelector('.map-picker__status')?.textContent).toContain(
+        'Pin placed at 49.01350, 8.40440',
+      );
+      expect(moveButton().disabled).toBe(false);
+    });
   });
 });

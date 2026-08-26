@@ -297,6 +297,89 @@ describe('BarMarkers', () => {
     });
   });
 
+  // SPEC.md Section 9.3: the same marks in the admin's teleport picker,
+  // where the tap belongs to the map underneath and the marker must be
+  // decoration. `onSelect: null` is the whole switch.
+  describe('decorative markers (onSelect: null)', () => {
+    it('renders inert spans rather than buttons, out of the tab order', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: null });
+
+      markers.setBars([makeBar({ id: 1, name: 'A' }), makeBar({ id: 2, name: 'B' })]);
+
+      expect(container.querySelectorAll('button.bar-marker')).toHaveLength(0);
+      const marks = container.querySelectorAll('span.bar-marker');
+      expect(marks).toHaveLength(2);
+      marks.forEach((mark) => {
+        expect(mark.classList.contains('bar-marker--decorative')).toBe(true);
+        // Nothing here is focusable: a span carries no tabindex of its own,
+        // and none is added. A disabled button would have been the other
+        // way to reach "untappable", and it would still be announced as a
+        // control and still occupy a position on the map that a screen
+        // reader user cannot act on.
+        expect(mark.hasAttribute('tabindex')).toBe(false);
+      });
+    });
+
+    it('hides the whole set from assistive technology and names none of them', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: null });
+
+      markers.setBars([makeBar({ id: 1, name: 'A', mastered: true }), makeBar({ id: 2 })]);
+
+      expect(container.querySelector('.bar-markers')?.getAttribute('aria-hidden')).toBe('true');
+      container.querySelectorAll('.bar-marker').forEach((mark) => {
+        expect(mark.hasAttribute('aria-label')).toBe(false);
+        expect(mark.hasAttribute('aria-describedby')).toBe(false);
+      });
+    });
+
+    it("drops a community bar's hidden description with the name it described", () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: null });
+
+      markers.setBars([makeBar({ source: 'community' })]);
+
+      const mark = container.querySelector('.bar-marker') as HTMLElement;
+      // The dot is a drawing and stays - it is what the mark looks like.
+      expect(mark.classList.contains('bar-marker--community')).toBe(true);
+      expect(mark.querySelector('.bar-marker__community-mark')).not.toBeNull();
+      // The text behind it is an accessible description, and there is no
+      // accessible name left for it to describe.
+      expect(mark.querySelector('.visually-hidden')).toBeNull();
+    });
+
+    it('still draws the glass and still tracks the bar it belongs to', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: null });
+
+      markers.setBars([makeBar({ id: 1, lon: 8.4, lat: 49.01, mastered: true })]);
+
+      const mark = container.querySelector('.bar-marker') as HTMLElement;
+      expect(mark.classList.contains('bar-marker--mastered')).toBe(true);
+      expect(glassPathsOf(mark)).toEqual(cocktailGlassPathData(true));
+      expect(mark.style.left).toBe('840px');
+      expect(mark.style.top).toBe('4901px');
+
+      map.project.mockReturnValueOnce({ x: 12, y: 34 });
+      map.fire('move');
+
+      expect(mark.style.left).toBe('12px');
+      expect(mark.style.top).toBe('34px');
+    });
+
+    it('fires nothing when one is clicked anyway', () => {
+      const { map, container } = createFakeMap();
+      const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: null });
+      markers.setBars([makeBar()]);
+
+      // A synthetic click reaches the element regardless of what the
+      // stylesheet says about pointer events, so this is the belt beside
+      // that brace: there is no handler on it to reach.
+      expect(() => (container.querySelector('.bar-marker') as HTMLElement).click()).not.toThrow();
+    });
+  });
+
   it('removes the move listener and every marker element on destroy', () => {
     const { map, container } = createFakeMap();
     const markers = new BarMarkers({ map: map as unknown as MaplibreMap, onSelect: vi.fn() });

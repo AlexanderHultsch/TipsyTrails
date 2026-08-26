@@ -8,7 +8,15 @@
 // and what separates them is the shape of the glass
 // (components/cocktail-glass.ts, which owns both).
 //
-// Positioned as absolutely-placed DOM buttons re-projected via
+// Two modes, and the difference is whether the marker is a control at all.
+// On the map screen it is: Section 7.5's check-in is offered by tapping it,
+// so it is a button. In the admin's teleport picker (map/MapPicker.tsx,
+// SPEC.md Section 9.3) the same marks are drawn as decoration - the tap
+// there belongs to the map, which is what places the pin - so they are inert
+// spans, hidden from assistive technology and passing pointer events
+// through. `onSelect: null` selects that mode; see BarMarkersOptions.
+//
+// Positioned as absolutely-placed DOM elements re-projected via
 // `map.project` on every 'move', the same approach
 // map/fog/canvas-fallback.ts takes for the fog overlay - not
 // maplibregl.Marker, so this stays testable against a hand-built fake map
@@ -32,9 +40,16 @@ const COMMUNITY_MARK_SVG =
 
 // The constructor bag, contextually typed from the one `new BarMarkers({…})`
 // call site, so it is not surface.
+//
+// `onSelect: null` is the decorative mode SPEC.md Sections 8.3/9.3 give the
+// admin's teleport picker (map/MapPicker.tsx). It is one parameter and not
+// two on purpose: "there is nothing to select" and "this is not a control"
+// are the same fact, and splitting them would allow the two combinations
+// that must never exist - a decorative marker that still fires a selection,
+// and a tappable marker with no handler behind it.
 interface BarMarkersOptions {
   map: MaplibreMap;
-  onSelect: (bar: Bar) => void;
+  onSelect: ((bar: Bar) => void) | null;
 }
 
 /**
@@ -49,12 +64,15 @@ function markerStateOf(bar: Bar): string {
 
 interface MarkerEntry {
   bar: Bar;
-  element: HTMLButtonElement;
+  // HTMLElement and not HTMLButtonElement: a decorative marker is not a
+  // button at all (createElement below), and typing this to the interactive
+  // case would only push the cast one level down.
+  element: HTMLElement;
 }
 
 export class BarMarkers {
   private readonly map: MaplibreMap;
-  private readonly onSelect: (bar: Bar) => void;
+  private readonly onSelect: ((bar: Bar) => void) | null;
   private readonly container: HTMLDivElement;
   private readonly markers = new Map<number, MarkerEntry>();
   // The bars whose discovery stamp is currently playing (map/bars/
@@ -70,6 +88,18 @@ export class BarMarkers {
     this.onSelect = options.onSelect;
     this.container = document.createElement('div');
     this.container.className = 'bar-markers';
+    // Decorative markers are hidden from assistive technology as one set,
+    // here, rather than attribute by attribute on every element: one
+    // `aria-hidden` on the container covers the marks, the glasses inside
+    // them and the community description alike, and cannot be left off a
+    // marker created later by a refetch. What it hides is a scattering of
+    // unlabelled positions on a canvas map that carries no accessible
+    // geometry to relate them to - see createElement below for why they are
+    // not controls in this mode, and SPEC.md Section 9.3 for what carries
+    // the same information as text.
+    if (this.onSelect === null) {
+      this.container.setAttribute('aria-hidden', 'true');
+    }
     this.map.getContainer().appendChild(this.container);
     this.map.on('move', this.handleMove);
   }
@@ -128,14 +158,30 @@ export class BarMarkers {
     }
   }
 
-  private createElement(bar: Bar): HTMLButtonElement {
+  private createElement(bar: Bar): HTMLElement {
+    // Section 9.3's teleport picker: the marker is a drawing of where a bar
+    // is and nothing else. It is a `span` rather than a disabled or
+    // no-op button because the element's *tag* is what decides three things
+    // at once - what it announces itself as, whether it takes focus, and
+    // whether it is a plausible target for a tap. A button that did nothing
+    // would still be announced as a control, still be in the tab order and
+    // still invite the tap, and the whole point of the picker is that the
+    // tap belongs to the map underneath. `pointer-events: none` in index.css
+    // is the other half of this and is not optional either: the class this
+    // element carries sizes it to a 44 px circle, and a span that size
+    // swallows a tap exactly as a button does.
+    if (this.onSelect === null) {
+      const mark = document.createElement('span');
+      this.paintElement(mark, bar);
+      return mark;
+    }
     const button = document.createElement('button');
     button.type = 'button';
     this.paintElement(button, bar);
     button.addEventListener('click', () => {
       const entry = this.markers.get(bar.id);
       if (entry) {
-        this.onSelect(entry.bar);
+        this.onSelect?.(entry.bar);
       }
     });
     return button;
@@ -147,12 +193,17 @@ export class BarMarkers {
    * created now and a marker repainted after a change go through one piece
    * of code and cannot end up saying different things.
    */
-  private paintElement(button: HTMLButtonElement, bar: Bar): void {
+  private paintElement(element: HTMLElement, bar: Bar): void {
     const isCommunity = bar.source === 'community';
-    button.className = [
+    const decorative = this.onSelect === null;
+    element.className = [
       'bar-marker',
       bar.mastered ? 'bar-marker--mastered' : null,
       isCommunity ? 'bar-marker--community' : null,
+      // Carried on every marker rather than only on the container, because
+      // this is what index.css hangs `pointer-events: none` off, and a
+      // descendant selector would have to name an ancestor this class owns.
+      decorative ? 'bar-marker--decorative' : null,
       // This rebuilds the whole class list, so the stamp's hand-over has to
       // be part of it: a marker created (or repainted) while its stamp is
       // playing would otherwise arrive with its ink showing, which is the
@@ -170,20 +221,29 @@ export class BarMarkers {
     // rather than joining it: that one is supplementary information about
     // where the bar came from, while whether the player has mastered it is
     // what this control is showing.
-    button.setAttribute('aria-label', barAccessibleName(bar.name, bar.mastered));
-    button.innerHTML = isCommunity
+    //
+    // A decorative marker gets neither, and that is not an omission: the
+    // whole set is `aria-hidden` (constructor above), so a name on it would
+    // be a name nothing can reach - and an accessible name is the promise
+    // that something is there to be acted on.
+    if (!decorative) {
+      element.setAttribute('aria-label', barAccessibleName(bar.name, bar.mastered));
+    } else {
+      element.removeAttribute('aria-label');
+    }
+    element.innerHTML = isCommunity
       ? cocktailGlassSvgMarkup(bar.mastered) + COMMUNITY_MARK_SVG
       : cocktailGlassSvgMarkup(bar.mastered);
-    if (isCommunity) {
+    if (isCommunity && !decorative) {
       const descriptionId = `bar-marker-community-desc-${bar.id}`;
       const description = document.createElement('span');
       description.id = descriptionId;
       description.className = 'visually-hidden';
       description.textContent = 'Added by the community';
-      button.appendChild(description);
-      button.setAttribute('aria-describedby', descriptionId);
+      element.appendChild(description);
+      element.setAttribute('aria-describedby', descriptionId);
     } else {
-      button.removeAttribute('aria-describedby');
+      element.removeAttribute('aria-describedby');
     }
   }
 

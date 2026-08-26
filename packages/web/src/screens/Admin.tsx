@@ -601,7 +601,12 @@ function UsersSection() {
 // SPEC.md Sections 9.3/10.1: the admin teleport. The map picker is
 // screens/SuggestBar.tsx's own (map/MapPicker.tsx), not a second one - the
 // question is the same question, "which point on the map", and one component
-// answering it in both places is one behaviour to keep right.
+// answering it in both places is one behaviour to keep right. What differs
+// is what is drawn on it: this caller opts into the fog and the discovered
+// bar markers (`showPlayerView`), because aiming at a bar needs the bars,
+// and the suggest screen does not, because pointing at the building in front
+// of you needs the streets the fog would cover. Everything else about the
+// two - the pin, the camera, the locate control - is the same code.
 //
 // Nothing here is a security control, and the panel is written so that is
 // obvious. It renders for any admin who reaches this screen, sends the two
@@ -684,7 +689,15 @@ function TeleportSection() {
             </p>
           )}
           {pickerOpen ? (
-            <MapPicker value={position} onPick={setPosition} />
+            // Section 9.3: the picker draws the fog and the admin's
+            // discovered bars, which Suggest a bar's identical picker does
+            // not. The owner's words for why: "I still want to see the fog,
+            // known area and known bars … how should I teleport close to a
+            // bar if I don't see it on the map". A teleport aimed at a bar
+            // cannot be aimed on a map with no bars on it. The bars are
+            // drawn as decoration and take no taps, or they would swallow
+            // the one tap this screen exists to make (map/MapPicker.tsx).
+            <MapPicker value={position} onPick={setPosition} showPlayerView />
           ) : (
             <button
               className="button button--secondary"

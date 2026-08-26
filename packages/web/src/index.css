@@ -1583,6 +1583,24 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+/* SPEC.md Section 9.3: the same marks in the admin's teleport picker, where
+   they are decoration and not controls (map/bars/bar-markers.ts renders them
+   as inert spans, and hides the set from assistive technology).
+
+   THIS ONE DECLARATION IS WHAT MAKES THE FEATURE WORK. The picker's whole
+   job is to drop the pin on a bar, and the mark on that bar is 44px of tap
+   target sitting exactly on it - so without this, the one spot the admin
+   most needs to reach is the one spot his tap cannot reach. It is the same
+   rule .own-position-marker follows on the same surface, and for the same
+   reason.
+
+   Two classes, not one: `.bar-marker` above sets `pointer-events: auto` at
+   one class, and a rule that only tied on specificity would be decided by
+   which of the two happens to come later in this file. */
+.bar-marker.bar-marker--decorative {
+  pointer-events: none;
+}
+
 /* Sections 7.4/8.3's hand-over. While a bar's discovery stamp is on screen
    the stamp is the only glass at that point, so the marker gives up its ink
    and takes it back the instant the stamp is removed

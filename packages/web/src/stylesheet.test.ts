@@ -115,6 +115,43 @@ describe('index.css: the picker pin and the own-position marker', () => {
     ).toBe(true);
   });
 
+  // SPEC.md Section 9.3: the admin's teleport picker draws the discovered
+  // bars, and a bar marker is a 44px target sitting exactly on its bar while
+  // the picker's entire job is to drop the pin exactly on a bar. So in that
+  // picker the markers are decoration - map/bars/bar-markers.ts renders them
+  // as inert spans - and this declaration is what stops the mark swallowing
+  // the tap anyway. A span carrying `.bar-marker` is still 44px of surface.
+  //
+  // It has to be checked here and not in a render test for exactly the
+  // reason the marker one above is: no test in this repository applies
+  // index.css, jsdom hit-tests nothing, and a rendered picker therefore
+  // cannot see this declaration go missing.
+  it('lets a tap pass through a decorative bar marker', () => {
+    const decorative = rules().filter((rule) =>
+      rule.selector.split(',').some((part) => part.trim().endsWith('.bar-marker--decorative')),
+    );
+
+    expect(decorative.length, 'no rule targets .bar-marker--decorative').toBeGreaterThan(0);
+    expect(
+      decorative.some((rule) => /pointer-events\s*:\s*none/.test(rule.body)),
+      '.bar-marker--decorative must set pointer-events: none, or the marker in the ' +
+        "admin's teleport picker eats the tap at the one spot he most needs to aim at - " +
+        'the bar itself (Section 9.3)',
+    ).toBe(true);
+    // `.bar-marker` sets `pointer-events: auto` at one class. A rule that
+    // only tied on specificity would be decided by source order.
+    for (const rule of decorative) {
+      if (!/pointer-events\s*:\s*none/.test(rule.body)) {
+        continue;
+      }
+      expect(
+        classCount(rule.selector),
+        `"${rule.selector}" has ${classCount(rule.selector)} class(es) and only ties with ` +
+          '".bar-marker { pointer-events: auto }", leaving source order to decide it',
+      ).toBeGreaterThanOrEqual(2);
+    }
+  });
+
   it('stacks the picker pin above the own-position marker', () => {
     // Having just centred on yourself and then tapping that same spot lands
     // the two on top of each other, and the object being placed is the one
