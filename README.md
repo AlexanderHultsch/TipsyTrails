@@ -201,6 +201,22 @@ script must exist and succeed idempotently on every run; this app already
 seeds the admin account at boot, so the script has to be safe alongside
 that, not a replacement for it.
 
+That plain form creates the admin account when it is missing and never
+touches an existing one's password — boot runs the same thing, so anything
+else would revert a password on every restart. To push a rotated shared
+password into this site, `deploy.sh --set-password` must run the script
+with its one flag:
+
+```
+docker compose exec -T tipsy-trails npm run seed:admin -- --rotate-password
+```
+
+The `--` is npm's argument separator and is required, or npm eats the flag
+and the rotation silently does not happen. Only that invocation rewrites
+the stored password hash, and it rewrites nothing else about the account.
+Section 4.3 of `SPEC.md` has the full contract, including the four
+messages the script prints and which one exits nonzero.
+
 The data volume is `./data/tipsy-trails:/data` on the platform side — host
 `~/pi-server/data/tipsy-trails/`, container `/data`, created by Docker on
 first start. The database and the map extract both live under it, and

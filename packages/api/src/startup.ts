@@ -16,6 +16,12 @@ export async function initialiseDatabase(env: Env): Promise<Database.Database> {
 
   const db = openDatabase(env.DATABASE_PATH);
   runMigrations(db, migrationsDir);
+  // Create-only, and it has to stay that way: this runs on every container
+  // start, so a boot that could rotate would revert the admin's password every
+  // time the Pi restarts or `deploy.sh` rebuilds. `seedAdmin` takes no option
+  // that would let it — rotating means calling `seedAdminRotatingPassword` by
+  // name, which only `db/seed-admin-cli.ts` does, only under
+  // `--rotate-password` (SPEC.md Section 4.3). Do not import that here.
   await seedAdmin(db, env);
   seedCity(db, env);
   seedBars(db, env);

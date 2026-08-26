@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
+import { openDatabase } from './db/index.js';
 import { loadEnv } from './env.js';
 import { initialiseDatabase } from './startup.js';
 
@@ -102,6 +103,49 @@ describe('initialiseDatabase', () => {
     expect(row).toBeDefined();
     expect(row?.is_admin).toBe(1);
     expect(row?.must_change_password).toBe(0);
+  });
+
+  it('never rotates the admin password, however many times the container restarts', async () => {
+    // This is the safety property the whole --rotate-password flag exists to
+    // protect. initialiseDatabase runs on every boot; if it could rotate, an
+    // admin who changed their own password would have it reverted to
+    // ADMIN_PASSWORD by the next restart, silently. startup.ts imports
+    // seedAdmin, which has no option and no code path that rotates.
+    dbPath = join(tmpdir(), `tipsytrails-startup-test-${randomUUID()}.db`);
+    const env = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'correct-horse',
+    });
+
+    const firstDb = await initialiseDatabase(env);
+    firstDb
+      .prepare("UPDATE users SET password_hash = 'self-chosen-hash' WHERE username = 'admin'")
+      .run();
+    firstDb.close();
+
+    // The operator has since rotated the platform's shared credential. Only
+    // `npm run seed:admin -- --rotate-password` may act on that; boot may not.
+    const rotatedEnv = loadEnv({
+      ...baseEnv,
+      DATABASE_PATH: dbPath,
+      ADMIN_USER: 'admin',
+      ADMIN_PASSWORD: 'the-newly-rotated-shared-password',
+    });
+    for (let restart = 0; restart < 3; restart += 1) {
+      const bootDb = await initialiseDatabase(rotatedEnv);
+      bootDb.close();
+    }
+
+    db = openDatabase(dbPath);
+    const row = db
+      .prepare<[string], { password_hash: string }>(
+        'SELECT password_hash FROM users WHERE username = ?',
+      )
+      .get('admin');
+    expect(row?.password_hash).toBe('self-chosen-hash');
+    expect(usersCount()).toBe(1);
   });
 
   it('leaves the user table empty when admin variables are absent', async () => {
