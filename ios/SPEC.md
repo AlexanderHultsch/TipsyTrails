@@ -1,6 +1,6 @@
 # Tipsy Trails — iOS Companion Specification
 
-**Version:** 0.3
+**Version:** 0.4
 **Status:** Specified, nothing built. A draft for the owner's review before any code lands.
 **Parent:** `SPEC.md` at the repository root, v1.58. This document does not replace it and cannot contradict it; Section 14 here lists the amendments the parent needs before this one is in force.
 **Keeping up with `main`:** `ios/PARENT-CONTRACT.md` — the list of what this app depends on in the parent, the record of every merge from `main`, and what to do when the pin above and the parent's version disagree. `packages/shared/src/ios-parent-pin.test.ts` fails until they agree, so the decision cannot be skipped by being forgotten.
@@ -219,7 +219,9 @@ TipsyTrails/
             └── replay/              # the walk harness (Section 13.2)
 ```
 
-`.gitignore` gains `ios/TipsyTrails.xcodeproj/`, `ios/TipsyTrails/Resources/tracker.js`, `ios/Config/Server.local.xcconfig`, and Xcode's `xcuserdata/` and `DerivedData/`. `.prettierignore` gains `ios/SPEC.md`, for the same reason it lists `SPEC.md`.
+`.gitignore` gains `ios/TipsyTrails.xcodeproj/`, `ios/TipsyTrails/Resources/tracker.js`, `ios/Config/Server.local.xcconfig`, and Xcode's `xcuserdata/` and `DerivedData/` — none of them yet, because no Xcode project exists.
+
+`.prettierignore` **already** lists `ios/SPEC.md` on this branch, for the same reason it lists `SPEC.md`: a test reads that file by regular expression, and Prettier rewrites `*text*` to `_text_` under one. `ios/PARENT-CONTRACT.md` is deliberately not listed — nothing reads it by regular expression, and Prettier aligning its tables is what keeps "add a row" from meaning "re-align a table by hand".
 
 ### 4.3 Build and distribution
 
@@ -735,7 +737,7 @@ Shown in place of the web view when the initial load of `SERVER_ORIGIN` fails an
 
 ### Step A — Amendments and scaffold
 
-The `SPEC.md` amendments of Section 14, in one commit, with `HANDOVER.md` updated in the same commit (`CLAUDE.md`). `packages/tracker` created with its manifest, `tsconfig`, Vite config and an entry that evaluates and exposes an empty tracker. The constants of 7.1 added to `config.ts`. `.gitignore` and `.prettierignore` updated (4.2).
+The `SPEC.md` amendments of Section 14, in one commit, with `HANDOVER.md` updated in the same commit (`CLAUDE.md`). `packages/tracker` created with its manifest, `tsconfig`, Vite config and an entry that evaluates and exposes an empty tracker. The constants of 7.1 added to `config.ts`. `.gitignore` updated (4.2); `.prettierignore` needs nothing, because its one line arrives with `ios/` itself.
 
 **Definition of Done**
 
@@ -879,7 +881,7 @@ Made in Step A, in one commit, each inside its section without renumbering, with
 | 3, _Explicitly excluded_ | remove "native app wrappers"; add a sentence that the iOS app is specified in `ios/SPEC.md` and is a shell around the same web app, and that the exclusion of native rewrites, cross-platform frameworks and background-location SDKs stands |
 | 3, dependency table | add `packages/tracker`'s two rows (3 here) |
 | 3, commands | `pnpm build` gains `tracker` after `shared` |
-| 4.2 | the tree gains `ios/` and `packages/tracker/` as in 4.2 here; `.prettierignore`'s comment names `ios/SPEC.md` |
+| 4.2 | the tree gains `ios/` and `packages/tracker/` as in 4.2 here. `.prettierignore` needs no amendment: it is a bare list with no comments in it, and its `ios/SPEC.md` line arrives on `main` with `ios/` itself rather than being added by Step A |
 | 5.3 | `users` gains `background_tracking_consented_at` with the sentence of 9.2 |
 | 7.1 | the constants block gains the keys of 7.1 here, in `config.ts` |
 | 7.2 | "The app cannot receive positions in the background" becomes "The web app cannot…", and the paragraph gains: "The iPhone app can, through a native location session, and `ios/SPEC.md` Section 6 is the authority on what that can and cannot do. Its samples pass every gate below unchanged." |
@@ -915,6 +917,7 @@ Made in Step A, in one commit, each inside its section without renumbering, with
 
 ## 16. Changelog
 
+- **v0.4** — Three claims in the amendment bookkeeping that were already false on this branch. 4.2 said `.prettierignore` "gains" `ios/SPEC.md`; it has carried that line since the branch's first commit, and 4.2 now says so, records why `ios/PARENT-CONTRACT.md` is deliberately not listed beside it, and notes that none of the `.gitignore` entries exist yet because there is no Xcode project. Step A's checklist no longer asks for a `.prettierignore` edit it cannot make. Section 14's row for the parent's 4.2 asked Step A to name the file in "`.prettierignore`'s comment" — that file is a bare list with no comments in it, and the line reaches `main` with `ios/` itself rather than by amendment; the row says that instead. `PARENT-CONTRACT.md` gains E4 for `.prettierignore`, which is the one file in the workspace whose contents already differ between the two branches and therefore the one place a merge can conflict over text neither side thinks of as iOS work. The parent pin stays v1.58.
 - **v0.3** — Two things this document asked for that could not be built as written. **9.2's `PATCH /api/settings`**: "accepts `{ backgroundTracking }` beside `isAnonymous`" had no implementation, because `settingsSchema` is not partial and a body without `isAnonymous` is a 400 before the route sees it. The endpoint now takes two optional booleans of which at least one must be present, with a table saying what every body does — an omitted key means unchanged, `{}` and an unknown-key-only body are 400, neither key may be `null`, both together are one `UPDATE`, and every body that answers 200 today still answers 200. The alternative, a route of its own, is weighed and rejected in the same section. Section 14's row for the parent's 9.2 says the request note itself changes; its row for 9.6 says why nothing about the request lands there. **8.3's seam**: the section claimed `behindDepth` was an output of the hook when it is local state no screen can read, and left `trackingActive`, `postError`, `newBarsVersion` and `visitVersion` unaccounted for. All thirteen members of `SampleTrackingState` are now in one table with their source under the shell driver; `behindDepth` is corrected and fed by the driver so that one `computeConnectionStatus` serves both; the four counters are the hook's own, start at nought per mount and are never advanced by the bridge's replayed payload; `trackingActive` is the tracker's state rather than a watch's; `postError` is `null` by argument rather than by omission; and the interface is deliberately not widened. Steps C and D's Definitions of Done follow. O-I8 records the two posters an admin teleport produces inside the shell. No amendment of Section 14 is added or removed — there are still eighteen — and the parent pin stays v1.58; nothing on `main` moved.
 - **v0.2** — Connected this branch to `main` with something that cannot rot. `ios/PARENT-CONTRACT.md` is added: the dependency surface this app has on the parent (what each entry is on both sides, why the app depends on it, what breaks if it changes), a "not a dependency" section naming what is deliberately out and how each exclusion was checked, and a merge record of one row per merge of `main` into `ios-app` — never one row per change, which is what makes it affordable to keep. The **Parent:** pin in the front matter above is made enforceable by `packages/shared/src/ios-parent-pin.test.ts`, a new test on this branch only, which fails when the pin and the root `SPEC.md`'s version disagree and says in its failure what to do about it. Nothing else in this document changed; the amendments of Section 14 are still Step A's work and are still unmade.
 - **v0.1** — First draft, for the owner's review. Specifies the three-part shape (shell, tracker, web app), the reasoning against Capacitor and a native rewrite, the JavaScriptCore decision, the session-borrowing rules, the iOS authorization ladder and its limits, the tracker's constants, host interface, state machine, queue, visits, notifications and counters, the web app's shell driver, the two server additions, the GDPR consent flow and privacy-page section, the four native screens, seven build steps with their Definitions of Done, the verification matrix, the eight-scenario replay harness, the six-walk field test, and the amendments `SPEC.md` needs. Nothing is built.
