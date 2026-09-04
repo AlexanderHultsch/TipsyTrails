@@ -25,6 +25,12 @@ export interface Sample {
 export interface SamplesResponse {
   newCells: number;
   newBars: Bar[];
+  // Sections 7.5, 9.6: the visits this batch changed. Three of VisitStatus's
+  // four can appear here - 'pending', 'completed', and (since the expiry
+  // sweep of Section 7.5 step 5) 'expired'. No field is new; what changed is
+  // which entries the list can hold, so the type is unchanged and this note
+  // is the mirror of that. 'cancelled' is not among them: only the cancel
+  // endpoint writes it.
   visitUpdates: VisitSummary[];
   // Section 7.3: whether the last accepted sample of this batch was refused
   // a reveal because it was travelling at or above FOG_MAX_SPEED_KMH. The

@@ -122,10 +122,11 @@ interface PendingVisitRow {
   confirmed_s: number;
 }
 
-// SPEC.md Section 7.5 steps 3-4: one entry per pending visit this request
-// touched, accumulated across the sample loop and written to `visits` (and
-// reported in `visitUpdates`) once, after the loop — the same
-// accumulate-then-write shape `applyDiscoveries`/`applyReveal` use below.
+// SPEC.md Section 7.5 steps 3-5: one entry per pending visit this request
+// touched, accumulated across the sample loop and the expiry sweep that
+// follows it, and written to `visits` (and reported in `visitUpdates`) once,
+// after both — the same accumulate-then-write shape
+// `applyDiscoveries`/`applyReveal` use below.
 interface VisitProgress {
   id: number;
   barId: number;
@@ -254,11 +255,28 @@ function applyDiscoveries(
   })();
 }
 
-// SPEC.md Section 7.5 steps 3-4: persists every pending visit the batch
-// touched — updated, completed, or (a late sample on an already-stale
-// visit) expired — in one transaction. A visit that expires here is written
-// but, like `GET /api/visits/pending`'s own lazily-expired rows, not
-// reported back as a "visit update".
+// SPEC.md Section 7.5 steps 3-5: persists every pending visit the batch
+// touched — updated, completed, or expired (by the sweep in
+// `processSampleBatch`, or by a late sample on an already-stale visit) — in
+// one transaction, and reports every one of them back as a "visit update".
+//
+// An expiry is reported like the other two, and this is the half of Open
+// Item O14 (closed in v1.51) that the sweep alone does not answer. It used
+// to be written and deliberately kept back, by analogy with the
+// lazily-expired rows of `GET /api/visits/pending`, and that analogy was
+// wrong: that endpoint answers with the pending list itself, so a visit it
+// expires is already absent from its answer and the client learns of it by
+// that absence. This response is a list of *changes*, where absence means
+// "nothing happened to it" — so silence about an expiry left the banner
+// asserting a visit the server had just ended, which is the state Section
+// 7.5 says it must never be able to hold. An expired row is still the
+// caller's own visit and carries no field the other two do not (Section
+// 10.2).
+//
+// The expiry UPDATE stays narrow — only `status` — because nothing else
+// about the row changed: `last_sample_at`, `onsite_samples` and
+// `confirmed_s` are the record of what actually happened, and the summary
+// reports them exactly as they stand.
 function applyVisitUpdates(
   db: Database.Database,
   visitProgressByBarId: ReadonlyMap<number, VisitProgress>,
@@ -271,19 +289,19 @@ function applyVisitUpdates(
       }
       if (visit.status === 'expired') {
         db.prepare(`UPDATE visits SET status = 'expired' WHERE id = ?`).run(visit.id);
-        continue;
+      } else {
+        db.prepare(
+          `UPDATE visits SET last_sample_at = ?, onsite_samples = ?, confirmed_s = ?, status = ?, completed_at = ?
+           WHERE id = ?`,
+        ).run(
+          visit.lastSampleAt,
+          visit.onsiteSamples,
+          visit.confirmedS,
+          visit.status,
+          visit.completedAt,
+          visit.id,
+        );
       }
-      db.prepare(
-        `UPDATE visits SET last_sample_at = ?, onsite_samples = ?, confirmed_s = ?, status = ?, completed_at = ?
-         WHERE id = ?`,
-      ).run(
-        visit.lastSampleAt,
-        visit.onsiteSamples,
-        visit.confirmedS,
-        visit.status,
-        visit.completedAt,
-        visit.id,
-      );
       updates.push(
         toVisitSummary({
           id: visit.id,
@@ -595,6 +613,45 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
 
   const newBars =
     discoveryCandidateIds.size > 0 ? applyDiscoveries(db, userId, discoveryCandidateIds, nowS) : [];
+
+  // SPEC.md Section 7.5 step 5: every pending visit the caller has is judged
+  // for expiry once per request, whether or not a sample in this batch came
+  // near its bar. The test inside the loop above is reachable only through
+  // the on-site branch, so a visit the player has walked away from — the one
+  // case step 5 exists for — was never examined at all, and a client whose
+  // screen stayed visible went on showing it in the banner for as long as
+  // the app was open.
+  //
+  // After the loop and not inside it: `loadPendingVisitProgress` already
+  // holds every open pending visit, so this is a pass over values and not a
+  // query, but a pass per sample would repeat it up to `SAMPLE_MAX_BATCH`
+  // times for an answer that cannot change between samples — `nowS` is one
+  // value for the whole request. It runs for a batch in which every sample
+  // was rejected too, deliberately: it reads nothing from any sample, and a
+  // player standing still with a poor fix (whose samples fail the accuracy
+  // gate) is exactly the player whose visit is quietly running out.
+  //
+  // The clock is `nowS`, the server's, which is the clock this function
+  // already keeps visits on: the in-loop test is `isVisitExpired(nowS, ...)`
+  // and `lastSampleAt` is written from `nowS`, so both sides of the
+  // comparison come from the same source. A client timestamp would put a
+  // value Section 7.2 treats as adversarial input on one side of it and a
+  // stored server second on the other, and the batch's newest accepted
+  // timestamp additionally does not exist for a batch that accepted nothing.
+  //
+  // The in-loop test is not made redundant by this one and stays where it
+  // is: it is what stops a late on-site sample extending a visit that was
+  // already stale when the batch arrived, which this sweep could not catch
+  // afterwards because `lastSampleAt` would by then be `nowS`.
+  for (const visit of visitProgressByBarId.values()) {
+    if (visit.status !== 'pending') {
+      continue;
+    }
+    if (isVisitExpired(nowS, visit.lastSampleAt)) {
+      visit.status = 'expired';
+      visit.touched = true;
+    }
+  }
 
   const anyVisitTouched = Array.from(visitProgressByBarId.values()).some((v) => v.touched);
   const visitUpdates = anyVisitTouched ? applyVisitUpdates(db, visitProgressByBarId) : [];

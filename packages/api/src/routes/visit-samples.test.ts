@@ -399,11 +399,122 @@ describe('POST /api/samples visitUpdates', () => {
     const response = await postSamples(cookie, [sample({ timestamp: Date.now() })]);
 
     expect(response.statusCode).toBe(200);
-    expect(findUpdate(response, visitId)).toBeUndefined();
+    // Reported, not merely written: this response is the client's only
+    // notice while the screen stays visible (SPEC.md Section 7.5 step 5).
+    expect(findUpdate(response, visitId)?.status).toBe('expired');
 
     const row = getVisit(visitId);
     expect(row.status).toBe('expired');
     expect(row.onsite_samples).toBe(1);
+  });
+
+  // SPEC.md Section 7.5 step 5, and the defect Open Item O14 described
+  // before v1.51 closed it: the player checked in, walked away, and kept the
+  // app open. Every sample of this batch comes from somewhere else entirely,
+  // so the on-site test can never reach this visit — the sweep is the only
+  // thing that judges it, and without one the banner showed the visit for as
+  // long as the app was open.
+  it('expires and reports a pending visit the player walked away from, with no on-site sample in the batch', async () => {
+    const cookie = await registerUser('walker');
+    const { visitId } = await checkInAtSchloss(cookie);
+
+    const staleLastSampleAt = Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S - 60;
+    db.prepare('UPDATE visits SET last_sample_at = ? WHERE id = ?').run(staleLastSampleAt, visitId);
+
+    const response = await postSamples(cookie, [
+      sample({ ...MOVED_AWAY, timestamp: Date.now() + 60_000 }),
+    ]);
+
+    expect(response.statusCode).toBe(200);
+    const update = findUpdate(response, visitId);
+    expect(update?.status).toBe('expired');
+    expect(update?.onsiteSamples).toBe(1);
+
+    const row = getVisit(visitId);
+    expect(row.status).toBe('expired');
+    // The row records what happened rather than being reset by the expiry.
+    expect(row.last_sample_at).toBe(staleLastSampleAt);
+    expect(row.onsite_samples).toBe(1);
+    expect(row.completed_at).toBeNull();
+  });
+
+  // The same walk-away, but with every sample of the batch rejected by
+  // Section 7.2's accuracy gate: the sweep reads nothing from any sample, so
+  // a batch that accepted none of them still judges the visit.
+  it('expires a stale visit even when every sample in the batch is rejected', async () => {
+    const cookie = await registerUser('walker');
+    const { visitId } = await checkInAtSchloss(cookie);
+
+    const staleLastSampleAt = Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S - 60;
+    db.prepare('UPDATE visits SET last_sample_at = ? WHERE id = ?').run(staleLastSampleAt, visitId);
+
+    const response = await postSamples(cookie, [
+      sample({ accuracy: CONFIG.FOG_MAX_ACCURACY_M + 1, timestamp: Date.now() }),
+    ]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().newCells).toBe(0);
+    expect(findUpdate(response, visitId)?.status).toBe('expired');
+    expect(getVisit(visitId).status).toBe('expired');
+  });
+
+  // The sweep's clock is the server's, not a timestamp taken out of the
+  // batch. `last_sample_at` is a server second, so the other side of the
+  // comparison has to be one too — a batch whose oldest sample is two
+  // minutes old must not make a visit that ran out five seconds ago look
+  // like one that is still short of `VISIT_EXPIRY_S` (SPEC.md Sections 7.2,
+  // 7.5).
+  it('judges expiry on the server clock, not on the oldest timestamp in the batch', async () => {
+    const cookie = await registerUser('walker');
+    const { visitId } = await checkInAtSchloss(cookie);
+
+    // One accepted sample away from the bar first, so the batch below is
+    // compared against a position at MOVED_AWAY: its own samples are at that
+    // same point, cover no distance, and so pass Section 7.2's teleport
+    // guard whatever their timestamps say.
+    await postSamples(cookie, [sample({ ...MOVED_AWAY, timestamp: Date.now() + 30_000 })]);
+
+    const staleLastSampleAt = Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S - 5;
+    db.prepare('UPDATE visits SET last_sample_at = ? WHERE id = ?').run(staleLastSampleAt, visitId);
+
+    const response = await postSamples(cookie, [
+      sample({ ...MOVED_AWAY, timestamp: Date.now() - 120_000 }),
+      sample({ ...MOVED_AWAY, timestamp: Date.now() + 30_000 }),
+    ]);
+
+    expect(response.statusCode).toBe(200);
+    expect(findUpdate(response, visitId)?.status).toBe('expired');
+    expect(getVisit(visitId).status).toBe('expired');
+  });
+
+  // The failure that would be worse than the one the sweep fixes: expiring a
+  // visit the player is standing in the middle of. A minute short of
+  // VISIT_EXPIRY_S, with no on-site sample in the batch, the visit must come
+  // through untouched, unreported and still pending — an inverted comparison
+  // or a different clock on either side of it would cancel a real check-in.
+  // A minute rather than a second because both sides are real wall-clock
+  // seconds here; the exact `>=` boundary is pinned where the rule lives
+  // (packages/shared/src/visits.test.ts).
+  it('leaves a pending visit a minute short of VISIT_EXPIRY_S pending, and says nothing about it', async () => {
+    const cookie = await registerUser('walker');
+    const { visitId } = await checkInAtSchloss(cookie);
+
+    const almostStaleLastSampleAt = Math.floor(Date.now() / 1000) - DERIVED.VISIT_EXPIRY_S + 60;
+    db.prepare('UPDATE visits SET last_sample_at = ? WHERE id = ?').run(
+      almostStaleLastSampleAt,
+      visitId,
+    );
+
+    const response = await postSamples(cookie, [
+      sample({ ...MOVED_AWAY, timestamp: Date.now() + 60_000 }),
+    ]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().visitUpdates).toEqual([]);
+
+    const row = getVisit(visitId);
+    expect(row.status).toBe('pending');
+    expect(row.last_sample_at).toBe(almostStaleLastSampleAt);
   });
 
   it('a single batch can complete a visit whose check-in was more than VISIT_REQUIRED_S ago', async () => {

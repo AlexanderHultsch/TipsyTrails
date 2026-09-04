@@ -113,12 +113,12 @@ export function useVisits(
       });
   }, []);
 
-  // Section 7.5's persistent banner, and Open Item O14: this endpoint
-  // expires stale visits lazily on read (Section 7.9) and returns only live
-  // ones, so it is the client's only way to learn that a visit ended while
-  // it was not looking. Fetched once per mount it was a snapshot, and a
-  // banner that has been on screen for hours could go on asserting a state
-  // the server abandoned long ago.
+  // Section 7.5's persistent banner: this endpoint expires stale visits
+  // lazily on read (Section 7.9) and returns only live ones, so it is how
+  // this hook learns that a visit ended while the screen was not there to
+  // be told. Fetched once per mount it was a snapshot, and a banner that has
+  // been on screen for hours could go on asserting a state the server
+  // abandoned long ago.
   //
   // `visibilitychange` is the event that matches the failure: an installed
   // PWA is not unmounted when the player leaves it, it is backgrounded, so
@@ -129,14 +129,19 @@ export function useVisits(
   //
   // Deliberately no interval alongside it. While the screen is visible the
   // figures in the banner only move when a sample is accepted, and
-  // POST /api/samples already returns the visits it touched (the merge
-  // below), so a timer would add nothing there. The one state it could
-  // catch that this does not is a visit expiring under a screen that stays
-  // continuously visible for the whole of VISIT_EXPIRY_MS - six hours of an
-  // unlocked, foregrounded, out-of-range phone - and buying that costs every
-  // open client a repeating authenticated request, forever, against a
-  // Raspberry Pi, for a transition that happens at most once per visit. See
-  // the report and O14 for what that leaves open.
+  // POST /api/samples reports every visit it touched *and* every one it
+  // expired (routes/fog.ts's sweep, the merge below), so a visit running out
+  // under a screen that never goes away is carried by the next sample post
+  // rather than by a timer - which is what closed Open Item O14 in v1.51. A
+  // timer would cost every open client a repeating authenticated request,
+  // forever, against a Raspberry Pi, for a transition that happens at most
+  // once per visit.
+  //
+  // That leaves the sample post as the carrier, so a screen posting no
+  // samples at all - permission denied, no fix - still learns nothing until
+  // it is hidden and shown again. This event is that path, and a client with
+  // no position is not tracking anything the banner could be measured
+  // against anyway.
   useEffect(() => {
     refreshPendingVisits();
 
@@ -152,11 +157,21 @@ export function useVisits(
     };
   }, [refreshPendingVisits]);
 
-  // Section 7.5 steps 3-4: merges the latest batch of visitUpdates into the
-  // pending list - updated in place for 'pending', dropped (and its name
-  // remembered for the mastering message) for 'completed'. routes/fog.ts's
-  // applyVisitUpdates never reports 'expired' here, only writes it, so
-  // there is no third case to handle. Keyed on visitVersion
+  // Section 7.5 steps 3-5: merges the latest batch of visitUpdates into the
+  // pending list - updated in place while the visit is still 'pending',
+  // dropped once it is not. 'completed' also leaves its name behind for the
+  // mastering message; 'expired' (routes/fog.ts's sweep, Open Item O14,
+  // closed in v1.51) just goes, which is the whole point of the server
+  // reporting it - the banner must never hold a visit the server does not
+  // agree is pending, and a later GET /api/visits/pending will not put it
+  // back, since that endpoint returns only live visits and this one is now
+  // 'expired' in the database.
+  //
+  // Written as "keep it only while it is pending" rather than as a case per
+  // terminal status: 'cancelled' is not a status this response can carry
+  // (nothing but the cancel endpoint writes it), and if that ever changed
+  // the row would still have to leave the banner. The one status that may
+  // stay is the one that is still pending. Keyed on visitVersion
   // (useSampleTracking.ts), not visitUpdates itself, so a later post that
   // touches nothing does not re-run this.
   useEffect(() => {
@@ -174,10 +189,10 @@ export function useVisits(
     setPendingVisits((current) => {
       const byId = new Map(current.map((visit) => [visit.id, visit]));
       for (const update of visitUpdates) {
-        if (update.status === 'completed') {
-          byId.delete(update.id);
-        } else {
+        if (update.status === 'pending') {
           byId.set(update.id, update);
+        } else {
+          byId.delete(update.id);
         }
       }
       return Array.from(byId.values());

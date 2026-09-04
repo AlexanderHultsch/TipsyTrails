@@ -1038,6 +1038,84 @@ describe('check-in and mastering', () => {
     expect(container.querySelector('.map-toast--mastered')?.textContent).toContain('permanent');
   });
 
+  // Section 7.5 step 5, and the client half of Open Item O14 (closed in
+  // v1.51): the player walked away and left the app open, so no
+  // visibilitychange ever fires and GET /api/visits/pending is never asked
+  // again. POST /api/samples reports
+  // the visit it expired, and that report has to take the row out of the
+  // banner - the banner must never hold a visit the server does not agree is
+  // pending. Before the merge learned this status, an 'expired' update was
+  // written straight back into the list and the row stayed.
+  it('removes the visit from the banner when POST /api/samples reports it expired', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    let serverVisits = [pendingVisit({ id: 77, barId: 1, barName: 'The Fox' })];
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, { visits: serverVisits });
+      }
+      if (url === '/api/samples') {
+        // The visit is now `expired` in the database, so the endpoint that
+        // answers with the pending list itself would stop naming it.
+        serverVisits = [];
+        return jsonResponse(200, {
+          newCells: 0,
+          newBars: [],
+          visitUpdates: [pendingVisit({ id: 77, barId: 1, barName: 'The Fox', status: 'expired' })],
+          tooFastToReveal: false,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    vi.useFakeTimers();
+    await renderMapWithFakeTimers();
+
+    expect(bannerItems()).toHaveLength(1);
+    expect(container.querySelector('.pending-visit-banner__bar')?.textContent).toBe('The Fox');
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(bannerItems()).toHaveLength(0);
+    expect(container.querySelector('.pending-visit-banner')).toBeNull();
+    // Nothing was mastered: an expiry is not a completion, and the mastering
+    // message belongs to the other terminal status alone.
+    expect(container.querySelector('.map-toast--mastered')).toBeNull();
+
+    // A later refetch does not put it back - the server no longer lists it.
+    const visibility = { state: 'visible' as DocumentVisibilityState };
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility.state,
+    });
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    } finally {
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+    expect(container.querySelector('.pending-visit-banner')).toBeNull();
+  });
+
   it('shows the "still pending" message when the current position moves out of range, without hiding the banner', async () => {
     const geo = stubGeolocation();
     stubWakeLock();
@@ -1447,9 +1525,10 @@ describe('check-in and mastering', () => {
     );
   });
 
-  // Open Item O14. GET /api/visits/pending expires stale visits lazily on
-  // read (Section 7.9) and returns only live ones, so it is the only thing
-  // that can tell the client a visit ended while it was not looking. Fetched
+  // Open Item O14, the half of it v1.24 answered. GET /api/visits/pending
+  // expires stale visits lazily on read (Section 7.9) and returns only live
+  // ones, so it is the only thing that can tell the client a visit ended
+  // while it was not looking. Fetched
   // once per mount it was a snapshot: an installed PWA is backgrounded
   // rather than unmounted, so "I closed Safari, came back, and was still
   // checked into two bars" is a screen that never asked again.
