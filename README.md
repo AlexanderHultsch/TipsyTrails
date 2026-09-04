@@ -16,13 +16,18 @@ runner; accounts, sessions, and a security-question password reset; the map —
 MapLibre GL and PMTiles, code-split, in a hand-drawn ink style, with district
 polygons and the city and district overview screens; fog of war — a per-user
 bitmask revealed by walking, a WebGL layer with a 2D canvas fallback, and
-per-district and per-day progress; bars — 170 of them imported from
+per-district and per-day progress; bars — 179 of them imported from
 OpenStreetMap, discovered at 100 m, permanently visible once found;
 community submissions — a player places a pin on the map, names the bar,
 and gives an address, and it goes live for everyone immediately unless it
 duplicates a similarly named bar nearby, in which case the rejection names
 the conflict; and an admin area, reachable only to admins, for creating,
-editing, hiding, and deleting bars and for viewing the user list.
+editing, hiding, and deleting bars and for viewing the user list, where an
+account can also be taken out of the leaderboard and the badge race without
+being taken out of the game. One admin tool ships switched off: a teleport
+for testing, which moves an admin's own position to a point on a map, and
+whose route is not registered at all unless `ADMIN_TELEPORT_ENABLED` is set,
+so a production deployment carries it inert.
 
 Mastering works like this: standing at a bar you have found, you check in.
 Twenty minutes later, open the app again while you are still there and the bar
@@ -87,9 +92,9 @@ to a sensibly narrated app is unknown; and installing to a home screen, on
 Android or iOS, is unproven for the same reason — no phone. The server itself
 was verified here before any of that, booted from a hand-assembled copy of the
 runtime image's file layout — it serves the API and the SPA, runs migrations,
-seeds the admin account and the city data, and imports all 170 bars against a
-real SQLite file. The first render against real tiles and the first install on
-a phone are the tests still to happen.
+seeds the admin account and the city data, and imports every bar in the
+committed seed against a real SQLite file. The first render against real
+tiles and the first install on a phone are the tests still to happen.
 
 [`SPEC.md`](SPEC.md) is the single source of truth: data model, game mechanics, API surface, design direction, and an eight-phase build plan with a Definition of Done per phase.
 
@@ -159,6 +164,12 @@ and every run pulls, rebuilds and restarts every site on the Pi. A failing
 image build aborts that whole run, every other site included; a failing
 `git pull --ff-only`, by contrast, only warns and then builds whatever
 stale code is already on disk, while the run reports success.
+
+Because that build runs on the Pi itself, the Pi needs **at least 2 GB of
+swap** configured. A Vite + MapLibre build on a 4 GB Pi sits close to the
+memory ceiling; the image's build stage already caps Node's heap at 1536 MB,
+and the swap is what keeps the rest of the machine out of trouble while it
+runs (`SPEC.md` Section 4.3).
 
 `admin: yes` makes `deploy.sh` write `apps/tipsy-trails/.env` on every
 deploy, containing exactly three variables — `SESSION_SECRET`, `ADMIN_USER`,
@@ -230,8 +241,9 @@ it beyond whatever the Pi's existing backup job already covers. Treat
 `--fresh` against this site as data loss, not a reset.
 
 See [`SPEC.md`](SPEC.md) Section 4.3 for the full contract, including the
-Cloudflare TLS chain and why the rate limits' trusted-hop count is still an
-open item.
+Cloudflare TLS chain, and Section 9.4 for why no rate limit here is keyed on
+an IP address — behind the tunnel every request arrives from the proxy, so a
+per-IP limit was a limit on the whole site.
 
 ### Standalone (this repository's compose)
 
@@ -253,15 +265,15 @@ is not part of this compose stack.
 Two licences, and the split matters:
 
 - **Code** — [MIT](LICENSE). Fork it and run your own city.
-- **Map data and everything derived from it** — `bars.json`, `districts.geojson`, `grid.bin`, and the `.pmtiles` extract are derived from OpenStreetMap and are therefore [ODbL](DATA-LICENSE). MIT does not cover them.
+- **Map data and everything derived from it** — everything under `data/seed/<slug>/` (`bars.json`, the three GeoJSON boundary files, `grid.bin` and `grid-meta.json`) and the `.pmtiles` extract are derived from OpenStreetMap and are therefore [ODbL](DATA-LICENSE). MIT does not cover them.
 
 Map data © OpenStreetMap contributors.
 
 ## Repository layout
 
-Described in Section 4.2 of the specification. Two directories are deliberately absent from a fresh clone: `data/db/` (the runtime SQLite database) and `data/tiles/` (the map extract, published as a GitHub Release asset rather than committed — 9.4 MB for Karlsruhe, and regenerated under a new filename each time). The API serves the extract from `TILES_DIR` with HTTP range support; without it the map routes have no basemap, and the tile route says so plainly instead of failing obscurely.
+Described in Section 4.2 of the specification. Two directories deliberately hold nothing in a fresh clone: `data/db/` (the runtime SQLite database — the directory itself is committed as a bare `.gitkeep`, everything in it gitignored) and `data/tiles/` (the map extract, absent altogether, published as a GitHub Release asset rather than committed — 9.4 MB for Karlsruhe, and regenerated under a new filename each time). The API serves the extract from `TILES_DIR` with HTTP range support; without it the map routes have no basemap, and the tile route says so plainly instead of failing obscurely.
 
-The city data under `data/seed/<slug>/` — boundaries, the cell grid, and the bars — is generated by the three scripts in `scripts/`, each parameterised by `data/cities/<slug>.json` so a second city needs a config file rather than a code change. See Section 11.4.
+The city data under `data/seed/<slug>/` — boundaries, the cell grid, and the bars — is generated by three of the six scripts in `scripts/`: `fetch-boundaries.ts`, `build-grid.ts` and `import-osm-bars.ts`, each parameterised by `data/cities/<slug>.json` so a second city needs a config file rather than a code change. The other three do not generate it — `collapse-seed-duplicates.ts` re-collapses a `bars.json` that already exists, `extract-tiles.sh` writes the map extract into `data/tiles/`, and `rebuild-grid.ts` is a stub that refuses to run. See Section 11.4.
 
 ## Contributing
 

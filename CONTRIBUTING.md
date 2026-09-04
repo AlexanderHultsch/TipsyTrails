@@ -47,8 +47,9 @@ Contributions are accepted under the same split the project uses:
 
 - Contributions to application source code (`packages/*`, scripts, config) are
   under the **MIT** licence (`LICENSE`).
-- Contributions to map-derived data artefacts (`data/seed/bars.json`,
-  `data/seed/districts.geojson`, `data/seed/grid.bin`, the `.pmtiles`
+- Contributions to map-derived data artefacts (everything under
+  `data/seed/<slug>/` — `bars.json`, `city.geojson`, `districts.geojson`,
+  `neighbours.geojson`, `grid.bin`, `grid-meta.json` — and the `.pmtiles`
   extract) are under the **ODbL** (`DATA-LICENSE`), inherited from
   OpenStreetMap. By submitting such a contribution you agree it is licensed
   under ODbL 1.0.

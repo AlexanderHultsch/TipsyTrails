@@ -7,15 +7,20 @@ Map data, and everything derived from it, comes from OpenStreetMap and is
 licensed under the **Open Database License (ODbL) 1.0**. This notice covers
 the following artefacts, when present in this repository or produced from it:
 
-- `data/seed/bars.json`
-- `data/seed/districts.geojson`
-- `data/seed/grid.bin`
+- `data/seed/<slug>/bars.json`
+- `data/seed/<slug>/city.geojson`
+- `data/seed/<slug>/districts.geojson`
+- `data/seed/<slug>/neighbours.geojson`
+- `data/seed/<slug>/grid.bin` and `data/seed/<slug>/grid-meta.json`
 - the `.pmtiles` tile extract (published as a GitHub Release asset, see
   `SPEC.md` Section 13.2, and reproducible from `scripts/extract-tiles.sh`)
 
-These files do not all exist yet — they are introduced in later development
-phases (see `SPEC.md` Section 12) — but this notice applies to each one from
-the moment it exists.
+The seed tree is per city — `<slug>` is the city slug, `karlsruhe` today (see
+`SPEC.md` Section 11.4). These paths were flat until that seam existed.
+
+Every one of these is committed today except the `.pmtiles` extract, which is
+deliberately never committed (`SPEC.md` Section 13.2). This notice applies to
+it, and to any further city's seed tree, from the moment it exists.
 
 ## Attribution
 
