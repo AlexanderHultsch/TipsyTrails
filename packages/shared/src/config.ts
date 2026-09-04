@@ -178,23 +178,44 @@ export const CONFIG = {
   SUGGEST_DUPLICATE_RADIUS_M: 25,
   SUGGEST_NAME_SIMILARITY: 0.85, // normalized Levenshtein ratio, see 11.3
 
-  // Section 11.1's import-side duplicate collapse. Deliberately larger than
-  // the submission radius above, and a separate constant rather than a
-  // widening of it, because the two compare different kinds of point: a
-  // submission is two places a person tapped, while the import compares a
-  // surveyed POI node against a *building centroid*, displaced by half a
-  // building. Karlsruhe's "Traube" is exactly that - one venue mapped as
-  // both a node and the way around it, 25.34 m apart, which the 25 m
-  // submission radius misses by 34 cm.
+  // Section 11.1's import-side duplicate collapse: how close two same-named
+  // records have to be before the import silently drops one of them.
   //
-  // 40 m was measured, not guessed. Across the whole committed seed there
-  // are exactly two pairs that clear SUGGEST_NAME_SIMILARITY within 60 m,
-  // and both are known duplicates of one venue; nothing else becomes a
-  // candidate at any radius up to 60 m. So this value collapses the two real
-  // duplicates with 20 m of headroom before it could reach anything else,
-  // and the similarity gate - shared with 11.3 - is what actually
-  // discriminates. Re-measure before raising it for a second city.
-  IMPORT_DUPLICATE_RADIUS_M: 40,
+  // What it is for: Karlsruhe's "Fettschmelze" is two nodes 6.15 m apart
+  // carrying the *identical* address - one venue entered twice, years apart,
+  // by two mappers.
+  //
+  // What it must not reach: "Traube" is a node and a way 25.34 m apart with
+  // the same name, and it is *two* venues - a restaurant and a beer garden
+  // on opposite sides of the street, neither carrying an address tag and
+  // with genuinely different footprints. Both have to survive. This is
+  // written down rather than merely obeyed because the OSM data reads like a
+  // double mapping and the next person to widen this radius will re-derive
+  // exactly that wrong conclusion from it: a radius that swallowed Traube
+  // would delete a bar a player can walk into, which is a worse failure than
+  // the duplicate marker the collapse exists to remove.
+  //
+  // Those two are the only same-name pairs anywhere within 60 m of each
+  // other in the committed seed, so any value strictly between 6.15 and
+  // 25.34 behaves identically on this data. 15 is the roundest of them -
+  // 2.4x above Fettschmelze, 1.7x below Traube - and it was not derived to
+  // any finer precision than that.
+  //
+  // The similarity gate, not this radius, is what does most of the
+  // discriminating. Every other pair within 60 m has a plainly different
+  // name and comes nowhere near SUGGEST_NAME_SIMILARITY: the closest any of
+  // them gets is 0.60 ("Old School" against "The Old Chapel Pub"), and
+  // "Schlossbar" against "Schlosshotel" is 0.58 at 22.64 m, i.e. inside even
+  // the old 40 m radius and rejected on the name alone. Re-measure for a
+  // second city; this is a fact about how Karlsruhe is mapped, not a
+  // universal one.
+  //
+  // Note that this is now *below* SUGGEST_DUPLICATE_RADIUS_M, reversing the
+  // relationship the two constants used to have. That is deliberate, not an
+  // oversight: the submission radius only raises a warning on a form a
+  // person is filling in, while this one removes a record from the seed with
+  // nobody looking, so it is the one that has to be tight.
+  IMPORT_DUPLICATE_RADIUS_M: 15,
 
   LEADERBOARD_PAGE_SIZE: 50,
   MAINTENANCE_INTERVAL_MS: 60 * 1000, // see 7.9

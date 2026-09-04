@@ -1080,15 +1080,6 @@
     "source": "osm"
   },
   {
-    "osm_id": "node/5408199821",
-    "name": "Fettschmelze",
-    "address": "Alter Schlachthof 25, 76131 Karlsruhe",
-    "lat": 49.0046399,
-    "lon": 8.4290321,
-    "cell_index": 59439,
-    "source": "osm"
-  },
-  {
     "osm_id": "node/5641892653",
     "name": "Café Mixbar",
     "address": null,

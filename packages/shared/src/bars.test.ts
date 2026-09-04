@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CityConfig } from './city.js';
 import { CONFIG } from './config.js';
-import { toCell } from './grid.js';
+import { haversineDistanceM, toCell } from './grid.js';
 import {
   buildBarsQuery,
   collapseDuplicateBars,
@@ -332,8 +332,11 @@ describe('collapseDuplicateBars', () => {
     lon: 8.4290321,
   });
 
-  // node/1447845917 and way/54732961: the same name, but 25.3 m apart —
-  // just outside SUGGEST_DUPLICATE_RADIUS_M, so the rule leaves them alone.
+  // node/1447845917 and way/54732961: the same name, 25.34 m apart, no
+  // address on either — and *two venues*, a restaurant and a beer garden on
+  // opposite sides of the street. Both must survive. The pair reads like a
+  // node-and-building double mapping and is not one, which is the whole
+  // reason IMPORT_DUPLICATE_RADIUS_M is 15 m (SPEC.md Section 11.1, trap 14).
   const TRAUBE_NODE = importedBar({
     osm_id: 'node/1447845917',
     name: 'Traube',
@@ -357,27 +360,41 @@ describe('collapseDuplicateBars', () => {
     expect(result.collapsed[0].distanceM).toBeCloseTo(6.2, 1);
   });
 
-  // The radius half of the rule, from both sides: same name, 25.3 m apart,
-  // and they stay two bars. A radius widened far enough to swallow this pair
-  // would start merging genuinely distinct neighbouring venues, which in a
-  // city centre is the more damaging failure of the two — a bar that cannot
-  // be checked into at all.
-  // The pair that made IMPORT_DUPLICATE_RADIUS_M a constant of its own: one
-  // venue mapped twice, as the surveyed node and as the building way around
-  // it. Their centroids are 25.34 m apart, which the 25 m *submission* radius
-  // misses by 34 cm - and this is the pair the owner actually got stuck in,
-  // checked into both halves of it at once. Real coordinates from the seed,
-  // so a change to either radius is measured against the venue that produced
-  // the requirement rather than against a rounded stand-in.
-  it('collapses a venue mapped as both a node and the building way around it', () => {
+  // The pair that bounds IMPORT_DUPLICATE_RADIUS_M from above. Until v1.49
+  // this suite asserted the opposite — that Traube collapsed at 40 m — on the
+  // reading that it was one venue mapped as a node and as the building way
+  // around it. The owner says it is two: a restaurant and a beer garden
+  // facing each other across the street. So the assertion is inverted rather
+  // than deleted, and it is inverted against the real coordinates from the
+  // seed, because collapsing this pair is not a harmless over-merge — it
+  // takes a bar a player can walk into off the map entirely, which is worse
+  // than the duplicate marker the rule exists to remove.
+  it('keeps Traube, which is two venues 25 m apart and not one venue mapped twice', () => {
     const result = collapseDuplicateBars([TRAUBE_NODE, TRAUBE_WAY]);
 
-    expect(result.bars).toHaveLength(1);
-    expect(result.collapsed).toHaveLength(1);
-    // The surveyed node survives the way's centroid (see the survivor order).
-    expect(result.bars[0].osm_id).toBe('node/1447845917');
-    expect(result.collapsed[0].distanceM).toBeGreaterThan(CONFIG.SUGGEST_DUPLICATE_RADIUS_M);
-    expect(result.collapsed[0].distanceM).toBeLessThan(CONFIG.IMPORT_DUPLICATE_RADIUS_M);
+    expect(result.bars.map((entry) => entry.osm_id)).toEqual(['node/1447845917', 'way/54732961']);
+    expect(result.collapsed).toHaveLength(0);
+  });
+
+  // The two halves of the tuning as one property, which is what actually
+  // fails if someone widens the radius back: identical names at Traube's
+  // separation stay two bars, and identical names at Fettschmelze's become
+  // one. Written against the two real distances rather than against the
+  // constant, so it pins the *outcome* and not the arithmetic.
+  it('separates the two same-name pairs in the seed: 25 m survives, 6 m collapses', () => {
+    const traube = collapseDuplicateBars([TRAUBE_NODE, TRAUBE_WAY]);
+    const fettschmelze = collapseDuplicateBars([FETTSCHMELZE_A, FETTSCHMELZE_B]);
+
+    expect(haversineDistanceM(TRAUBE_NODE, TRAUBE_WAY)).toBeCloseTo(25.34, 1);
+    expect(traube.bars).toHaveLength(2);
+
+    expect(haversineDistanceM(FETTSCHMELZE_A, FETTSCHMELZE_B)).toBeCloseTo(6.15, 1);
+    expect(fettschmelze.bars).toHaveLength(1);
+
+    // And the radius sits strictly between them, which is the only reason
+    // both answers can hold at once.
+    expect(CONFIG.IMPORT_DUPLICATE_RADIUS_M).toBeGreaterThan(6.15);
+    expect(CONFIG.IMPORT_DUPLICATE_RADIUS_M).toBeLessThan(25.34);
   });
 
   // The distance half of the rule still has to bite somewhere, so this is the
@@ -389,7 +406,7 @@ describe('collapseDuplicateBars', () => {
       importedBar({
         osm_id: 'node/901',
         name: 'Traube',
-        // ~89 m north of TRAUBE_NODE, comfortably past the 40 m radius.
+        // ~89 m north of TRAUBE_NODE, well past any plausible import radius.
         lat: 48.9994991,
         lon: 8.4731355,
       }),

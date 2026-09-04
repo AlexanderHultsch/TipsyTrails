@@ -474,11 +474,17 @@ export function osmElementsToBars(
 // ---------------------------------------------------------------------------
 // Duplicate collapse (SPEC.md Section 11.1).
 //
-// OSM maps the same physical venue twice more often than one would like: a
-// node for the venue and a way for the building it occupies, or simply two
-// nodes surveyed by two mappers years apart. Karlsruhe's seed contains both
-// shapes — "Fettschmelze" as two nodes about 7 m apart, "Traube" as a node
-// and a way about 20 m apart. Two rows means two bar ids, and every rule
+// OSM maps the same physical venue twice more often than one would like: two
+// nodes surveyed by two mappers years apart, or a node for the venue and a
+// way for the building it occupies. Karlsruhe's seed held one pair of the
+// first kind — "Fettschmelze", two nodes 6.15 m apart with the identical
+// address. It also holds a pair that looks like the second kind and is not:
+// "Traube" is a node and a way 25.34 m apart, and they are two venues, a
+// restaurant and a beer garden across the street from each other. Both stay.
+// See `CONFIG.IMPORT_DUPLICATE_RADIUS_M`, which is sized by that pair rather
+// than by the duplicate.
+//
+// Two rows for one venue means two bar ids, and every rule
 // downstream that is keyed on a bar id then treats them as two bars: the
 // partial unique index `idx_visits_one_pending` (Section 5.7) stops a second
 // pending visit at the same *id* and cannot stop one at the twin, so a player
@@ -488,10 +494,16 @@ export function osmElementsToBars(
 // The rule applied is not a new one. It is Section 11.3's community-
 // submission duplicate guard, `findConflictingBar` (`suggest.ts`), called
 // with the bars kept so far as the "active bars" it checks against — the same
-// `SUGGEST_DUPLICATE_RADIUS_M`, the same `SUGGEST_NAME_SIMILARITY`, the same
-// name normalisation and the same empty-name guard. One implementation, so
-// the import and the submission form can never disagree about what a
-// duplicate is.
+// `SUGGEST_NAME_SIMILARITY`, the same name normalisation and the same
+// empty-name guard. One implementation, so the import and the submission form
+// can never disagree about what a duplicate *is*.
+//
+// The radius is the one part that is not shared: `findConflictingBar` takes it
+// as an argument, and this caller passes `IMPORT_DUPLICATE_RADIUS_M` (15 m)
+// where the submission form passes `SUGGEST_DUPLICATE_RADIUS_M` (25 m). The
+// import's is the tighter of the two on purpose — a submission that trips the
+// guard only warns a person filling in a form, while a collapse here deletes
+// an OSM record from the seed with nobody looking.
 // ---------------------------------------------------------------------------
 
 /** One merged pair: which bar was kept, which was dropped, and how far apart they were. */
@@ -555,9 +567,9 @@ function compareSurvivorPriority(a: Bar, b: Bar): number {
 /**
  * Collapses near-identical venues into one bar, per SPEC.md Section 11.1.
  *
- * Two bars are the same venue when Section 11.3's rule says so: within
- * `SUGGEST_DUPLICATE_RADIUS_M` of each other and with a normalized
- * Levenshtein name ratio of at least `SUGGEST_NAME_SIMILARITY`.
+ * Two bars are the same venue when Section 11.3's rule says so, at this
+ * caller's radius: within `IMPORT_DUPLICATE_RADIUS_M` of each other and with
+ * a normalized Levenshtein name ratio of at least `SUGGEST_NAME_SIMILARITY`.
  *
  * The scan runs over a copy sorted by `compareSurvivorPriority`, keeping the
  * first member of each cluster and dropping every later one that conflicts

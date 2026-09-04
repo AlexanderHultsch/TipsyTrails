@@ -161,13 +161,19 @@ export function findConflictingBar(
   // The radius is a parameter with the community-submission value as its
   // default, because the two callers are asking different questions and one
   // number cannot answer both. Section 11.3 compares two points a person
-  // placed; Section 11.1's import compares a surveyed POI node against a
-  // *building centroid*, which sits half a building away from the door -
-  // Karlsruhe's own "Traube" is one venue mapped as both, 25.34 m apart, and
-  // no shared value can be tight enough for the first caller and loose
-  // enough for the second. Everything else about the guard - the
-  // normalisation, the empty-name rule, SUGGEST_NAME_SIMILARITY - is shared
-  // deliberately, and it is the similarity gate that does the discriminating.
+  // placed and only warns them; Section 11.1's import compares two OSM
+  // records and *deletes* one of them, unattended, so its radius is measured
+  // against the city's actual data and is currently the tighter of the two
+  // (IMPORT_DUPLICATE_RADIUS_M, 15 m, against this default's 25 m). It was
+  // once the looser one, on the belief that Karlsruhe's two "Traube" records
+  // 25.34 m apart were one venue mapped as a node and as the building way
+  // around it; they are two venues, and the radius that merged them would
+  // have taken a real bar off the map. See IMPORT_DUPLICATE_RADIUS_M's own
+  // note before assuming either direction is the natural one.
+  //
+  // Everything else about the guard - the normalisation, the empty-name
+  // rule, SUGGEST_NAME_SIMILARITY - is shared deliberately, and it is the
+  // similarity gate that does the discriminating.
   radiusM: number = CONFIG.SUGGEST_DUPLICATE_RADIUS_M,
 ): DuplicateCandidateBar | undefined {
   const normalizedCandidate = normalizeBarName(candidateName);
