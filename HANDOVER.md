@@ -26,7 +26,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.56                                                       |
+| Spec version          | 1.57                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
@@ -82,22 +82,55 @@ Pi backup job covers. `--fresh` against this site is data loss, not a reset.
 
 Nothing below is buildable from this sandbox. Every item needs either the
 owner's own environment (the Pi, a phone, a browser) or a decision only the
-owner can make. In dependency order — independent steps can proceed even if
-an earlier one is stuck:
+owner can make. The numbers are stable identities — `SPEC.md` Section 12 cites
+several of them — so they stay as they are and each entry opens with its
+status instead.
 
-1. **The tile extract onto the Pi.** Independent of everything else here.
+**Where it stands.** Of the deployment items, **4, 5 and 6 are closed and 3 is
+closed in the part that matters** (below). **1, 2 and one half of 5 are open**:
+
+- **1, the tile extract**, is blocked on nothing and blocks the most — without
+  it `/tiles/*` answers the Section 13.2 error, the map has no basemap, and
+  item 2 has nothing to cache. Do it first.
+- **2, the Cloudflare Cache Rule**, is blocked on nothing either, but it is
+  only worth checking once 1 has landed, because there is nothing at the edge
+  to produce a `cf-cache-status: HIT` until then.
+- **The admin sign-in carried by 5** is blocked on nothing. One sign-in
+  settles whether the account exists; nothing here can tell.
+
+**7–14 need a device, a browser or the Pi under load** and are not on the
+critical path — the site runs without any of them being answered.
+
+Everything recorded below about the Pi was observed on **2026-08-19** and
+nothing in this repository can see the Pi now. Treat it as a record of that
+day, not as the current state of the machine, and re-check anything a decision
+rests on.
+
+1. **Open. The tile extract onto the Pi.** Independent of everything else here.
    Built and measured at 9.4 MB, sitting on the owner's laptop as
    `karlsruhe.2026-08.pmtiles`; copy it into the Pi's `TILES_DIR`, nothing
    more to build. `scripts/extract-tiles.sh` can regenerate it but has never
    been run end to end.
-2. **The Cloudflare Cache Rule for `/tiles/*`.** Independent of everything
-   else here. Without it Cloudflare never caches `.pmtiles` and every range
-   request reaches the Pi.
-3. **`PUBLIC_ORIGIN`, `PORT`, `DB_PATH` in the platform's own
+2. **Open. The Cloudflare Cache Rule for `/tiles/*`.** Independent of
+   everything else here. Without it Cloudflare never caches `.pmtiles` and
+   every range request reaches the Pi. Nothing to verify until item 1 puts an
+   extract on the volume.
+3. **Done for the two variables that matter; `PORT` undetermined —
+   `PUBLIC_ORIGIN`, `PORT`, `DB_PATH` in the platform's own
    `docker-compose.yml`**, this site's `environment:` block (exact values in
-   `SPEC.md` Section 4.3). Independent of 1–2. `deploy.sh` never writes
-   these and the app refuses to boot without `PUBLIC_ORIGIN` — has to be in
-   place before the site can come up at all.
+   `SPEC.md` Section 4.3). `deploy.sh` never writes these; they were always
+   manual. This entry is closed by inference rather than by anyone reading
+   that file, and the inference is stated so it can be checked:
+   `packages/api/src/env.ts` gives **neither** `PUBLIC_ORIGIN` nor
+   `DATABASE_PATH`/`DB_PATH` a default, so the process cannot start without
+   both — and item 5 records it started and served. Item 4's first-deploy
+   crash on `mkdir '/data/db'` says the same thing from the other side:
+   `docker-entrypoint.sh` creates that directory only when one of the two
+   database variables is set. **`PORT` is not established by any of that.**
+   `API_PORT` defaults to 3000, so the listening port in item 5's log line is
+   exactly what an unset `PORT` would also produce, and the Caddy block
+   proxies to 3000 either way. Nothing turns on the difference; if the block
+   is ever edited, set all three as Section 4.3 shows.
 4. **Done — the image builds and runs on the Pi, at the cost of one crash
    loop.** The root `Dockerfile` builds on the Pi's own arm64: `gosu`
    installs cleanly (`gosu 1.14-1+b10 arm64`) and the web build runs there
@@ -108,8 +141,8 @@ an earlier one is stuck:
    Commit `7626ecb` starts the container as root, prepares and chowns
    `/data`, then drops to `node` with `gosu`; the next deploy came up and
    stayed up, with `COMMAND` showing the entrypoint.
-5. **Done — the site is registered and serving; two things it did not
-   close.** All three blocks are on the Pi, and the container answers over
+5. **Done — the site is registered and serving; two things it did not close,
+   one of which is still open here.** All three blocks are on the Pi, and the container answers over
    the public internet: `curl -s https://tipsytrails.ahultsch.com/api/health`
    returns `{"status":"ok"}`, a real browser loaded the whole PWA shell over
    that hostname (`/`, the hashed CSS and JS, `manifest.json`, `sw.js`,
@@ -118,8 +151,8 @@ an earlier one is stuck:
    `Server listening at http://172.19.0.3:3000`. Still open, both carried
    by this step rather than closed with it: the tile extract is not on the
    volume, and the app says so in its own log — "Tile extract not found at
-   /data/tiles/karlsruhe.2026-08.pmtiles" — which is step 1 above. And the
-   admin account is unconfirmed. `deploy.sh`'s seeding loop skips every
+   /data/tiles/karlsruhe.2026-08.pmtiles" — which is step 1 above. And,
+   **still open, the admin account is unconfirmed.** `deploy.sh`'s seeding loop skips every
    site after the first (a platform bug, reported separately), so
    `npm run seed:admin` never ran against this site at all; boot-time
    seeding in `initialiseDatabase` should have created the account from
@@ -164,6 +197,13 @@ sandbox regardless of who is asking:**
 Spec items with no code behind them at all, as distinct from the debts in
 Section 5 (which are built, just imperfectly).
 
+Re-read against the code at v1.57, after the blocks that produced v1.46–v1.56:
+all three rows are still true and none of that work touched them. There is no
+`@font-face` rule anywhere under `packages/web/src` — `--font-serif` and
+`--font-sans` are still system stacks; `packages/web/src/map/ink-style.ts`
+still declares no symbol layer, and says in a comment why; and no style layer
+in it is filtered by the fog mask.
+
 | Item                                                            | Needs                                                                                                                                                                                                                                                                                                                               |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Self-hosted fonts (Section 8.2)                                 | Subsetted Latin `@font-face` files for the serif/sans pair. Currently system stacks only — `--font-serif` and `--font-sans` in `packages/web/src/index.css` resolve to `Georgia, ...` and `system-ui, ...`; there is no `@font-face` rule anywhere in the app. Required by C3 (no CDN-hosted fonts) once real font files are added. |
@@ -203,7 +243,9 @@ must not be:
 
 ## 5. Deliberate debts
 
-Small, known, left alone on purpose.
+Small, known, left alone on purpose. Every row was checked against the file it
+names at v1.57 and all eight still hold — the work behind v1.46–v1.56 closed
+none of them, and none of them is now wrong.
 
 | Item                                                                                                        | Where                                |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------ |
