@@ -7,10 +7,15 @@ Phase N", no longer applies: every phase is built, and what remains is not
 more building but the operational work of actually running this on the Pi,
 plus the handful of spec items nobody has built at all (Section 3 below).
 
-`SPEC.md` is the source of truth (now v1.11); `CLAUDE.md` holds the
-guardrails. This file only records where things stand, what is deliberately
+`SPEC.md` is the source of truth; `CLAUDE.md` holds the guardrails. The spec
+version this file was last checked against is in the table below, stated in
+exactly one place and pinned there by `packages/shared/src/spec-version.test.ts`
+— it said "now v1.11" here for forty-one versions, in a second copy nothing
+could check. This file only records where things stand, what is deliberately
 unfinished, and what to do first. Keep it current rather than replacing it
 wholesale again — there is no next phase to write it "before" any more.
+`CLAUDE.md` requires that a change which falsifies a rule stated here updates
+this file in the same commit.
 
 ---
 
@@ -21,8 +26,13 @@ wholesale again — there is no next phase to write it "before" any more.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Tests                 | 719 green — shared 165, api 353, web 201                   |
-| Spec version          | 1.11                                                       |
+| Spec version          | 1.53                                                       |
+
+The test count used to sit in that table and is deliberately gone: it moved on
+almost every commit, no test could pin it without failing constantly for no
+signal, and a number nothing checks is a number that goes wrong quietly.
+`pnpm test` prints the current one. The spec version stays because it changes
+rarely and is now asserted.
 
 Everything was committed and pushed at handover.
 
@@ -195,17 +205,23 @@ must not be:
 
 Small, known, left alone on purpose.
 
-| Item                                                                                                        | Where                                  |
-| ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| No map labels — needs a self-hosted glyph endpoint, which nothing serves yet (Section 3 above)              | `packages/web/src/map/ink-style.ts`    |
-| Section 8.1's hatch/stipple texture is approximated with low-opacity fills                                  | same                                   |
-| Section 7.3's "buildings and minor streets only where revealed" is not built (Section 3 above)              | same                                   |
-| Avatar SVGs contain float artefacts (e.g. a computed `stroke-width` with a long float tail)                 | `packages/shared/src/avatar.ts`        |
-| Avatar renders very small on `/app`                                                                         | `packages/web/src/screens/AppHome.tsx` |
-| `PASSWORD_MIN_LENGTH` is 8, chosen by an executor because the spec names no value                           | `packages/shared/src/config.ts`        |
-| The seeded admin cannot use the security-question reset; its recovery path is the environment               | `packages/api/src/db/seed-admin.ts`    |
-| The map picker has no keyboard-only path — carried forward through Phase 8's accessibility pass, still open | `packages/web/src/map/MapPicker.tsx`   |
-| Admin create/edit forms take latitude and longitude as plain numbers, not a picker — same                   | `packages/web/src/screens/Admin.tsx`   |
+| Item                                                                                                        | Where                                |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| No map labels — needs a self-hosted glyph endpoint, which nothing serves yet (Section 3 above)              | `packages/web/src/map/ink-style.ts`  |
+| Section 8.1's hatch/stipple texture is approximated with low-opacity fills                                  | same                                 |
+| Section 7.3's "buildings and minor streets only where revealed" is not built (Section 3 above)              | same                                 |
+| Avatar SVGs contain float artefacts (e.g. a computed `stroke-width` with a long float tail)                 | `packages/shared/src/avatar.ts`      |
+| `PASSWORD_MIN_LENGTH` is 8, chosen by an executor because the spec names no value                           | `packages/shared/src/config.ts`      |
+| The seeded admin cannot use the security-question reset; its recovery path is the environment               | `packages/api/src/db/seed-admin.ts`  |
+| The map picker has no keyboard-only path — carried forward through Phase 8's accessibility pass, still open | `packages/web/src/map/MapPicker.tsx` |
+| Admin create/edit forms take latitude and longitude as plain numbers, not a picker — same                   | `packages/web/src/screens/Admin.tsx` |
+
+"Avatar renders very small on `/app`" is dropped for a different reason: it is
+false. v1.32 rebuilt `/app` into the start screen of Section 8.3 and it draws
+no avatar at all — `packages/web/src/screens/AppHome.tsx` does not import
+`components/Avatar.tsx`, and the only screens that render an avatar are the
+leaderboard and the profiles. The debt pointed at a file that no longer holds
+the thing complained about.
 
 `scripts/extract-tiles.sh` (previously listed here as missing) was written
 this session — dropped from the table, not because the pipeline it drives has

@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.52
+**Version:** 1.53
 **Status:** Built and deployed; see _Status_ at the end of this front matter
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -819,7 +819,7 @@ A consequence worth stating: cells outside every district are revealable (the fo
 
 ### 7.1 Constants
 
-All of these live in `packages/shared/src/config.ts`, and that file is authoritative: the block below reproduces every key it exports, with the file's own comments reduced to one line each. A constant named anywhere else in this document is defined here or nowhere.
+All of these live in `packages/shared/src/config.ts`, and that file is authoritative: the block below reproduces every key it exports, with the file's own comments reduced — one trailing line per key, or a short header of a line or three where one comment introduces a group of keys and there is no single key to hang it on. A comment here that is not shorter than the one in `config.ts` is a copy rather than a reduction, and copies are what go stale; the reasoning belongs in `config.ts` and in the section that owns the constant. A constant named anywhere else in this document is defined here or nowhere.
 
 ```ts
 export const CONFIG = {
@@ -878,13 +878,7 @@ export const CONFIG = {
   USERNAME_MAX_LENGTH: 20,        // Section 5.3
   PASSWORD_MIN_LENGTH: 8,         // not stated elsewhere in this document; chosen by the auth route
 
-  // SPEC.md Section 9.4, enforced by the in-memory token bucket in
-  // packages/api/src/http/rate-limit.ts. `by` names what a bucket is keyed
-  // on, and the IP address is deliberately not one of the choices: it keys a
-  // bucket on network topology, which was measurably wrong here — behind the
-  // tunnel every request arrived from the proxy, so one bucket held the whole
-  // site. Section 9.4 has the reasoning, the two exhaustion costs accepted
-  // with these numbers, and the two routes deliberately left unlimited.
+  // in-memory token bucket; `by` has no `'ip'` member on purpose — see 9.4
   RATE_LIMITS: {
     authGlobal: { limit: 60, windowMs: 60 * 1000, by: 'global' }, // ceiling on argon2 work, see 9.4
     register: { limit: 30, windowMs: 60 * 60 * 1000, by: 'global' }, // account spam; no authGlobal too
@@ -894,20 +888,10 @@ export const CONFIG = {
     suggest: { limit: 10, windowMs: 24 * 60 * 60 * 1000, by: 'user' },
   },
 
-  // Badges are a per-period COMPETITION, and these are its FLOORS. A badge
-  // goes to the highest-scoring user of the period, and to nobody at all if
-  // no one reaches the floor — its only job is to stop the badge being won by
-  // being the least inactive person. Set them low: they are qualification, not
-  // the target. A user qualifies when value >= threshold (minimum, not
-  // "strictly greater"). Never sent to a client — see Section 7.7.
+  // qualifying FLOORS for a competition, never targets and never sent — see 7.7
   BADGE_THRESHOLDS: {
-    // Percent of playable city area newly revealed in the period.
-    // Deliberately not linear across periods: after the first weeks most walking
-    // retraces already-revealed ground, so sustained progress decays sharply.
-    // 0.1% is roughly 900 m of previously unexplored walking.
-    explorer: { week: 0.1,  month: 0.3,  year: 2.0 },
-    // Bars newly mastered in the period.
-    barfly:   { week: 1,    month: 2,    year: 3 },
+    explorer: { week: 0.1,  month: 0.3,  year: 2.0 },  // % of playable area newly revealed; not linear across periods
+    barfly:   { week: 1,    month: 2,    year: 3 },    // bars newly mastered in the period
   },
 
   // Map camera limits. Zoom 10 keeps the whole city in view and never leaves
@@ -1727,7 +1711,9 @@ The client therefore reads `code` and `message` defensively and falls back to `u
 ### 9.6 Response shapes
 
 Every shape a route can return, as the client declares it in
-`packages/web/src/api/types.ts`. That file is the client's mirror of what the API sends; the two are
+`packages/web/src/api/types.ts` — with two exceptions it declares elsewhere: the `{ ok: true }`
+acknowledgements, written inline at their call sites in `api/client.ts`, and the boundary files, in
+`api/geo-types.ts`. That file is the client's mirror of what the API sends; the two are
 kept in step by hand, and a rebuilder should generate both from this table rather than from either
 side alone. Timestamps are epoch **seconds** (Section 0, rule 6). `discoveredAt`, `createdAt`,
 `awardedAt`, `startedAt`, `lastSampleAt` and `lastSeenAt` are all absolute; `confirmedS` and
@@ -1750,9 +1736,12 @@ FogProgress   { revealedCells, playableCells, districts: { id, revealedCells }[]
 | Route | Response |
 | --- | --- |
 | `GET /api/health` | `{ status: 'ok' }` |
-| `GET /api/auth/me` | `{ user: User }`, or 401 |
-| `POST /api/auth/register`, `/login` | `{ user: User }` |
-| `POST /api/auth/logout` | 204, no body |
+| `GET /tiles/<filename>` | The extract's bytes, 200 or 206 — no JSON shape |
+| `GET /static/<slug>/<filename>` | The committed GeoJSON file as it is on disk; the client types it as `BoundaryFeatureCollection` (`packages/web/src/api/geo-types.ts`) and not in `types.ts` with the rest |
+| `GET /api/auth/me` | `User`, or 401 — a bare user object, **not** wrapped in a `user` field |
+| `POST /api/auth/register`, `/login` | `User`, bare like `me` above; register answers 201, login 200 |
+| `POST /api/auth/logout` | `{ ok: true }`, 200 — not a 204, and not bodyless |
+| `POST /api/auth/reset`, `/change-password` | `{ ok: true }` |
 | `GET /api/auth/reset/question` | `{ question: string }` |
 | `GET /api/city` | `CityMeta` |
 | `GET /api/fog` | Binary mask plus `FogProgress` — see the wire-format note below |
@@ -1765,9 +1754,16 @@ FogProgress   { revealedCells, playableCells, districts: { id, revealedCells }[]
 | `GET /api/progress` | `{ city: { revealedCells, playableCells, percent, barsDiscovered, barsMastered }, districts: { id, name, revealedCells, playableCells, percent }[] }` — the two counts sit under `city` because they are city-wide figures and that is where this response keeps those; Section 7.6's per-district mastered count, when it is returned, belongs in each `districts` entry |
 | `GET /api/leaderboard` | `{ metric: 'area'\|'bars', period: 'all'\|'week'\|'month', page, pageSize, totalUsers, totalPages, entries: { rank, userId, displayName, isAnonymous, avatarSeed, value, badges: BadgeSummary[] }[] }` |
 | `GET /api/profile/:handle` | `{ userId, handle, displayName, isAnonymous, avatarSeed, areaPercent, barsMastered, badges: BadgeSummary[], badgeProgress: Record<period, BadgeProgress[]> }` |
+| `PATCH /api/settings` | `User` — the updated user, the same bare shape `GET /api/auth/me` answers with |
+| `DELETE /api/account` | `{ ok: true }` |
 | `GET /api/push/vapid-public-key` | `{ publicKey: string \| null }` |
+| `POST /api/push/subscribe`, `DELETE /api/push/subscribe` | `{ ok: true }` |
 | `GET /api/admin/bars` | `{ bars: AdminBar[] }` where `AdminBar` is `{ id, cityId, districtId, name, address, lat, lon, source, submittedBy: number\|null, status: 'active'\|'hidden', createdAt }` |
-| `GET /api/admin/users` | `{ users: AdminUser[] }` where `AdminUser` is `{ id, username, isAdmin, isAnonymous, mustChangePassword, createdAt, lastSeenAt: number\|null, areaRevealedCells, areaPercent, barsMastered, badgeCount }` |
+| `POST /api/admin/bars` | `AdminBar`, 201 |
+| `PATCH /api/admin/bars/:id` | `AdminBar` |
+| `DELETE /api/admin/bars/:id` | `{ ok: true }` |
+| `GET /api/admin/users` | `{ users: AdminUser[] }` where `AdminUser` is `{ id, username, isAdmin, isAnonymous, mustChangePassword, excludedFromRankings, createdAt, lastSeenAt: number\|null, areaRevealedCells, areaPercent, barsMastered, badgeCount }` |
+| `PATCH /api/admin/users/:id` | `AdminUser` — the same shape the list above holds, so the admin screen can put it straight back into its list (Section 9.3) |
 | `POST /api/admin/teleport` | Exactly `POST /api/samples`'s body, deliberately — the admin screen renders what happened with the fields the map already understands |
 | `GET /api/admin/teleport` | `{ position: { lat, lon } \| null }` — an object with a nullable field, not a bare `null` body, so there is one shape to parse either way |
 | `DELETE /api/admin/teleport` | `{ ok: true }` |
@@ -2198,7 +2194,7 @@ These are consequences to design around, not reasons to reconsider:
 ---
 ## 14. Open Items
 
-Re-audited against the code at v1.33. Items that were resolved and whose reasoning already lives in the section it concerns have been removed; the numbers of the items that remain are unchanged, because code comments cite them. O10 is the first item kept in place and marked closed instead of deleted, because it was closed by *removing what it was waiting on* rather than by answering it: a row that vanished would read as "measured at last", which is the one thing that did not happen. Closed rows keep their number and say what closed them.
+Re-audited against the code at v1.33. Items that were resolved and whose reasoning already lives in the section it concerns have been removed; the numbers of the items that remain are unchanged, because code comments cite them. O10 is the first item kept in place and marked closed instead of deleted, because it was closed by *removing what it was waiting on* rather than by answering it: a row that vanished would read as "measured at last", which is the one thing that did not happen. Closed rows keep their number and say what closed them. The same test decides every later one: delete the row when the question was answered and the answer now lives in the section it concerns; keep it, marked closed, when the question was dissolved instead — by the thing it waited on being removed (O10) or withdrawn (O11).
 
 | #   | Item                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Status                          |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
@@ -2209,7 +2205,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 | O6  | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. No workflow exists in the repository.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Documented, not built           |
 | O7  | Friends, shared sessions, and social features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Out of scope for v1             |
 | O10 | **Closed by removal, not by measurement.** This asked for the `X-Forwarded-For` hop count in front of the Pi, so that per-IP rate limits could be trusted. Nothing is keyed on an IP address any more (Section 9.4, v1.46): `by: 'ip'` is gone from the union, login is limited per username and the password-verifying routes under a global ceiling, and `trustProxy` is a list of private ranges rather than a count. The hop count is therefore no longer a correctness question — it decides the address in Fastify's log lines and nothing else — and the site-wide lockout it was quietly causing is gone with it. Nothing about the platform `Caddyfile`'s global options was ever read; that question stands in Section 4.3, where it now bears on nothing this app relies on. | Closed in v1.46 |
-| O11 | The owner reports well-known Karlsruhe venues missing from the seed. The import now covers `amenity` in bar/pub/biergarten/nightclub **or** `bar=yes` on any amenity (Section 11.1, widened in v1.20), and the committed seed holds 179 records. Whether anything is still missing has not been re-checked since that widening. Cause unestablished: venues tagged differently again (a cocktail bar as `amenity=cafe` with no `bar=yes`), absent from OSM, or outside the municipal boundary the import clips to. **Needs concrete named examples before any further filter change** — widening to `amenity=cafe` would pull in every café in the city.                                                                                              | Open                            |
+| O11 | **Closed by the owner's verdict, not by an investigation.** This recorded that well-known Karlsruhe venues appeared to be missing from the seed, and asked for concrete named examples before any further filter change. The person who knows the city has now reviewed what the widened import produces and judged it sufficient — *"O11 is already Closed. We extended it by Restaurants which have a bar and im Fine."* That widening is the `bar=yes`-on-any-amenity clause this row already described (Section 11.1, v1.20), and the committed seed still holds **179** records (v1.49). No examples are coming, so there is nothing left to establish and no further widening to weigh: `amenity=cafe`, the one this row ruled out, stays ruled out, and Section 11.1's standing answer to a gap is the admin interface rather than a looser filter. Row kept rather than deleted, per this section's rule: a vanished O11 would read as "the missing venues were named and added", and nothing was added — the only person who could name them said the coverage is right as it stands. | Closed in v1.53 |
 | O13 | The two fog renderers diverge on Section 7.3's layer ordering. The WebGL path is a style layer inserted at the ordering point that section fixes. The 2D canvas fallback is a `<canvas>` appended to the map container — a DOM overlay above the whole map — so it cannot be interleaved with the vector layers at all: without WebGL2 the fog covers roads and water too, and the whole base map shows through at one minus the fallback's flat alpha. Closing that means giving the fallback its own base-map compositing, which Section 7.3 explicitly does not ask of it. Accepted; revisit only if a real player turns out to be on that path. **The other half of this item is closed (v1.48).** From v1.43 this row also recorded that `.fog-canvas-fallback` had no rule in `index.css` at all: the canvas was `position: static` and in flow while maplibre-gl.css positions `.maplibregl-canvas`, and within one stacking context a positioned element paints above a non-positioned sibling whatever the DOM order — so MapLibre's own opaque canvas covered the fog and a device without WebGL2 most likely saw **no fog at all** rather than the uniform sheet described above. `index.css` now positions the canvas, takes it out of the pointer path, and gives it a z-index above the base map and below every mark the app draws over the map. Nothing in a jsdom test could see that: no test here applies a stylesheet, so the rule is asserted as text in `stylesheet.test.ts` instead, the way this repository checks every other layout declaration. What remains open is the interleaving, which no stylesheet can reach. | Open — narrowed |
 | O16 | `CONFIG.BADGE_THRESHOLDS` reaches the browser in plaintext. Section 7.7's wording holds — nothing renders a threshold and no route returns one — but its spirit does not. `CONFIG` is one object literal and `packages/web` imports it as a *value* in twelve modules (`api/types.ts`, `components/TrackingIndicator.tsx`, `map/ink-style.ts`, `map/MapPicker.tsx`, `map/bars/bar-stamps.ts`, all three under `map/fog/`, `screens/Map.tsx`, `screens/Leaderboard.tsx`, `screens/Privacy.tsx`, `tracking/status.ts`, `tracking/useSampleTracking.ts`), so the whole object is bundled and reads out of devtools in seconds. The exposure is mild — the thresholds are floors and a badge goes to the period's best — but the document should not read as a guarantee it does not enforce. **Fix:** split `CONFIG` into a client-safe half and a server-only half; that touches every one of those imports. | Open                            |
 | O18 | **Narrowed in v1.52: four responses are checked at runtime, the rest are still cast.** `request<T>` in `packages/web/src/api/client.ts` still ends in `body as T`, and `packages/web` still carries no validation dependency — the fix taken was hand-written narrowing predicates in `packages/web/src/api/response-guards.ts`, passed to `request`'s new optional third argument, and not this row's original proposal of shared zod schemas. That proposal was rejected on its own terms: it would have put a runtime dependency into `packages/shared`, which deliberately has none, and it would have split each predicate from the `api/types.ts` type it mirrors, in a package `packages/api` would never import it from. **Checked:** `GET /api/progress`, `POST /api/samples`, `GET /api/visits/pending`, `POST /api/visits` — and within each, only the fields a screen renders or computes with. **Not checked:** everything else in Section 9.6's table — the bar shapes, the boundaries, `GET /api/city`, `GET /api/leaderboard`, `GET /api/profile/:handle`, every admin route, `GET /api/fog`'s `X-Fog-Progress` header, and `POST /api/visits/:id/cancel`. **The rule that decides, and the one to extend by:** validate where a wrong shape produces a silently _wrong answer_ rather than a visible failure — a number that renders, a duration that is formatted, a status a branch reads. A shape whose drift crashes or renders nothing gains nothing from a check, since a crash is already visible; a shape nothing reads gains less than nothing, which is why `X-Fog-Progress` is cast (`FogProgress` reaches no screen — the fog cache keeps the mask beside it and drops the rest) and why the cancel response is cast (every caller discards it). **What is still open:** the rule leaves most of the table uncovered by design, and nothing enforces it — a field that starts being rendered has to be added to `response-guards.ts` by hand, and the predicates are a hand-kept mirror of a hand-kept mirror. | Open — narrowed                 |
@@ -2221,6 +2217,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 
 A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
 
+- **v1.53** — Documentation only; no route, component or constant changed. Section 9.6's three auth rows said what the endpoints were meant to return rather than what they do: `GET /api/auth/me` and `POST /api/auth/register`/`/login` answer a **bare** `User` and never a `{ user }` wrapper, and `POST /api/auth/logout` answers `{ ok: true }` with a 200 and not a bodyless 204 — the web client already agreed with the code, so the table was the only wrong copy. `AdminUser` there was missing `excludedFromRankings`, which the route has returned since v1.41, and twelve routes that answer with something had no row at all under a preamble promising every one of them; both are fixed, so a rebuilder generating the client from that table now gets what the API sends. Section 7.1's block stops carrying two comments copied verbatim out of `config.ts` against its own preamble's rule, and the preamble states the convention it actually follows. O11 is closed on the owner's verdict — the widened `bar=yes` import's coverage reviewed by the person who knows the city and judged sufficient, with no further examples coming — and is kept in place, marked closed, because a deleted row would read as venues found and added; the seed is still 179 records. `HANDOVER.md` is brought up to date, its spec-version marker is pinned by `packages/shared/src/spec-version.test.ts`, and its test count is deleted rather than left to rot. Sections 7.1, 9.6, 14; `CLAUDE.md` gains one rule.
 - **v1.52** — Four API responses are checked at runtime instead of cast. `request` in `packages/web/src/api/client.ts` takes an optional narrowing predicate, so every call site that does not pass one behaves exactly as before, and `GET /api/progress`, `POST /api/samples`, `GET /api/visits/pending` and `POST /api/visits` pass one from the new `packages/web/src/api/response-guards.ts` — hand-written, no new dependency, about 65 lines of code, which is roughly 0.6 KB gzipped on the wire and matters on a phone (Section 4.1). The rule that picked those four and no others is written into Section 9.6 and into O18: validate where a wrong shape produces a silently wrong answer rather than a visible failure. Numbers are checked with `Number.isFinite`, so `NaN` and the `Infinity` a `1e999` literal parses to are both rejected where a rendered figure is required; fields no screen reads are deliberately left unchecked, and so are the shapes whose drift already fails visibly. A rejection is an ordinary `ApiError` (`invalid_response`, the response's own status) and reaches the screens through `errorMessage` like every other failure. Sections 9.6, 14. O18 narrowed, not closed.
 - **v1.51** — A pending visit the player walked away from is noticed to have expired, and the banner is told. `POST /api/samples` sweeps every one of the caller's open pending visits once per request, after the batch and on the server's clock, instead of judging expiry only inside the on-site branch where a departed player is never reached; and `applyVisitUpdates` reports an expired visit in `visitUpdates` instead of writing it silently, which reverses the "an expiry is not reported back" rule and the false analogy with `GET /api/visits/pending` it rested on — that endpoint answers with the pending list itself, where absence is the notice, and it is unchanged. The client's merge keeps a visit in the banner only while its reported status is still `pending`, so an expired update removes the row rather than being written straight back into the list. No periodic refetch was added; Section 7.5's rejection of one stands. Sections 7.5, 7.9, 9.6. O14 closed and removed.
 - **v1.50** — `GET /api/progress` answers Section 7.6 in full city-wide: `city` gains `barsDiscovered` and `barsMastered`, computed as two aggregates in one statement over the caller's own discoveries in the active city, and the start screen drops `GET /api/bars` — it had been downloading every discovered bar, unbounded and growing with the players who play most, to read a length and a filtered length. "Mastered" is not defined a second time to do it: `routes/bars.ts`'s own SQL condition — the one `GET /api/bars` flags each bar with — is extracted as `MASTERED_BAR_CONDITION` and counted from, so the count and the flag cannot drift. Both counts are scoped to `bars.status = 'active'` like the bar list, which 7.6 now states along with why the leaderboard's unfiltered count is right to differ. The start screen is one request instead of two; `GET /api/bars` is unchanged and still fetched by the map, which draws every bar in it. Sections 7.6, 8.3, 9.2, 9.6. O17 closed and removed.
@@ -2297,4 +2294,4 @@ Kept only where a future reader might otherwise re-propose the reverted thing an
 
 ---
 
-_End of specification v1.52_
+_End of specification v1.53_

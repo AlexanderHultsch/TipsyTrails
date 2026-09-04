@@ -21,6 +21,8 @@ them; they are not suggestions.
   must stay that way.
 - English only, everywhere — UI copy, code comments, commit messages,
   identifiers (constraint C9).
+- A change that falsifies a rule stated in `HANDOVER.md` updates that file in
+  the same commit.
 - Before anything is considered done, these must all pass from the repository
   root: `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm test`.
 - `packages/api` and `packages/shared` resolve modules as NodeNext: relative
