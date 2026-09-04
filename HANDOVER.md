@@ -26,7 +26,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.57                                                       |
+| Spec version          | 1.58                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
@@ -339,6 +339,17 @@ Each cost a round trip. Each looked correct on first reading.
   it. **When a rule is about what reaches the client, test the artefact the
   client gets** — a test that asserts "no file imports X" is a test of the
   import graph, and the import graph is not the deliverable.
+- **And building the artefact from inside a test does not, by itself, build
+  the artefact.** The same file called Vite's `build()` with no `NODE_ENV`
+  of its own, and Vitest sets `NODE_ENV=test`; Vite's `isProduction` is
+  `(process.env.NODE_ENV || mode) === 'production'`, so from v1.53 to v1.57
+  what it built and grepped was React's _development_ bundle — `jsxDEV`,
+  invariant strings, 138.1 kB gzipped in the shell where `pnpm build` emits
+  82.0 kB. Harmless for a grep and fatal for a size, which is how v1.58 found
+  it while adding the app-shell budget. The build now stubs
+  `NODE_ENV=production` for its own duration and comes out with the same
+  chunk hashes `pnpm build` does. **A build in a test inherits the test
+  runner's environment; say what you mean about the environment.**
 - **The verification chain itself was lying.** `packages/api` and
   `packages/web` import `@tipsytrails/shared` through a gitignored `dist` that
   neither `pnpm test` nor `pnpm typecheck` rebuilt — only `prepare` did, and

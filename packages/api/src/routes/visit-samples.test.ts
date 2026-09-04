@@ -354,6 +354,31 @@ describe('POST /api/samples visitUpdates', () => {
     expect(row.onsite_samples).toBe(1);
   });
 
+  // The other half of Section 7.2 step 2, beside the stale case above: a
+  // sample the server refuses because the phone's clock runs fast must not
+  // count as time spent at the bar either. Same shape as the stale test on
+  // purpose — the two clauses of one rule are worth failing separately.
+  it('a sample rejected as future-dated by Section 7.2 validation does not touch the visit', async () => {
+    const cookie = await registerUser('walker');
+    const { visitId } = await checkInAtSchloss(cookie);
+
+    const futureTimestamp = Date.now() + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS + 60_000;
+    const response = await postSamples(cookie, [sample({ timestamp: futureTimestamp })]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      newCells: 0,
+      newBars: [],
+      visitUpdates: [],
+      tooFastToReveal: false,
+    });
+
+    const row = getVisit(visitId);
+    expect(row.status).toBe('pending');
+    expect(row.onsite_samples).toBe(1);
+    expect(row.confirmed_s).toBe(0);
+  });
+
   it('a fast-moving sample that reveals no fog still updates an on-site visit', async () => {
     const cookie = await registerUser('walker');
     const { visitId } = await checkInAtSchloss(cookie);

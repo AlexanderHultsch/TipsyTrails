@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from '@tipsytrails/shared';
 import type Database from 'better-sqlite3';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../app.js';
 import { openDatabase } from '../db/index.js';
 import { runMigrations } from '../db/migrate.js';
@@ -299,6 +299,143 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+    });
+  });
+
+  // SPEC.md Section 7.2 step 2's first clause — "discard if `timestamp` is
+  // more than SAMPLE_MAX_CLOCK_SKEW_MS in the future". The staleness half of
+  // the same step is covered by routes/visit-samples.test.ts; these four are
+  // the future-dated half, which nothing tested until v1.58 and which would
+  // have survived the whole guard being deleted.
+  //
+  // Every fixture below carries an accuracy of 10 m, well inside
+  // FOG_MAX_ACCURACY_M: the accuracy gate runs *before* this one, so a
+  // fixture with a bad accuracy would be discarded for the wrong reason and
+  // these tests would pass while proving nothing.
+  describe('the clock-skew guard', () => {
+    // Far enough ahead that no plausible delay between this line and the
+    // route's own Date.now() could bring it back inside the tolerance.
+    const wellAheadMs = CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS + 60_000;
+
+    it('discards a sample dated further ahead than SAMPLE_MAX_CLOCK_SKEW_MS', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ accuracy: 10, timestamp: Date.now() + wellAheadMs }),
+      ]);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        newCells: 0,
+        newBars: [],
+        visitUpdates: [],
+        tooFastToReveal: false,
+      });
+
+      // Not merely absent from the response: nothing was written either.
+      const fogResponse = await injectWithOrigin({
+        method: 'GET',
+        url: '/api/fog',
+        headers: { cookie },
+      });
+      const progress = JSON.parse(fogResponse.headers['x-fog-progress'] as string);
+      expect(progress.revealedCells).toBe(0);
+    });
+
+    // The consequence worth asserting, and the one a "no cells revealed"
+    // test misses: a discarded sample must not become the previous accepted
+    // position, or it would poison the teleport guard the *next* sample is
+    // measured against and refuse a perfectly good fix.
+    //
+    // The control half is what makes this falsifiable. The same far-away
+    // fixture, posted with a present timestamp, is accepted and does refuse
+    // the sample that follows it — so the pair shows the position is inside
+    // the bounding box, that the jump really is a teleport, and that the
+    // only difference between the two halves is the clock-skew guard.
+    it('does not let a discarded future-dated sample poison the teleport guard', async () => {
+      // ~1.4 km from SCHLOSS and still inside Karlsruhe's bounding box, the
+      // same fixture the teleport test above uses. Posted milliseconds
+      // before the SCHLOSS sample, it implies a speed far above
+      // SAMPLE_TELEPORT_SPEED_KMH whichever way round the two timestamps
+      // fall.
+      const FAR_AWAY = { lat: 49.02, lon: 8.42 };
+
+      const controlCookie = await registerUser('control');
+      const accepted = await postSamples(controlCookie, [
+        goodSample({ ...FAR_AWAY, accuracy: 10, timestamp: Date.now() }),
+      ]);
+      expect(accepted.json().newCells).toBeGreaterThan(0);
+      const afterAccepted = await postSamples(controlCookie, [
+        goodSample({ accuracy: 10, timestamp: Date.now() }),
+      ]);
+      expect(afterAccepted.json().newCells).toBe(0);
+
+      const cookie = await registerUser('unpoisoned');
+      const discarded = await postSamples(cookie, [
+        goodSample({ ...FAR_AWAY, accuracy: 10, timestamp: Date.now() + wellAheadMs }),
+      ]);
+      expect(discarded.json().newCells).toBe(0);
+
+      const afterDiscarded = await postSamples(cookie, [
+        goodSample({ accuracy: 10, timestamp: Date.now() }),
+      ]);
+      expect(afterDiscarded.json().newCells).toBeGreaterThan(0);
+    });
+
+    // Without this one the tolerance could be tightened to zero and nothing
+    // would notice — and a phone a few seconds fast is the ordinary case the
+    // tolerance exists for.
+    it('accepts a sample dated inside SAMPLE_MAX_CLOCK_SKEW_MS', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ accuracy: 10, timestamp: Date.now() + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS / 2 }),
+      ]);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().newCells).toBeGreaterThan(0);
+    });
+
+    // The boundary, pinned as the code actually has it: the comparison is
+    // `skewMs > CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS`, so a skew of exactly the
+    // tolerance is *accepted* and one millisecond more is not.
+    //
+    // The clock has to be frozen for this and for nothing else in this file.
+    // `nowMs` is the route's own Date.now(), so with a real clock the
+    // milliseconds that pass between building the fixture and the route
+    // reading the time make the skew strictly smaller than the tolerance —
+    // which is accepted under `>` and under `>=` alike, and would leave the
+    // boundary untested while looking tested. Only Date is faked, so the
+    // timers the server and this test await are the real ones.
+    describe('at exactly the tolerance, on a frozen clock', () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('accepts a skew of exactly SAMPLE_MAX_CLOCK_SKEW_MS and refuses one millisecond more', async () => {
+        // Two users, because the second sample must reveal cells of its own
+        // rather than re-reveal the first one's.
+        const atLimitCookie = await registerUser('at-the-limit');
+        const overLimitCookie = await registerUser('over-the-limit');
+
+        vi.useFakeTimers({ toFake: ['Date'] });
+        const now = Date.now();
+
+        const atLimit = await postSamples(atLimitCookie, [
+          goodSample({ accuracy: 10, timestamp: now + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS }),
+        ]);
+        expect(atLimit.json().newCells).toBeGreaterThan(0);
+
+        const overLimit = await postSamples(overLimitCookie, [
+          goodSample({ accuracy: 10, timestamp: now + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS + 1 }),
+        ]);
+        expect(overLimit.json()).toEqual({
+          newCells: 0,
+          newBars: [],
+          visitUpdates: [],
+          tooFastToReveal: false,
+        });
+      });
     });
   });
 
