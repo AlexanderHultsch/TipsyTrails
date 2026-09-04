@@ -216,10 +216,18 @@ export const CONFIG = {
   USERNAME_MAX_LENGTH: 20,
   PASSWORD_MIN_LENGTH: 8,
 
+  // SPEC.md Section 9.4, enforced by the in-memory token bucket in
+  // packages/api/src/http/rate-limit.ts. `by` names what a bucket is keyed
+  // on, and the IP address is deliberately not one of the choices: it keys a
+  // bucket on network topology, which was measurably wrong here — behind the
+  // tunnel every request arrived from the proxy, so one bucket held the whole
+  // site. Section 9.4 has the reasoning, the two exhaustion costs accepted
+  // with these numbers, and the two routes deliberately left unlimited.
   RATE_LIMITS: {
-    auth: { limit: 10, windowMs: 60 * 1000, by: 'ip' },
-    resetByUser: { limit: 5, windowMs: 60 * 60 * 1000, by: 'username' },
-    resetByIp: { limit: 20, windowMs: 60 * 60 * 1000, by: 'ip' },
+    authGlobal: { limit: 60, windowMs: 60 * 1000, by: 'global' }, // ceiling on argon2 work, see 9.4
+    register: { limit: 30, windowMs: 60 * 60 * 1000, by: 'global' }, // account spam; no authGlobal too
+    loginByUser: { limit: 10, windowMs: 5 * 60 * 1000, by: 'username' }, // password guessing, one account
+    resetByUser: { limit: 5, windowMs: 60 * 60 * 1000, by: 'username' }, // answer guessing, one account
     samples: { limit: 30, windowMs: 60 * 1000, by: 'user' },
     suggest: { limit: 10, windowMs: 24 * 60 * 60 * 1000, by: 'user' },
   },

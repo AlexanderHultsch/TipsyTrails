@@ -10,8 +10,8 @@ type RateLimitName = keyof typeof CONFIG.RATE_LIMITS;
 
 interface RateLimitOptions {
   // Required (and only meaningful) for limits configured with `by: 'username'`:
-  // the caller-supplied username isn't on the request the way `request.ip` or
-  // `request.userId` are, so the route must say where to find it.
+  // the caller-supplied username isn't on the request the way `request.userId`
+  // is, so the route must say where to find it.
   getUsername?: (request: FastifyRequest) => string;
 }
 
@@ -29,15 +29,28 @@ function sendRateLimited(reply: FastifyReply, retryAfterMs: number): void {
   });
 }
 
+// The identity every `by: 'global'` limit shares. One fixed string rather
+// than anything read off the request is the whole point of a global limit:
+// every caller lands in the same bucket. The bucket key is still
+// `${name}:${identity}` (see below), so two global limits do not share a
+// bucket with each other — `authGlobal` and `register` are separate ceilings
+// and the limiter's name is what keeps them apart.
+const GLOBAL_IDENTITY = 'all';
+
+// SPEC.md Section 9.4: there is deliberately no `'ip'` case, and the union
+// has no `'ip'` member for one to be written against. "This app does not do
+// IP-based blocking" is therefore something the compiler holds — adding
+// `by: 'ip'` to a limit in config.ts fails to typecheck here — rather than a
+// claim in a comment that a later edit could quietly falsify.
 function resolveIdentity(
   name: RateLimitName,
-  by: 'ip' | 'user' | 'username',
+  by: 'global' | 'user' | 'username',
   request: FastifyRequest,
   options: RateLimitOptions,
 ): string {
   switch (by) {
-    case 'ip':
-      return request.ip;
+    case 'global':
+      return GLOBAL_IDENTITY;
     case 'user':
       if (request.userId == null) {
         throw new Error(
@@ -52,7 +65,33 @@ function resolveIdentity(
           `rate limiter "${name}" is scoped by username but no getUsername() was provided`,
         );
       }
-      return options.getUsername(request);
+      // Normalised here rather than at the two call sites, so every
+      // username-keyed limit gets it and a future one cannot forget it.
+      //
+      // `users.username` is `TEXT NOT NULL UNIQUE COLLATE NOCASE`
+      // (migrations/001_init.sql), so SQLite matches `username = ?` without
+      // regard to ASCII case: `admin`, `Admin`, `ADMIN` and `aDmIn` are one
+      // account. Keying the bucket on the raw submission made them four
+      // buckets on that one account, which multiplied the limit Section 9.4
+      // promises by the number of spellings — 32x for a five-character name,
+      // and exponentially more for a longer one. The two halves have to agree
+      // on what one account is; this is that agreement, not tidying.
+      //
+      // `toLowerCase()` and not `toLocaleLowerCase()`: the latter follows the
+      // runtime's default locale, and under a Turkish one `ADMIN` folds to
+      // `admın` (dotless i) while `admin` stays `admin` — two spellings SQLite
+      // calls one account, split back into two buckets by the very call meant
+      // to join them, on nothing more than where the server runs.
+      // `toLowerCase()` is locale-independent and maps A-Z to a-z exactly as
+      // NOCASE does. It also folds non-ASCII pairs NOCASE keeps apart (`Ä`
+      // and `ä`), which is safe in this direction: it can only merge buckets,
+      // never split one, and `usernameSchema` admits only [a-zA-Z0-9_-], so no
+      // stored account is reachable by a non-ASCII spelling anyway.
+      //
+      // The trim matches the `z.string().trim()` in the reset schemas, which
+      // runs *after* this preHandler: the database sees the trimmed username
+      // there, so ` admin` and `admin` are one account and must be one bucket.
+      return options.getUsername(request).trim().toLowerCase();
   }
 }
 
@@ -85,6 +124,11 @@ export function createRateLimiter(name: RateLimitName, options: RateLimitOptions
     sweep(now);
 
     const identity = resolveIdentity(name, spec.by, request, options);
+    // The limiter's name is part of the key even though each limiter already
+    // owns its own `buckets` map, and it earns its place for `by: 'global'`:
+    // every global limit resolves to the same identity, so the name is the
+    // only thing in the key that tells one global bucket from another if the
+    // maps are ever shared or dumped together.
     const key = `${name}:${identity}`;
 
     let bucket = buckets.get(key);

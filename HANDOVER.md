@@ -115,16 +115,16 @@ an earlier one is stuck:
    seeding in `initialiseDatabase` should have created the account from
    `ADMIN_USER` and `ADMIN_PASSWORD` regardless, but nobody has signed in
    to check. Do that before trusting the admin area exists.
-6. **Open Item O10 — measure `trustProxy`'s real hop count.** Depends on 5:
-   needs one real request over the public internet against the live
-   deployment (`SPEC.md` Section 9.4 has the exact procedure). Until it's
-   measured and `trustProxy` set to match, the rate limits cannot be relied
-   on for the Pi deployment — the chain in front of the app is longer than
-   one hop and nobody has counted how many of them append to
-   `X-Forwarded-For`. Do the one-off header log the section describes and
-   stop there: this must not become a reason to start logging client IPs on
-   an ongoing basis, which Section 10.2's data minimisation exists to
-   prevent.
+6. **Nothing to do — Open Item O10 is closed, and this entry is kept only
+   so nobody starts the work it used to ask for.** It wanted the real
+   `X-Forwarded-For` hop count measured against the live deployment so that
+   the per-IP rate limits could be trusted. There are no per-IP rate limits
+   any more: `SPEC.md` Section 9.4 (v1.46) keys login on the submitted
+   username and the password-verifying routes on one global ceiling,
+   `by: 'ip'` no longer exists, and `trustProxy` is a list of private ranges
+   that decides nothing but the address in Fastify's log lines. Do not log client
+   IPs to settle a question that no longer has an answer worth having —
+   Section 10.2's data minimisation is the reason.
 
 **Needs a device, a browser, or the Pi under load — cannot be closed from a
 sandbox regardless of who is asking:**

@@ -59,27 +59,39 @@ afterEach(() => {
 
 function buildTestApp(env: Env = loadEnv(baseEnv)): FastifyInstance {
   const app = buildApp(env, db);
-  app.get('/test/auth-limited', { preHandler: createRateLimiter('auth') }, async () => {
+  app.get('/test/global-limited', { preHandler: createRateLimiter('authGlobal') }, async () => {
     return { ok: true };
   });
-  app.get('/test/reset-ip-limited', { preHandler: createRateLimiter('resetByIp') }, async () => {
+  app.get('/test/register-limited', { preHandler: createRateLimiter('register') }, async () => {
     return { ok: true };
   });
+  app.get(
+    '/test/username-limited',
+    {
+      preHandler: createRateLimiter('loginByUser', {
+        getUsername: (request) => String((request.query as { username?: unknown }).username ?? ''),
+      }),
+    },
+    async () => {
+      return { ok: true };
+    },
+  );
   return app;
 }
 
-const authLimit = CONFIG.RATE_LIMITS.auth;
+const globalLimit = CONFIG.RATE_LIMITS.authGlobal;
+const usernameLimit = CONFIG.RATE_LIMITS.loginByUser;
 
-describe('createRateLimiter (by: ip)', () => {
+describe('createRateLimiter (by: global)', () => {
   it('allows requests up to the limit and rejects the next with 429', async () => {
     const app = buildTestApp();
 
-    for (let i = 0; i < authLimit.limit; i++) {
-      const response = await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    for (let i = 0; i < globalLimit.limit; i++) {
+      const response = await app.inject({ method: 'GET', url: '/test/global-limited' });
       expect(response.statusCode).toBe(200);
     }
 
-    const blocked = await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    const blocked = await app.inject({ method: 'GET', url: '/test/global-limited' });
     expect(blocked.statusCode).toBe(429);
     expect(blocked.json()).toHaveProperty('code');
     expect(blocked.headers['retry-after']).toBeDefined();
@@ -88,60 +100,107 @@ describe('createRateLimiter (by: ip)', () => {
   it('allows requests again after the window elapses', async () => {
     const app = buildTestApp();
 
-    for (let i = 0; i < authLimit.limit; i++) {
-      await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    for (let i = 0; i < globalLimit.limit; i++) {
+      await app.inject({ method: 'GET', url: '/test/global-limited' });
     }
-    const blocked = await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    const blocked = await app.inject({ method: 'GET', url: '/test/global-limited' });
     expect(blocked.statusCode).toBe(429);
 
-    vi.advanceTimersByTime(authLimit.windowMs);
+    vi.advanceTimersByTime(globalLimit.windowMs);
 
-    const afterWindow = await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    const afterWindow = await app.inject({ method: 'GET', url: '/test/global-limited' });
     expect(afterWindow.statusCode).toBe(200);
   });
 
-  it('gives two different client IPs independent buckets', async () => {
+  it('puts every caller in one bucket whatever address the request appears to come from', async () => {
     const app = buildTestApp();
 
-    for (let i = 0; i < authLimit.limit; i++) {
+    for (let i = 0; i < globalLimit.limit; i++) {
       const response = await app.inject({
         method: 'GET',
-        url: '/test/auth-limited',
+        url: '/test/global-limited',
         headers: { 'x-forwarded-for': '203.0.113.7' },
       });
       expect(response.statusCode).toBe(200);
     }
+
+    // A global ceiling that a second address could walk around would not be a
+    // ceiling. This is the accepted cost recorded in SPEC.md Section 9.4:
+    // exhaustible on purpose, and set high enough that nobody honest meets it.
+    const otherAddress = await app.inject({
+      method: 'GET',
+      url: '/test/global-limited',
+      headers: { 'x-forwarded-for': '198.51.100.4' },
+    });
+    expect(otherAddress.statusCode).toBe(429);
+  });
+});
+
+describe('createRateLimiter (by: username)', () => {
+  it('gives two different usernames independent buckets', async () => {
+    const app = buildTestApp();
+
+    for (let i = 0; i < usernameLimit.limit; i++) {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/test/username-limited?username=hunted',
+      });
+      expect(response.statusCode).toBe(200);
+    }
     const blocked = await app.inject({
       method: 'GET',
-      url: '/test/auth-limited',
-      headers: { 'x-forwarded-for': '203.0.113.7' },
+      url: '/test/username-limited?username=hunted',
     });
     expect(blocked.statusCode).toBe(429);
 
-    const otherIp = await app.inject({
+    const other = await app.inject({
       method: 'GET',
-      url: '/test/auth-limited',
-      headers: { 'x-forwarded-for': '198.51.100.4' },
+      url: '/test/username-limited?username=bystander',
     });
-    expect(otherIp.statusCode).toBe(200);
+    expect(other.statusCode).toBe(200);
   });
 
-  it('does not let a forged left-most X-Forwarded-For entry mint a fresh bucket per request', async () => {
+  it('folds case and surrounding whitespace into the one bucket the account has', async () => {
     const app = buildTestApp();
 
-    for (let i = 0; i < authLimit.limit; i++) {
+    for (let i = 0; i < usernameLimit.limit; i++) {
       const response = await app.inject({
         method: 'GET',
-        url: '/test/auth-limited',
-        headers: { 'x-forwarded-for': `9.9.9.${i}, 203.0.113.7` },
+        url: '/test/username-limited?username=hunted',
       });
       expect(response.statusCode).toBe(200);
     }
 
+    // `users.username` is UNIQUE COLLATE NOCASE, so these name the account
+    // `hunted` already spent its bucket on. Normalising here rather than at
+    // the call sites is what makes that true of every `by: 'username'` limit.
+    for (const spelling of ['HUNTED', 'hUnTeD', encodeURIComponent('  hunted  ')]) {
+      const blocked = await app.inject({
+        method: 'GET',
+        url: `/test/username-limited?username=${spelling}`,
+      });
+      expect(blocked.statusCode, `spelling ${spelling} got its own bucket`).toBe(429);
+    }
+  });
+
+  it('keeps one bucket per username however many addresses the requests claim to come from', async () => {
+    const app = buildTestApp();
+
+    for (let i = 0; i < usernameLimit.limit; i++) {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/test/username-limited?username=hunted',
+        headers: { 'x-forwarded-for': `203.0.113.${i}` },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    // Rotating source addresses is exactly what automated guessing does, and
+    // it is the reason the login limit is keyed on the account instead.
     const blocked = await app.inject({
       method: 'GET',
-      url: '/test/auth-limited',
-      headers: { 'x-forwarded-for': `9.9.9.${authLimit.limit}, 203.0.113.7` },
+      url: '/test/username-limited?username=hunted',
+      headers: { 'x-forwarded-for': '198.51.100.4' },
     });
     expect(blocked.statusCode).toBe(429);
   });
@@ -151,13 +210,15 @@ describe('createRateLimiter — separate named limits', () => {
   it('exhausting one limit leaves a route guarded by another limit unaffected', async () => {
     const app = buildTestApp();
 
-    for (let i = 0; i < authLimit.limit; i++) {
-      await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    for (let i = 0; i < globalLimit.limit; i++) {
+      await app.inject({ method: 'GET', url: '/test/global-limited' });
     }
-    const blocked = await app.inject({ method: 'GET', url: '/test/auth-limited' });
+    const blocked = await app.inject({ method: 'GET', url: '/test/global-limited' });
     expect(blocked.statusCode).toBe(429);
 
-    const stillWorks = await app.inject({ method: 'GET', url: '/test/reset-ip-limited' });
+    // Both limits are `by: 'global'` and so resolve to the same identity; the
+    // limiter's name in the bucket key is the only thing keeping them apart.
+    const stillWorks = await app.inject({ method: 'GET', url: '/test/register-limited' });
     expect(stillWorks.statusCode).toBe(200);
   });
 });

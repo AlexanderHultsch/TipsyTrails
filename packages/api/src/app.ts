@@ -62,7 +62,18 @@ const defaultWebRoot = fileURLToPath(new URL('../public', import.meta.url));
 export function buildApp(env: Env, db: Database.Database): FastifyInstance {
   const app = Fastify({
     logger: env.NODE_ENV !== 'test',
-    trustProxy: 1,
+    // Trust any peer in a private range, and count no hops. Nothing
+    // load-bearing reads `request.ip` any more — SPEC.md Section 9.4 keys no
+    // rate limit on an address — so this only shapes Fastify's own request
+    // log lines, and a truthful log is worth having for free. That is the
+    // difference the next reader needs: the previous value here was
+    // `trustProxy: 1`, a hop count nobody had verified against the tunnel,
+    // and it was wrong for months with no visible failure precisely because
+    // what depended on it failed silently.
+    //
+    // Not `true`, which takes the left-most `X-Forwarded-For` entry — that
+    // one is client-supplied and wrong under every topology.
+    trustProxy: ['loopback', 'linklocal', 'uniquelocal'],
   });
 
   app.decorate('db', db);

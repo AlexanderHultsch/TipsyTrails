@@ -162,14 +162,25 @@ function sendInvalidCurrentPassword(reply: FastifyReply): void {
 
 export function authRoutes(env: Env) {
   return async function authRoutesPlugin(app: FastifyInstance): Promise<void> {
-    const authRateLimit = createRateLimiter('auth');
+    // SPEC.md Section 9.4. One `authGlobal` limiter shared by every route
+    // below that verifies a password or a security answer, so the ceiling it
+    // sets is on argon2 work across all of them rather than per route.
+    const authGlobalRateLimit = createRateLimiter('authGlobal');
+    const registerRateLimit = createRateLimiter('register');
+    const loginByUserRateLimit = createRateLimiter('loginByUser', {
+      getUsername: usernameFromRequest,
+    });
     const resetByUserRateLimit = createRateLimiter('resetByUser', {
       getUsername: usernameFromRequest,
     });
-    const resetByIpRateLimit = createRateLimiter('resetByIp');
-    const resetRateLimits = [resetByUserRateLimit, resetByIpRateLimit];
+    const loginRateLimits = [authGlobalRateLimit, loginByUserRateLimit];
+    const resetRateLimits = [authGlobalRateLimit, resetByUserRateLimit];
 
-    app.post('/api/auth/register', { preHandler: authRateLimit }, async (request, reply) => {
+    // Registration deliberately does not also carry `authGlobal`: 30/hour is
+    // stricter than 60/minute at every point, so that limiter could never be
+    // the one to answer here, and sharing the bucket would let registrations
+    // eat into the ceiling login needs.
+    app.post('/api/auth/register', { preHandler: registerRateLimit }, async (request, reply) => {
       const parsed = registerSchema.safeParse(request.body);
       if (!parsed.success) {
         sendInvalidRequestBody(reply);
@@ -215,7 +226,7 @@ export function authRoutes(env: Env) {
       });
     });
 
-    app.post('/api/auth/login', { preHandler: authRateLimit }, async (request, reply) => {
+    app.post('/api/auth/login', { preHandler: loginRateLimits }, async (request, reply) => {
       const parsed = loginSchema.safeParse(request.body);
       if (!parsed.success) {
         sendInvalidRequestBody(reply);
@@ -329,6 +340,12 @@ export function authRoutes(env: Env) {
       return { ok: true };
     });
 
+    // Carries no rate limit, deliberately (SPEC.md Section 9.4). It runs
+    // argon2 in both directions like the routes above, but only behind
+    // `requireAuth`: the caller has already spent an account to get here and
+    // can be dealt with as one. Putting it in `authGlobal` would also let
+    // unauthenticated traffic exhaust the bucket a signed-in player needs to
+    // change a password with.
     app.post('/api/auth/change-password', { preHandler: requireAuth }, async (request, reply) => {
       if (request.userId == null) {
         sendUnauthenticated(reply);

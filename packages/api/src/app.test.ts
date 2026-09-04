@@ -90,6 +90,46 @@ describe('unknown /api route', () => {
   });
 });
 
+// SPEC.md Section 9.4: no rate limit is keyed on an address any more, so
+// `request.ip` is only what Fastify writes in its request log lines. It is
+// still pinned here, because the two ways of getting it wrong look identical
+// in production and the value is not otherwise exercised by anything.
+describe('trustProxy (SPEC.md Sections 4.3, 9.4)', () => {
+  function buildAppEchoingClientIp() {
+    const app = buildApp(testEnv, db);
+    app.get('/test/client-ip', async (request) => ({ ip: request.ip }));
+    return app;
+  }
+
+  it('does not take the left-most X-Forwarded-For entry, which a client supplies itself', async () => {
+    const app = buildAppEchoingClientIp();
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test/client-ip',
+      headers: { 'x-forwarded-for': '9.9.9.9, 203.0.113.7' },
+    });
+
+    expect(response.json().ip).toBe('203.0.113.7');
+    expect(response.json().ip).not.toBe('9.9.9.9');
+  });
+
+  it('walks back past every private-range hop rather than counting a fixed number of them', async () => {
+    const app = buildAppEchoingClientIp();
+
+    // Two proxies in front of the API, both on private addresses, which is
+    // what the tunnel actually looks like. A hop count of 1 would stop at
+    // 10.0.0.5 and log a proxy as the client.
+    const response = await app.inject({
+      method: 'GET',
+      url: '/test/client-ip',
+      headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.5' },
+    });
+
+    expect(response.json().ip).toBe('203.0.113.7');
+  });
+});
+
 describe('SPA static serving', () => {
   let webRoot: string;
 

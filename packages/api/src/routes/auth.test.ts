@@ -348,18 +348,170 @@ describe('GET /api/auth/me', () => {
   });
 });
 
+// SPEC.md Section 9.4. These run against the real routes rather than against
+// the limiter in isolation, because the bug they exist to catch was in the
+// wiring and not in the bucket: `by: 'ip'` on login put every client behind
+// the tunnel into one bucket, and ten attempts a minute locked out the whole
+// site. `X-Forwarded-For` appears below for exactly that reason — the address
+// a request appears to come from must now change nothing at all.
 describe('rate limiting on auth endpoints', () => {
-  it('returns 429 after exceeding the auth limit on login', async () => {
-    const authLimit = CONFIG.RATE_LIMITS.auth;
-    const payload = { username: 'nobody', password: 'whatever12' };
+  const loginLimit = CONFIG.RATE_LIMITS.loginByUser;
+  const resetLimit = CONFIG.RATE_LIMITS.resetByUser;
+  const globalLimit = CONFIG.RATE_LIMITS.authGlobal;
 
-    for (let i = 0; i < authLimit.limit; i++) {
-      await injectWithOrigin({ method: 'POST', url: '/api/auth/login', payload });
+  function login(username: string, password: string, forwardedFor?: string) {
+    return injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username, password },
+      ...(forwardedFor ? { headers: { 'x-forwarded-for': forwardedFor } } : {}),
+    });
+  }
+
+  function resetQuestion(username: string) {
+    return injectWithOrigin({
+      method: 'GET',
+      url: `/api/auth/reset/question?username=${encodeURIComponent(username)}`,
+    });
+  }
+
+  function register(username: string) {
+    return injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { ...validRegisterBody, username },
+    });
+  }
+
+  // Every attempt `loginByUser` allows against one account, each from a
+  // different apparent address.
+  async function exhaustLoginBucket(username: string): Promise<void> {
+    for (let i = 0; i < loginLimit.limit; i++) {
+      const response = await login(username, 'wrong password', `203.0.113.${i}`);
+      expect(response.statusCode).toBe(401);
     }
+  }
 
-    const blocked = await injectWithOrigin({ method: 'POST', url: '/api/auth/login', payload });
+  it('returns 429 after exceeding the per-username login limit', async () => {
+    await exhaustLoginBucket('nobody');
+
+    const blocked = await login('nobody', 'wrong password');
 
     expect(blocked.statusCode).toBe(429);
+  });
+
+  it('keeps one login bucket per username however many addresses the attempts come from', async () => {
+    await exhaustLoginBucket('nobody');
+
+    // A fresh address, which under the old per-IP key was a fresh bucket and
+    // is the whole of what an automated guesser has to do to defeat one.
+    const blocked = await login('nobody', 'wrong password', '198.51.100.4');
+
+    expect(blocked.statusCode).toBe(429);
+  });
+
+  // `users.username` is UNIQUE COLLATE NOCASE (migrations/001_init.sql), so
+  // these four spellings are one account at the database and have to be one
+  // bucket at the limiter. Asserted with the *correct* password, so a limiter
+  // that gave a second spelling a fresh bucket would answer 200 here — the
+  // whole of what an attacker had to do to get 32x the attempts Section 9.4
+  // allows against a five-character username.
+  it('refuses every casing of an account whose login bucket is spent', async () => {
+    expect((await register('admin')).statusCode).toBe(201);
+
+    await exhaustLoginBucket('admin');
+
+    for (const spelling of ['ADMIN', 'aDmIn', 'Admin']) {
+      const blocked = await login(spelling, validRegisterBody.password);
+      expect(blocked.statusCode, `spelling ${spelling} got its own bucket`).toBe(429);
+    }
+  });
+
+  // The reset routes trim in `resetQuestionQuerySchema`/`resetSchema`, which
+  // run after the limiter, so the database sees ` admin` as `admin` — the
+  // padded spelling must not be a second bucket either.
+  it('refuses padded and re-cased spellings once an account is out of reset attempts', async () => {
+    expect((await register('admin')).statusCode).toBe(201);
+
+    for (let i = 0; i < resetLimit.limit; i++) {
+      const response = await resetQuestion('admin');
+      expect(response.statusCode).toBe(200);
+    }
+
+    const padded = await resetQuestion('  admin  ');
+    expect(padded.statusCode).toBe(429);
+
+    const recased = await resetQuestion('ADMIN');
+    expect(recased.statusCode).toBe(429);
+  });
+
+  // The other half of the same rule: folding must stop at what NOCASE folds.
+  // `_` and `-` are part of a username (`usernameSchema` admits them), so two
+  // names differing only there are two accounts and must stay two buckets.
+  it('gives two usernames differing only in punctuation independent buckets', async () => {
+    expect((await register('trail_walker')).statusCode).toBe(201);
+    expect((await register('trailwalker')).statusCode).toBe(201);
+
+    await exhaustLoginBucket('trail_walker');
+    const blocked = await login('trail_walker', validRegisterBody.password);
+    expect(blocked.statusCode).toBe(429);
+
+    const other = await login('trailwalker', validRegisterBody.password);
+
+    expect(other.statusCode).toBe(200);
+  });
+
+  it('leaves a second username able to log in once the first one is exhausted', async () => {
+    await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: { ...validRegisterBody, username: 'bystander' },
+    });
+
+    await exhaustLoginBucket('hunted');
+    // Same apparent address as the last exhausting attempt: what separates
+    // the two is the account, and nothing else.
+    const blockedFirst = await login('hunted', 'wrong password', '203.0.113.0');
+    expect(blockedFirst.statusCode).toBe(429);
+
+    const other = await login('bystander', validRegisterBody.password, '203.0.113.0');
+
+    expect(other.statusCode).toBe(200);
+  });
+
+  it('answers 429 on login once the global ceiling the reset routes share is spent', async () => {
+    // Distinct usernames, so `resetByUser` is never the limiter that fires
+    // and every one of these spends a token of `authGlobal` instead.
+    const probes = Array.from({ length: globalLimit.limit }, (_, i) =>
+      injectWithOrigin({ method: 'GET', url: `/api/auth/reset/question?username=probe-${i}` }),
+    );
+    for (const response of await Promise.all(probes)) {
+      expect(response.statusCode).toBe(200);
+    }
+
+    const blocked = await login('nobody', 'wrong password');
+
+    expect(blocked.statusCode).toBe(429);
+  });
+
+  it('lets registration through on a spent global ceiling, because it does not share it', async () => {
+    const probes = Array.from({ length: globalLimit.limit }, (_, i) =>
+      injectWithOrigin({ method: 'GET', url: `/api/auth/reset/question?username=probe-${i}` }),
+    );
+    await Promise.all(probes);
+    const spent = await injectWithOrigin({
+      method: 'GET',
+      url: '/api/auth/reset/question?username=one-too-many',
+    });
+    expect(spent.statusCode).toBe(429);
+
+    const registered = await injectWithOrigin({
+      method: 'POST',
+      url: '/api/auth/register',
+      payload: validRegisterBody,
+    });
+
+    expect(registered.statusCode).toBe(201);
   });
 });
 
