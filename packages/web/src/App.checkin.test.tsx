@@ -919,6 +919,7 @@ describe('check-in and mastering', () => {
         return jsonResponse(200, {
           newCells: 0,
           newBars: [],
+          tooFastToReveal: false,
           visitUpdates:
             sampleCalls === 1
               ? [
@@ -1002,6 +1003,7 @@ describe('check-in and mastering', () => {
         return jsonResponse(200, {
           newCells: 0,
           newBars: [],
+          tooFastToReveal: false,
           visitUpdates: [
             {
               id: 1,
@@ -1114,6 +1116,105 @@ describe('check-in and mastering', () => {
       delete (document as { visibilityState?: unknown }).visibilityState;
     }
     expect(container.querySelector('.pending-visit-banner')).toBeNull();
+  });
+
+  // SPEC.md Section 9.6 / Open Item O18, at the surface the drift would show
+  // on. An installed shell (Section 4.1) talking to an API that renamed
+  // `confirmedS` gets a 200 whose visitUpdates entry has that field missing;
+  // PendingVisitBanner's formatDuration turns it into "NaN:NaN", which is a
+  // sentence about how long the player has been at a bar and is not true.
+  // api/response-guards.ts rejects the whole response, tracking/
+  // useSampleTracking.ts reports it as an ordinary post error with the batch
+  // left queued, and the banner holds the last figures the server actually
+  // confirmed.
+  it('holds the confirmed time rather than rendering NaN when POST /api/samples drifts', async () => {
+    const geo = stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, {
+          visits: [pendingVisit({ id: 77, confirmedS: 600, remainingS: 600 })],
+        });
+      }
+      if (url === '/api/samples') {
+        const drifted = pendingVisit({ id: 77, confirmedS: 900, remainingS: 300 }) as Record<
+          string,
+          unknown
+        >;
+        drifted.confirmedSeconds = drifted.confirmedS;
+        delete drifted.confirmedS;
+        return jsonResponse(200, {
+          newCells: 0,
+          newBars: [],
+          visitUpdates: [drifted],
+          tooFastToReveal: false,
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    vi.useFakeTimers();
+    await renderMapWithFakeTimers();
+
+    expect(confirmedSecondsFrom(bannerText())).toBe(600);
+
+    act(() => {
+      geo.triggerPosition({ accuracy: 10 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(bannerText()).not.toContain('NaN');
+    // Still the last figure the server confirmed, not the drifted one and
+    // not a blank: the visit is genuinely still pending and the banner is
+    // Section 7.5's promise that the player can see it.
+    expect(confirmedSecondsFrom(bannerText())).toBe(600);
+    expect(bannerItems()).toHaveLength(1);
+  });
+
+  // The same drift on GET /api/visits/pending, where the response *is* the
+  // banner. `useVisits` keeps whatever it has on a failed refresh (a flaky
+  // connection must not empty the banner), and at first mount it has nothing
+  // - so the banner is absent rather than showing a row of NaN.
+  it('renders no banner at all rather than NaN when GET /api/visits/pending drifts', async () => {
+    stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url.startsWith('/tiles/')) {
+        return jsonResponse(206, {});
+      }
+      if (url === '/api/bars') {
+        return jsonResponse(200, { bars: [bar({ id: 1, name: 'The Fox' })] });
+      }
+      if (url === '/api/visits/pending') {
+        return jsonResponse(200, {
+          visits: [pendingVisit({ id: 77, status: 'in_progress' })],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    vi.useFakeTimers();
+    await renderMapWithFakeTimers();
+
+    expect(container.querySelector('.pending-visit-banner')).toBeNull();
+    expect(container.textContent).not.toContain('NaN');
   });
 
   it('shows the "still pending" message when the current position moves out of range, without hiding the banner', async () => {

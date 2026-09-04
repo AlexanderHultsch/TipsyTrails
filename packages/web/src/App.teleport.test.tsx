@@ -154,7 +154,12 @@ function stubMapFetch(options: MapStubOptions = {}) {
       return jsonResponse(200, { visits: [] });
     }
     if (url === '/api/samples') {
-      return jsonResponse(200, { newCells: 0, newBars: [], visitUpdates: [] });
+      return jsonResponse(200, {
+        newCells: 0,
+        newBars: [],
+        visitUpdates: [],
+        tooFastToReveal: false,
+      });
     }
     if (url === '/api/admin/teleport' && init?.method === 'DELETE') {
       return (options.onClear ?? (() => jsonResponse(200, { ok: true })))();

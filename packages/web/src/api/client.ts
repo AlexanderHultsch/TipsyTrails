@@ -1,5 +1,11 @@
 import { ACTIVE_CITY_SLUG } from './city.js';
 import type { BoundaryFeatureCollection } from './geo-types.js';
+import {
+  isPendingVisitsResponse,
+  isProgressResponse,
+  isSamplesResponse,
+  isVisitSummary,
+} from './response-guards.js';
 import type {
   AdminBar,
   AdminBarsResponse,
@@ -43,6 +49,20 @@ export class ApiError extends Error {
 const NETWORK_ERROR_MESSAGE = 'Could not reach the server. Check your connection and try again.';
 const UNKNOWN_ERROR_MESSAGE = 'Something went wrong. Please try again.';
 
+// A 200 whose body is not the shape this build expects (SPEC.md Section 9.6,
+// Open Item O18). Deliberately worded as a version-skew problem and not as a
+// server fault, because that is what it almost always is: the service worker
+// (Section 4.1) keeps an installed shell running against an API that has moved
+// on, and closing and reopening the app is the action that actually fixes it.
+//
+// The `code` is the client's own, like `network_error` above and unlike every
+// code in Section 9.6's vocabulary, which are the server's. Nothing branches
+// on it - it exists so a failure of this kind is distinguishable in a bug
+// report from a network failure, and so the screens keep rendering exactly one
+// thing on failure: `errorMessage(err)`.
+const INVALID_RESPONSE_MESSAGE =
+  'The server sent something this version of the app cannot read. Close and reopen Tipsy Trails to update it.';
+
 // What every screen renders in its error slot after a failed call: the
 // server's own message when the failure came back through `request` above
 // (including the network case, which `ApiError`s itself), and the generic
@@ -85,7 +105,20 @@ interface ApiErrorBody {
 // behind a bodyless cancel. The second is the one that matters — every web
 // test in this repository stubs `fetch`, so no amount of client-side testing
 // could ever have seen a body parser reject anything.
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+//
+// `validate` is optional, and its optionality is the design (Section 9.6, Open
+// Item O18). Most routes stay exactly as they were - `body as T`, a cast - so
+// adding it changed no existing call site's behaviour; the four responses
+// where a wrong shape would produce a silently wrong answer rather than a
+// visible failure opt in by passing a predicate from `response-guards.ts`. A
+// predicate that rejects throws the same `ApiError` every other failure on
+// this path throws, so it arrives at the screens through `errorMessage` like
+// any other, and no screen needed a second error channel to show it.
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  validate?: (body: unknown) => body is T,
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -117,6 +150,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       errorBody.message ?? UNKNOWN_ERROR_MESSAGE,
       response.status,
     );
+  }
+
+  // The status carried is the response's own, and it is honest: the server
+  // answered 200 and the body is what is wrong. Not a synthetic 4xx/5xx -
+  // `tracking/useVisits.ts` reads `status === 404` as "this visit is not
+  // pending any more" and would draw exactly the wrong conclusion from an
+  // invented one.
+  if (validate && !validate(body)) {
+    throw new ApiError('invalid_response', INVALID_RESPONSE_MESSAGE, response.status);
   }
 
   return body as T;
@@ -185,11 +227,21 @@ export function changePassword(input: {
   });
 }
 
+// Validated (Section 9.6): `visitUpdates[].status` decides whether a visit
+// stays in Section 7.5's persistent banner or is dropped from it, `newCells`
+// and `tooFastToReveal` are what the map acts on, and a wrong shape in any of
+// them is silent. A rejection surfaces through `tracking/useSampleTracking.ts`
+// as the ordinary post error, with the batch left queued for the retry that
+// follows an updated shell.
 export function postSamples(samples: Sample[]): Promise<SamplesResponse> {
-  return request<SamplesResponse>('/api/samples', {
-    method: 'POST',
-    body: JSON.stringify({ samples }),
-  });
+  return request<SamplesResponse>(
+    '/api/samples',
+    {
+      method: 'POST',
+      body: JSON.stringify({ samples }),
+    },
+    isSamplesResponse,
+  );
 }
 
 // Section 9.2: active city metadata + grid parameters. The fog layer
@@ -231,6 +283,15 @@ export async function getFogMask(): Promise<FogMaskResponse> {
     );
   }
 
+  // Deliberately still cast rather than validated (Section 9.6, Open Item
+  // O18). Not because a malformed header is harmless - the catch below already
+  // covers that - but because nothing in this package reads `progress` at all:
+  // map/fog/useFogLayer.ts passes the whole FogMaskResponse to
+  // map/fog/fog-cache.ts, which stores `mask` and drops the rest, and every
+  // district figure on screen comes from GET /api/progress instead. A wrong
+  // shape here produces no answer, right or wrong, so there is nothing for a
+  // check to protect. The day a screen renders one of these counts, it moves
+  // into response-guards.ts by the same rule that keeps it out today.
   const header = response.headers.get('X-Fog-Progress');
   let progress: FogProgress = { revealedCells: 0, playableCells: 0, districts: [] };
   if (header) {
@@ -281,11 +342,19 @@ export function suggestBar(input: {
 // POST /api/visits (Section 9.2/7.5 step 2): creates the pending visit, or
 // returns the existing one if this bar already has one open (Section 5.7) -
 // the caller renders whatever VisitSummary comes back either way.
+//
+// Validated (Section 9.6): what comes back goes straight into the banner's
+// list, so it is rendered - the same VisitSummary, on the same surface, as the
+// two calls around it.
 export function checkIn(input: { barId: number }): Promise<VisitSummary> {
-  return request<VisitSummary>('/api/visits', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
+  return request<VisitSummary>(
+    '/api/visits',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+    isVisitSummary,
+  );
 }
 
 // POST /api/visits/:id/cancel (Section 9.2/5.7/7.5): ends the caller's own
@@ -298,14 +367,26 @@ export function checkIn(input: { barId: number }): Promise<VisitSummary> {
 // It carries no body, which is why it was the most visible casualty of the
 // unconditional Content-Type header `request` used to send - see the note
 // there. The id is in the path and there is nothing else to say.
+//
+// Deliberately NOT validated, unlike `checkIn` above and `getPendingVisits`
+// below, which return the same shape (Section 9.6). Every caller discards the
+// returned VisitSummary and acts on the call having succeeded at all -
+// `useVisits.cancelVisit` drops the row by the id it already had - so nothing
+// here is rendered and a wrong shape produces no answer to be wrong about. A
+// check would only convert a cancel that worked into a failure the player
+// cannot act on.
 export function cancelVisit(visitId: number): Promise<VisitSummary> {
   return request<VisitSummary>(`/api/visits/${visitId}/cancel`, { method: 'POST' });
 }
 
 // GET /api/visits/pending (Section 9.2): the caller's active pending
 // visits, for the persistent banner (Section 7.5).
+//
+// Validated (Section 9.6): this list *is* the banner. `confirmedS` and
+// `remainingS` are rendered through formatDuration, which turns a missing
+// number into "NaN:NaN" rather than into an error.
 export function getPendingVisits(): Promise<PendingVisitsResponse> {
-  return request<PendingVisitsResponse>('/api/visits/pending');
+  return request<PendingVisitsResponse>('/api/visits/pending', undefined, isPendingVisitsResponse);
 }
 
 // GET /api/progress (Section 9.2/7.6): city-wide and per-district area
@@ -314,8 +395,15 @@ export function getPendingVisits(): Promise<PendingVisitsResponse> {
 // figures, and by screens/AppHome.tsx for all three of the start screen's
 // numbers - which is what makes that screen one request rather than two,
 // the second of them GET /api/bars and unbounded.
+//
+// Validated (Section 9.6), and the clearest case for it in this file: every
+// number in this response is rendered, three of them through `.toFixed(1)`,
+// which is the call that turns a field that moved into "NaN%" on the start
+// screen and the city overview. On the district overview the failure is
+// quieter still - a district looked up by a name that is no longer there falls
+// through a `?? 0` and reports 0.0% explored.
 export function getProgress(): Promise<ProgressResponse> {
-  return request<ProgressResponse>('/api/progress');
+  return request<ProgressResponse>('/api/progress', undefined, isProgressResponse);
 }
 
 // GET /api/leaderboard (Section 9.2/7.8): ranked standings for one

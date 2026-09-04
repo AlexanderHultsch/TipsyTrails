@@ -3,10 +3,16 @@ import {
   ApiError,
   cancelVisit,
   deleteAdminBar,
+  errorMessage,
+  getBars,
   getCity,
   getFogMask,
+  getLeaderboard,
+  getPendingVisits,
+  getProgress,
   getVapidPublicKey,
   logout,
+  postSamples,
   subscribePush,
   unsubscribePush,
 } from './client.js';
@@ -32,11 +38,14 @@ function octetResponse(
   } as unknown as Response;
 }
 
-function jsonResponse(status: number, body: unknown): Response {
+// `raw` overrides the serialisation for the one case JSON.stringify cannot
+// produce: a number literal too large to round-trip, which the wire can
+// legally carry and JSON.parse turns into Infinity.
+function jsonResponse(status: number, body: unknown, raw?: string): Response {
   return {
     ok: status >= 200 && status < 300,
     status,
-    text: async () => JSON.stringify(body),
+    text: async () => raw ?? JSON.stringify(body),
   } as unknown as Response;
 }
 
@@ -238,5 +247,124 @@ describe('request: Content-Type is sent only when there is a body', () => {
     const fetchMock = stubOk();
     await subscribePush({ endpoint: 'https://push.example/abc', keys: { p256dh: 'p', auth: 'a' } });
     expect(headersOf(fetchMock)['Content-Type']).toBe('application/json');
+  });
+});
+
+// SPEC.md Section 9.6 / Open Item O18. `request` takes an optional validator
+// and four responses pass one; everything else is still cast, deliberately.
+// These tests are about the mechanism - that a rejection is an ordinary
+// ApiError, that it reaches `errorMessage`, and that nothing else moved. What
+// the predicates themselves accept is response-guards.test.ts's subject, and
+// what the *screens* then do is App.test.tsx's and App.checkin.test.tsx's.
+describe('request: response validation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const goodProgress = {
+    city: {
+      revealedCells: 125,
+      playableCells: 1000,
+      percent: 12.5,
+      barsDiscovered: 24,
+      barsMastered: 7,
+    },
+    districts: [{ id: 1, name: 'Innenstadt', revealedCells: 3, playableCells: 100, percent: 3 }],
+  };
+
+  it('passes a well-formed response through unchanged', async () => {
+    stubFetchOnce(jsonResponse(200, goodProgress));
+    expect(await getProgress()).toEqual(goodProgress);
+  });
+
+  it('rejects a 200 whose body is missing a field a screen renders', async () => {
+    const body = structuredClone(goodProgress) as { city: Record<string, unknown> };
+    delete body.city.percent;
+    stubFetchOnce(jsonResponse(200, body));
+
+    await expect(getProgress()).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+  });
+
+  // The status is the response's own and not an invented 4xx: tracking/
+  // useVisits.ts reads a 404 on the cancel path as "this visit is not pending
+  // any more" and would draw exactly the wrong conclusion from a synthetic
+  // one.
+  it('fails as an ApiError, so every screen renders it through errorMessage', async () => {
+    stubFetchOnce(jsonResponse(200, { city: {}, districts: [] }));
+
+    const err = await getProgress().catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(errorMessage(err)).toContain('Close and reopen Tipsy Trails');
+    // Not the generic fallback errorMessage uses for anything that is not an
+    // ApiError - if this ever regressed to that, the wording above would be
+    // the first thing to change.
+    expect(errorMessage(err)).not.toBe('Something went wrong. Please try again.');
+  });
+
+  // THE MISTAKE THIS TEST EXISTS FOR: a validator written as
+  // `typeof value === 'number'`. `1e999` is a JSON number literal - the wire
+  // can carry it, `JSON.parse` turns it into `Infinity`, `typeof` says
+  // 'number', and `(Infinity).toFixed(1)` renders "Infinity%" on the city
+  // overview. Only `Number.isFinite` catches it. Its sibling `NaN` cannot be
+  // written in JSON at all, so it is caught directly in
+  // response-guards.test.ts rather than here.
+  it('rejects a non-finite number that arrived as a legal JSON literal', async () => {
+    stubFetchOnce(
+      jsonResponse(
+        200,
+        undefined,
+        '{"city":{"percent":1e999,"barsDiscovered":0,"barsMastered":0},"districts":[]}',
+      ),
+    );
+
+    await expect(getProgress()).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it('rejects a pending-visit list carrying a status this build does not know', async () => {
+    stubFetchOnce(
+      jsonResponse(200, {
+        visits: [
+          {
+            id: 1,
+            barId: 1,
+            barName: 'The Fox',
+            startedAt: 0,
+            lastSampleAt: 0,
+            onsiteSamples: 1,
+            confirmedS: 60,
+            remainingS: 1140,
+            status: 'in_progress',
+          },
+        ],
+      }),
+    );
+
+    await expect(getPendingVisits()).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  it('rejects a samples response whose visitUpdates went missing', async () => {
+    stubFetchOnce(jsonResponse(200, { newCells: 0, newBars: [], tooFastToReveal: false }));
+
+    await expect(postSamples([])).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+
+  // The optional argument must not have changed anything for the routes that
+  // did not opt in. These bodies are nonsense for their declared types and
+  // must still resolve, exactly as `body as T` always let them - the whole
+  // point of keeping the scope narrow is that the rest of the client is
+  // untouched, not quietly stricter.
+  it('leaves every route without a validator casting exactly as before', async () => {
+    stubFetchOnce(jsonResponse(200, { nothing: 'like a BarsResponse' }));
+    expect(await getBars()).toEqual({ nothing: 'like a BarsResponse' });
+
+    stubFetchOnce(jsonResponse(200, { entries: 'not an array' }));
+    expect(await getLeaderboard({ metric: 'area', period: 'all', page: 1 })).toEqual({
+      entries: 'not an array',
+    });
+
+    // The same VisitSummary shape two validated calls check, on the one call
+    // that discards it - see the note on cancelVisit in client.ts.
+    stubFetchOnce(jsonResponse(200, {}));
+    expect(await cancelVisit(7)).toEqual({});
   });
 });

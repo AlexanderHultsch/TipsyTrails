@@ -9,6 +9,7 @@ import type { GridParams } from '@tipsytrails/shared';
 import { App } from './App.js';
 import { ACTIVE_CITY_SLUG } from './api/city.js';
 import type { BoundaryFeatureCollection } from './api/geo-types.js';
+import type { SamplesResponse } from './api/types.js';
 import { Avatar } from './components/Avatar.js';
 import { cocktailGlassPathData } from './components/cocktail-glass.js';
 
@@ -169,6 +170,25 @@ function jsonResponse(status: number, body: unknown) {
     status,
     text: async () => JSON.stringify(body),
   } as unknown as Response;
+}
+
+// POST /api/samples answers all four fields of Section 9.6's shape on every
+// request, and since api/response-guards.ts the client checks that it did. A
+// fixture naming only the field a case is about is therefore not a smaller
+// response, it is one the server cannot send - so this fills in the rest at
+// their inert values rather than each test restating them.
+//
+// The field *names* are typed against SamplesResponse and their values are
+// not: these are wire bodies, and several cases here deliberately send one
+// that no valid SamplesResponse could hold.
+function samplesResponse(fields: Partial<Record<keyof SamplesResponse, unknown>>) {
+  return jsonResponse(200, {
+    newCells: 0,
+    newBars: [],
+    visitUpdates: [],
+    tooFastToReveal: false,
+    ...fields,
+  });
 }
 
 // GET /api/fog's shape (packages/api/src/routes/fog.ts, api/client.ts's
@@ -1290,7 +1310,13 @@ describe('App', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 125, playableCells: 1000, percent: 12.5 },
+          city: {
+            revealedCells: 125,
+            playableCells: 1000,
+            percent: 12.5,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
       }
@@ -1336,7 +1362,13 @@ describe('App', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          city: {
+            revealedCells: 0,
+            playableCells: 1000,
+            percent: 0,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
       }
@@ -1359,6 +1391,54 @@ describe('App', () => {
     expect(container.querySelector('.city-overview__progress')).toBeNull();
   });
 
+  // SPEC.md Section 9.6 / Open Item O18, from the screen's end. A service
+  // worker keeps an installed shell running against an API that has moved on
+  // (Section 4.1), so this is a 200 whose body is simply a different shape:
+  // `percent` renamed, everything else intact. Before api/response-guards.ts
+  // it was cast, `undefined.toFixed(1)` never ran because `undefined` reached
+  // the template first, and the screen said "NaN% explored" beside a correct
+  // map - data-shaped, wrong, and silent. It now fails the way a 500 does.
+  it('reports a drifted GET /api/progress rather than rendering NaN on /city', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/city.geojson`) {
+        return jsonResponse(200, cityFixture);
+      }
+      if (url === `/static/${ACTIVE_CITY_SLUG}/neighbours.geojson`) {
+        return jsonResponse(200, neighboursFixture);
+      }
+      if (url === '/api/progress') {
+        return jsonResponse(200, {
+          city: {
+            revealedCells: 125,
+            playableCells: 1000,
+            percentExplored: 12.5,
+            barsDiscovered: 24,
+            barsMastered: 7,
+          },
+          districts: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/city');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const alert = container.querySelector('.error-message[role="alert"]');
+    expect(alert?.textContent).toBe(
+      'The server sent something this version of the app cannot read. Close and reopen Tipsy Trails to update it.',
+    );
+    expect(container.textContent).not.toContain('NaN');
+    // The percentage line is bound to `city`, which the rejected Promise.all
+    // never set, so the figure is absent rather than absent-looking.
+    expect(container.querySelector('.city-overview__progress')).toBeNull();
+  });
+
   it('renders all 27 districts as a list with a name and a percentage each', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {
@@ -1369,7 +1449,13 @@ describe('App', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          city: {
+            revealedCells: 0,
+            playableCells: 1000,
+            percent: 0,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: districtsFixture.features.map((feature, index) => ({
             id: index + 1,
             name: feature.properties.name,
@@ -1408,7 +1494,13 @@ describe('App', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+          city: {
+            revealedCells: 0,
+            playableCells: 1000,
+            percent: 0,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
       }
@@ -1451,7 +1543,13 @@ describe('App', () => {
         }
         if (url === '/api/progress') {
           return jsonResponse(200, {
-            city: { revealedCells: 0, playableCells: 1000, percent: 0 },
+            city: {
+              revealedCells: 0,
+              playableCells: 1000,
+              percent: 0,
+              barsDiscovered: 0,
+              barsMastered: 0,
+            },
             districts: districtsFixture.features.map((feature, index) => ({
               id: index + 1,
               name: feature.properties.name,
@@ -1834,7 +1932,7 @@ describe('App', () => {
       stubWakeLock();
       const fetchMock = stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -1867,7 +1965,7 @@ describe('App', () => {
       stubWakeLock();
       const fetchMock = stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -1901,7 +1999,7 @@ describe('App', () => {
       stubWakeLock();
       const fetchMock = stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -1931,7 +2029,7 @@ describe('App', () => {
       stubWakeLock();
       const fetchMock = stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 2 });
+          return samplesResponse({ newCells: 2 });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2047,7 +2145,7 @@ describe('App', () => {
       expect(statusLabel('connection')).toBe('Connection: online');
 
       await act(async () => {
-        resolvePost?.(jsonResponse(200, { newCells: 0 }));
+        resolvePost?.(samplesResponse({}));
         await vi.advanceTimersByTimeAsync(0);
       });
 
@@ -2064,7 +2162,7 @@ describe('App', () => {
       stubWakeLock();
       const fetchMock = stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2098,7 +2196,7 @@ describe('App', () => {
       stubWakeLock();
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2143,7 +2241,7 @@ describe('App', () => {
       stubWakeLock();
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2168,7 +2266,7 @@ describe('App', () => {
       stubWakeLock();
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0 });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2202,10 +2300,7 @@ describe('App', () => {
       stubWakeLock();
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 0,
-            newBars: [],
-            visitUpdates: [],
+          return samplesResponse({
             tooFastToReveal: true,
           });
         }
@@ -2244,10 +2339,7 @@ describe('App', () => {
       let tooFast = true;
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 0,
-            newBars: [],
-            visitUpdates: [],
+          return samplesResponse({
             tooFastToReveal: tooFast,
           });
         }
@@ -2292,12 +2384,7 @@ describe('App', () => {
       stubWakeLock();
       stubMapFetch((url) => {
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 7,
-            newBars: [],
-            visitUpdates: [],
-            tooFastToReveal: false,
-          });
+          return samplesResponse({ newCells: 7 });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2521,7 +2608,7 @@ describe('App', () => {
           return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 1, newBars: [newBar] });
+          return samplesResponse({ newCells: 1, newBars: [newBar] });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2577,7 +2664,7 @@ describe('App', () => {
           return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0, newBars: [newBar] });
+          return samplesResponse({ newBars: [newBar] });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -2969,7 +3056,7 @@ describe('App', () => {
           return jsonResponse(200, { bars: [] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 1, newBars: [] });
+          return samplesResponse({ newCells: 1 });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -3023,7 +3110,7 @@ describe('App', () => {
           return jsonResponse(200, { bars: [] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 0, newBars: [] });
+          return samplesResponse({});
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -3105,9 +3192,7 @@ describe('App', () => {
           return jsonResponse(200, { visits: [] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 0,
-            newBars: [],
+          return samplesResponse({
             visitUpdates: [
               {
                 id: 5,
@@ -3195,9 +3280,7 @@ describe('App', () => {
           return jsonResponse(200, { visits: [] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 0,
-            newBars: [],
+          return samplesResponse({
             visitUpdates: [
               {
                 id: 5,
@@ -3296,7 +3379,7 @@ describe('App', () => {
           return jsonResponse(200, { bars: barsCallCount === 1 ? [] : [newBar] });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, { newCells: 1, newBars: [newBar] });
+          return samplesResponse({ newCells: 1, newBars: [newBar] });
         }
         throw new Error(`Unexpected request: ${url}`);
       });
@@ -3369,9 +3452,7 @@ describe('App', () => {
           });
         }
         if (url === '/api/samples') {
-          return jsonResponse(200, {
-            newCells: 0,
-            newBars: [],
+          return samplesResponse({
             visitUpdates: [
               {
                 id: 5,

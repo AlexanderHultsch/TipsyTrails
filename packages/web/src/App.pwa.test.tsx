@@ -362,7 +362,12 @@ describe('offline indicator and queued samples', () => {
         return jsonResponse(200, { visits: [] });
       }
       if (url === '/api/samples') {
-        return jsonResponse(200, { newCells: 0, newBars: [], visitUpdates: [] });
+        return jsonResponse(200, {
+          newCells: 0,
+          newBars: [],
+          visitUpdates: [],
+          tooFastToReveal: false,
+        });
       }
       throw new Error(`Unexpected request while offline: ${url}`);
     });
