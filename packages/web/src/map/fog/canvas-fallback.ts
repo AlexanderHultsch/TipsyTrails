@@ -80,6 +80,11 @@ export class CanvasFogFallback {
     this.getMask = options.getMask;
 
     this.canvas = document.createElement('canvas');
+    // The class is not a hook for tests: `.fog-canvas-fallback` in index.css
+    // is what positions this canvas over the base map and what stops it
+    // swallowing the map's drags. Renaming it here without renaming it there
+    // leaves an in-flow canvas that MapLibre's own positioned canvas paints
+    // straight over - no fog, and nothing anywhere fails.
     this.canvas.className = 'fog-canvas-fallback';
     this.map.getContainer().appendChild(this.canvas);
 
@@ -106,6 +111,21 @@ export class CanvasFogFallback {
    * Screen pixels spanned by one grid cell at the current view - used to size
    * the punched holes.
    *
+   * TWO CELL CENTRES, AND BOTH ENDPOINTS ARE CENTRES ON PURPOSE: cell (0, 0)
+   * and its eastern neighbour (1, 0). Centres are exactly one cell apart by
+   * construction, and they are what the holes themselves are positioned on
+   * (`redraw` projects `cellCenterXY` and centres a rect there), so the
+   * measurement and its use are in the same frame of reference. This used to
+   * measure from `origin_lon`/`origin_lat`, which is not a centre but the
+   * grid's south-west *boundary* - the edge at cell x = -0.5 - to the centre
+   * of cell x = 1: one and a half cells, reported as one, so every hole was
+   * drawn about 1.5x too large and cleared ground bled past the grid edge.
+   * "Measure one cell" was the intent that got mis-implemented, which is why
+   * the endpoints are named here.
+   *
+   * The two centres share a latitude, so the step between them is due east
+   * by exactly one cell width.
+   *
    * The distance between the two projected points, not their difference in
    * x: the map can be rotated (neither map disables `dragRotate` or
    * `touchZoomRotate`), and on a rotated map a step due east is not a step
@@ -114,9 +134,10 @@ export class CanvasFogFallback {
    * clamp to one pixel and revealed ground would read as fogged.
    */
   private estimateCellPixelSize(): number {
-    const origin = this.map.project([this.gridParams.origin_lon, this.gridParams.origin_lat]);
-    const neighbour = cellCenterXY(1, 0, this.gridParams);
-    const east = this.map.project([neighbour.lon, this.gridParams.origin_lat]);
+    const from = cellCenterXY(0, 0, this.gridParams);
+    const to = cellCenterXY(1, 0, this.gridParams);
+    const origin = this.map.project([from.lon, from.lat]);
+    const east = this.map.project([to.lon, to.lat]);
     return Math.max(1, Math.hypot(east.x - origin.x, east.y - origin.y));
   }
 

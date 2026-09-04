@@ -160,6 +160,106 @@ describe('index.css: the picker pin and the own-position marker', () => {
   });
 });
 
+// SPEC.md Section 7.3's canvas fallback (map/fog/canvas-fallback.ts). The
+// class it puts on its canvas had no rule in this file at all, which is not a
+// missing polish: an unpositioned canvas is painted over by MapLibre's own
+// positioned one, so a device without WebGL2 saw no fog whatsoever rather
+// than the flat sheet the fallback exists to be.
+//
+// THIS IS NOT A RENDERING TEST AND NOTHING HERE COULD BE. It is a scan of the
+// text of index.css, the same limit every check in this file works under:
+// jsdom applies no stylesheet, computes no geometry and hit-tests nothing, so
+// `getComputedStyle` on a rendered fallback canvas answers with defaults
+// whatever this file says. It cannot show that the fog is visible - only a
+// device without WebGL2 can - and it is still the check whose absence let a
+// class be referenced from TypeScript with nothing behind it for four
+// versions.
+describe('index.css: the fog fallback canvas is positioned over the map, and takes no taps', () => {
+  function bodiesFor(selector: string): string[] {
+    return rules()
+      .filter((rule) => rule.selector.split(',').some((part) => part.trim() === selector))
+      .map((rule) => rule.body);
+  }
+
+  function zIndexOf(selector: string): number {
+    for (const body of bodiesFor(selector)) {
+      const declared = body.match(/z-index\s*:\s*(-?\d+)/);
+      if (declared) {
+        return Number(declared[1]);
+      }
+    }
+    throw new Error(`no z-index declared for ${selector}`);
+  }
+
+  it('gives .fog-canvas-fallback a position other than static', () => {
+    const bodies = bodiesFor('.fog-canvas-fallback');
+    expect(
+      bodies.length,
+      'no rule targets .fog-canvas-fallback, so the class map/fog/canvas-fallback.ts sets ' +
+        'on its canvas has nothing behind it',
+    ).toBeGreaterThan(0);
+
+    const positions = bodies.flatMap((body) =>
+      [...body.matchAll(/(?:^|;)\s*position\s*:\s*([a-z-]+)\s*(?:;|$)/g)].map((m) => m[1]),
+    );
+    expect(positions, '.fog-canvas-fallback declares no position').not.toHaveLength(0);
+    expect(
+      positions[positions.length - 1],
+      'a static .fog-canvas-fallback is an in-flow element, and maplibre-gl.css positions ' +
+        'its own `.maplibregl-canvas` absolutely - within one stacking context a positioned ' +
+        'element paints above a non-positioned sibling whatever the DOM order, so the base ' +
+        'map covers the fog completely and the fallback shows nothing at all',
+    ).not.toBe('static');
+  });
+
+  it('lets every drag and pinch through to the map', () => {
+    expect(
+      bodiesFor('.fog-canvas-fallback').some((body) => /pointer-events\s*:\s*none/.test(body)),
+      '.fog-canvas-fallback covers the entire map. Without pointer-events: none it swallows ' +
+        'every drag, tap and pinch and the map stops moving - on the one path that has no ' +
+        'other way to be looked at, and which no test that does not lay the screen out can ' +
+        'see happen.',
+    ).toBe(true);
+  });
+
+  // The band, stated as the relationships that decide it rather than as the
+  // number. Above the base map is what makes the fog visible at all
+  // (`.maplibregl-canvas` is positioned at z-index auto, so anything above 0
+  // clears it); below everything the app draws on the map is what keeps the
+  // fallback fogging the map and nothing else. The bar markers are the one
+  // that had to be given a z-index for this - at `auto` they tie with the fog
+  // at stacking level 0 and painting order falls to whichever was appended to
+  // the map container last, which decides whether the marker carrying Section
+  // 7.5's check-in is visible on a device without WebGL2.
+  it('sits above the base map and below everything drawn on top of it', () => {
+    const fog = zIndexOf('.fog-canvas-fallback');
+    expect(fog).toBeGreaterThan(0);
+    for (const above of ['.bar-markers', '.own-position-marker', '.bar-stamps', '.map-overlays']) {
+      expect(zIndexOf(above), `${above} would be painted over by the fallback fog`).toBeGreaterThan(
+        fog,
+      );
+    }
+  });
+
+  // The admin's teleport picker draws this fog too (Section 9.3), and there
+  // the map's siblings are the pin, the locate button and the status line -
+  // only the pin carries a z-index. Making the picker's map a stacking
+  // context is what keeps the fog's z-index from escaping the map and
+  // covering the other two, and it does it for anything else the map grows
+  // later rather than for the fog alone.
+  it("keeps a z-index inside the picker's map, where the picker's controls have none", () => {
+    expect(
+      bodiesFor('.map-picker .map-picker__map').some((body) =>
+        /isolation\s*:\s*isolate/.test(body),
+      ),
+      '.map-picker .map-picker__map must be its own stacking context. Without it the fog ' +
+        "fallback's z-index competes with the picker's own controls, which sit at stacking " +
+        'level 0, and a full-bleed sheet of fog is painted over the locate button and the ' +
+        'status line.',
+    ).toBe(true);
+  });
+});
+
 // Section 8.3, "No map overlay may obscure another". The map screen used to
 // position each of its overlays against the map container, every one with
 // its own edge offsets and its own z-index, and two of them collided: the

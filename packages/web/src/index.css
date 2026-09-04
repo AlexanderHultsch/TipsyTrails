@@ -842,6 +842,51 @@ button:focus-visible,
   inset: 0;
 }
 
+/* Section 7.3's canvas fallback (map/fog/canvas-fallback.ts) - the fog on a
+   device without WebGL2, on both maps that draw fog (the map screen and the
+   admin's teleport picker), since both append it to their own MapLibre
+   container.
+
+   WITHOUT THIS RULE THE FALLBACK IS INVISIBLE, which is not a subtlety: the
+   class was set from TypeScript and defined in no stylesheet, so the canvas
+   stayed `position: static` and in flow, while maplibre-gl.css gives
+   `.maplibregl-canvas` `position: absolute`. Inside one stacking context a
+   positioned element paints above a non-positioned in-flow sibling whatever
+   the DOM order, so MapLibre's own opaque canvas covered the fog completely
+   and a device without WebGL2 saw no fog at all rather than the uniform
+   sheet the fallback is meant to be.
+
+   z-index 1 is the band, and it is the whole band this may occupy: above the
+   base map - `.maplibregl-canvas` is positioned at z-index auto - and below
+   everything the app itself draws on top of the map, so the fallback fogs
+   the map and nothing else. Those are the empty MapLibre control corners
+   (2), the bar markers (3, raised for exactly this reason), the player's own
+   position marker (4), the discovery stamps (5) and every overlay in
+   .map-overlays (10) - the attribution among them, Section 10.5. The WebGL
+   path gets all of that for free by being a style layer drawn inside the map
+   rather than a DOM element on top of it.
+
+   `inset: 0` places the canvas; `resizeCanvas` in canvas-fallback.ts also
+   writes `style.width`/`style.height` in CSS pixels, read from the same
+   container box this resolves against, so the two agree rather than fight.
+   Neither is redundant and neither may be deleted as such: an absolutely
+   positioned box with a specified width drops `right`/`bottom`, so those
+   inline sizes are what size the element, and they are also what pins the
+   CSS pixel size against the `width`/`height` attributes, which are the
+   backing store in device pixels and are a different number under
+   devicePixelRatio.
+
+   `pointer-events: none` is not optional either. This is a full-bleed canvas
+   over the whole map; with pointer events on it swallows every drag, tap and
+   pinch the map would have received, and no test in this repository would
+   notice. */
+.fog-canvas-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
 /* Section 8.3, "No map overlay may obscure another". Every overlay on this
    screen lives in this one container, and it lays them out as a grid of rows
    over the map instead of each of them being positioned against the map on
@@ -1532,10 +1577,22 @@ button:focus-visible,
    shadow, or outline. The accent colour only ever shows up as the
    focus-visible ring below (the same treatment .field input gets above),
    never as the marker's own fill - Section 8.1 reserves it for the
-   player's own position and active states. */
+   player's own position and active states.
+
+   z-index 3 keeps the markers above the canvas fog fallback's 1
+   (.fog-canvas-fallback above) and below the own-position marker's 4. It is
+   stated rather than left at `auto`: the fallback is a DOM canvas painted at
+   0.9 alpha over the whole map, so at `auto` the markers would tie with it
+   at stacking level 0 and the painting order would fall to whichever of the
+   two happened to be appended to the map container last - which on a device
+   without WebGL2 decides whether the one control the check-in flow needs
+   (Section 7.5) is visible at all. The WebGL path never poses the question,
+   because there the fog is a style layer inside the map's own canvas and
+   every DOM marker is above it by construction. */
 .bar-markers {
   position: absolute;
   inset: 0;
+  z-index: 3;
   pointer-events: none;
 }
 
@@ -2526,10 +2583,22 @@ button:focus-visible,
 /* Scoped for the same reason as .screen--map .map-container above:
    MapLibre's own `.maplibregl-map { position: relative }` would otherwise
    outrank a bare single-class rule and collapse this container to zero
-   height too. */
+   height too.
+
+   `isolation: isolate` makes this a stacking context, which keeps what the
+   map draws inside the map. The picker's own chrome - the pin, the locate
+   button, the status line - is a set of siblings of this element, and only
+   the pin carries a z-index; the other two sit at stacking level 0, so
+   anything positioned *inside* the map with a z-index above 0 would paint
+   over them. The teleport picker draws Section 7.3's fog, and its canvas
+   fallback is one such element (.fog-canvas-fallback above): without this,
+   a device without WebGL2 would get a full-bleed sheet of fog over the
+   picker's own controls. The map screen needs no counterpart - everything
+   outside its map container is in .map-overlays at z-index 10. */
 .map-picker .map-picker__map {
   position: absolute;
   inset: 0;
+  isolation: isolate;
 }
 
 /* The same control (components/LocateButton.tsx) inside the suggest
