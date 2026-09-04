@@ -26,7 +26,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.53                                                       |
+| Spec version          | 1.54                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
@@ -284,6 +284,19 @@ not an oversight — do not "fix" it by adding a status join there.
 
 Each cost a round trip. Each looked correct on first reading.
 
+- **A promise about what is _rendered_ is not a promise about what is
+  _shipped_.** SPEC.md Section 7.7 said the badge thresholds are never shown
+  to a user and never returned by an endpoint. Both were true, and both were
+  worthless: `CONFIG` is one object literal, `packages/web` imports it as a
+  value in twelve modules, so the six floors sat in the production bundle in
+  plaintext from v1.31 to v1.53 and read out of devtools in seconds. Nothing
+  in the suite could see it, because every test in it reads source, and this
+  was a property of the build. The fix (v1.54) is a second constants module
+  behind a `./server` subpath; the _proof_ is
+  `packages/web/src/bundle.test.ts`, which builds the real bundle and greps
+  it. **When a rule is about what reaches the client, test the artefact the
+  client gets** — a test that asserts "no file imports X" is a test of the
+  import graph, and the import graph is not the deliverable.
 - **The verification chain itself was lying.** `packages/api` and
   `packages/web` import `@tipsytrails/shared` through a gitignored `dist` that
   neither `pnpm test` nor `pnpm typecheck` rebuilt — only `prepare` did, and

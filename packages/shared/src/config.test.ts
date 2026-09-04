@@ -27,24 +27,22 @@ describe('DERIVED', () => {
   });
 });
 
-describe('CONFIG.BADGE_THRESHOLDS', () => {
-  it('matches the spec values for explorer', () => {
-    expect(CONFIG.BADGE_THRESHOLDS.explorer.week).toBe(0.1);
-    expect(CONFIG.BADGE_THRESHOLDS.explorer.month).toBe(0.3);
-    expect(CONFIG.BADGE_THRESHOLDS.explorer.year).toBe(2.0);
+describe('CONFIG.BADGE_KINDS', () => {
+  it('is the two kinds of Section 7.7, in the order a badge shelf draws', () => {
+    expect(CONFIG.BADGE_KINDS).toEqual(['explorer', 'barfly']);
   });
 
-  it('matches the spec values for barfly', () => {
-    expect(CONFIG.BADGE_THRESHOLDS.barfly.week).toBe(1);
-    expect(CONFIG.BADGE_THRESHOLDS.barfly.month).toBe(2);
-    expect(CONFIG.BADGE_THRESHOLDS.barfly.year).toBe(3);
-  });
-
-  it('never demands more of a shorter period than a longer one', () => {
-    for (const badge of [CONFIG.BADGE_THRESHOLDS.explorer, CONFIG.BADGE_THRESHOLDS.barfly]) {
-      expect(badge.week).toBeLessThanOrEqual(badge.month);
-      expect(badge.month).toBeLessThanOrEqual(badge.year);
-    }
+  // SPEC.md Sections 7.1 and 7.7. The kinds are the whole of what
+  // this file may say about badges: the floors behind them are numbers a
+  // client may not be given, and they live in server-config.ts, which
+  // packages/web cannot import. A floor put back here would be bundled into
+  // the browser the same day - CONFIG is one object literal and the web
+  // imports it as a value - which is the leak this split closed in v1.54.
+  it('carries no floor, and neither does anything else in CONFIG', () => {
+    expect(CONFIG).not.toHaveProperty('BADGE_THRESHOLDS');
+    // A floor is a number keyed by a period. No client-safe constant is, so
+    // this catches the floors coming back under any other name.
+    expect(JSON.stringify(CONFIG)).not.toMatch(/"(week|month|year)":/);
   });
 });
 
@@ -54,7 +52,7 @@ describe('CONFIG radii', () => {
   });
 
   // SPEC.md Section 7.5 step 1. Pinned to the values the spec states, the
-  // same way BADGE_THRESHOLDS above is: the pair is the product decision —
+  // same way server-config.ts's floors are: the pair is the product decision —
   // 30 m with a good fix, 50 m at worst — and it was 50 and 50, reaching
   // 100 m, which is a street of bars in Karlsruhe's centre.
   it('matches the spec values for the check-in radius and its accuracy tolerance', () => {

@@ -1,3 +1,11 @@
+// The package's one client-safe entry point. `server-config.ts` is
+// deliberately absent and must stay absent: anything re-exported here is
+// reachable from `packages/web` and therefore bundled into the browser, which
+// is exactly what put the badge floors in a production bundle up to and
+// including v1.53 (Section 7.7). Server-only constants come in through
+// `@tipsytrails/shared/server`, which `package.json`'s `exports` map keeps
+// separate and `eslint.config.js` forbids inside `packages/web`.
+
 export { CONFIG, DERIVED } from './config.js';
 export { generateAvatarSvg } from './avatar.js';
 export { parseCityConfig, citySeedDir } from './city.js';

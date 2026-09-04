@@ -6,6 +6,11 @@ import {
   mostRecentlyClosedBadgePeriodKey,
 } from '@tipsytrails/shared';
 import type { BadgePeriod } from '@tipsytrails/shared';
+// The badge floors, and the one place in the repository that reads them.
+// Section 7.7 says they never reach a client, so they are not in `CONFIG` and
+// not behind the package's default entry point — see
+// packages/shared/src/server-config.ts for what keeps them out of the browser.
+import { SERVER_CONFIG } from '@tipsytrails/shared/server';
 import type Database from 'better-sqlite3';
 import { loadActiveCity } from './city-grid.js';
 import { excludedFromRankingsUserIds } from './rankings.js';
@@ -18,7 +23,7 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 // and a scheduler wraps that catch-up in a `setInterval` the same way
 // `startMaintenanceScheduler` wraps `runMaintenanceTick`.
 
-export type BadgeKind = keyof typeof CONFIG.BADGE_THRESHOLDS;
+export type BadgeKind = (typeof CONFIG.BADGE_KINDS)[number];
 
 const BADGE_PERIODS: readonly BadgePeriod[] = ['week', 'month', 'year'];
 
@@ -204,7 +209,7 @@ function awardCandidates(
   values: Map<number, MetricStanding>,
   excluded: ReadonlySet<number>,
 ): BadgeAward[] {
-  const threshold: number = CONFIG.BADGE_THRESHOLDS[kind][period];
+  const threshold: number = SERVER_CONFIG.BADGE_THRESHOLDS[kind][period];
   const candidates = [...values].filter(
     ([userId, standing]) => !excluded.has(userId) && standing.value >= threshold,
   );

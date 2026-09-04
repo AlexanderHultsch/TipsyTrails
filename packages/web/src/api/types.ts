@@ -183,10 +183,13 @@ export interface ProgressResponse {
   districts: DistrictProgress[];
 }
 
-// SPEC.md Section 7.7: two badge kinds, derived from CONFIG.BADGE_THRESHOLDS
-// the same way packages/api/src/badges.ts's own BadgeKind is - so a third
-// kind added to config.ts is a type error here rather than a silent gap.
-export type BadgeKind = keyof typeof CONFIG.BADGE_THRESHOLDS;
+// SPEC.md Section 7.7: two badge kinds, derived from CONFIG.BADGE_KINDS the
+// same way packages/api/src/badges.ts's own BadgeKind is - so a third kind
+// added to config.ts is a type error here rather than a silent gap. The kinds
+// are the client-safe half of what config.ts used to say about badges; the
+// floors behind them are in @tipsytrails/shared/server, which this package may
+// not import - see Section 7.1 for the two constants modules and why.
+export type BadgeKind = (typeof CONFIG.BADGE_KINDS)[number];
 
 // A badge a user has actually been awarded (packages/api/src/badges.ts's
 // BadgeSummary) - shared by GET /api/leaderboard's per-entry `badges` and

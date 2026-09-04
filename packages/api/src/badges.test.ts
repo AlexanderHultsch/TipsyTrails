@@ -3,12 +3,8 @@ import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  badgePeriodBoundaries,
-  badgePeriodDays,
-  badgePeriodKey,
-  CONFIG,
-} from '@tipsytrails/shared';
+import { badgePeriodBoundaries, badgePeriodDays, badgePeriodKey } from '@tipsytrails/shared';
+import { SERVER_CONFIG } from '@tipsytrails/shared/server';
 import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { currentBadgeProgress, evaluateBadges, runBadgeCatchUp } from './badges.js';
@@ -107,7 +103,7 @@ describe('evaluateBadges — explorer', () => {
   it('awards a user at exactly the week threshold', () => {
     const userId = insertUser('alex');
     const thresholdCells = Math.ceil(
-      (CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
+      (SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
     );
     insertDailyProgress(userId, PERIOD_DAYS[0], thresholdCells);
 
@@ -125,7 +121,7 @@ describe('evaluateBadges — explorer', () => {
 
   it('does not award a user just below the threshold', () => {
     const userId = insertUser('alex');
-    const thresholdCells = (CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS;
+    const thresholdCells = (SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS;
     insertDailyProgress(userId, PERIOD_DAYS[0], Math.floor(thresholdCells) - 1);
 
     const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
@@ -155,7 +151,7 @@ describe('evaluateBadges — explorer', () => {
     evaluateBadges(db, PERIOD, PERIOD_KEY);
 
     const expectedPercent = ((30 + 20) / PLAYABLE_CELLS) * 100;
-    expect(expectedPercent).toBeGreaterThanOrEqual(CONFIG.BADGE_THRESHOLDS.explorer.week);
+    expect(expectedPercent).toBeGreaterThanOrEqual(SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week);
     expect(badgeRow(userId, 'explorer')?.value).toBeCloseTo(expectedPercent);
   });
 
@@ -174,7 +170,7 @@ describe('evaluateBadges — explorer', () => {
         `SELECT value FROM badges WHERE user_id = ? AND kind = 'explorer' AND period = 'month' AND period_key = ?`,
       )
       .get(userId, monthKey);
-    expect(expectedPercent).toBeGreaterThanOrEqual(CONFIG.BADGE_THRESHOLDS.explorer.month);
+    expect(expectedPercent).toBeGreaterThanOrEqual(SERVER_CONFIG.BADGE_THRESHOLDS.explorer.month);
     expect(row?.value).toBeCloseTo(expectedPercent);
   });
 });
@@ -187,7 +183,7 @@ describe('evaluateBadges — barfly', () => {
 
     const result = evaluateBadges(db, PERIOD, PERIOD_KEY);
 
-    expect(CONFIG.BADGE_THRESHOLDS.barfly.week).toBe(1);
+    expect(SERVER_CONFIG.BADGE_THRESHOLDS.barfly.week).toBe(1);
     expect(result.awarded).toContainEqual({ userId, kind: 'barfly', value: 1 });
   });
 
@@ -256,7 +252,9 @@ describe('evaluateBadges — barfly', () => {
 // Section 7.7's competition: the threshold qualifies, the highest value
 // wins, and a tie at the top wins for everyone tied.
 describe('evaluateBadges — awarding', () => {
-  const THRESHOLD_CELLS = Math.ceil((CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS);
+  const THRESHOLD_CELLS = Math.ceil(
+    (SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
+  );
 
   it('awards only the highest scorer when several users clear the threshold', () => {
     const alex = insertUser('alex');
@@ -321,7 +319,7 @@ describe('evaluateBadges — awarding', () => {
     const userId = insertUser('alex');
     const barId = seedBar('Idempotent Bar');
     const thresholdCells = Math.ceil(
-      (CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
+      (SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
     );
     insertDailyProgress(userId, PERIOD_DAYS[0], thresholdCells);
     insertCompletedVisit(userId, barId, PERIOD_START_S + 3600);
@@ -401,7 +399,9 @@ describe('currentBadgeProgress', () => {
 // `explorer` and `barfly` are covered by one placement rather than by two
 // filters that could come to disagree — and both are tested here for it.
 describe('evaluateBadges — accounts excluded from the rankings', () => {
-  const THRESHOLD_CELLS = Math.ceil((CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS);
+  const THRESHOLD_CELLS = Math.ceil(
+    (SERVER_CONFIG.BADGE_THRESHOLDS.explorer.week / 100) * PLAYABLE_CELLS,
+  );
 
   function exclude(userId: number): void {
     db.prepare('UPDATE users SET excluded_from_rankings = 1 WHERE id = ?').run(userId);

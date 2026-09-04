@@ -5,17 +5,19 @@
 //
 // It is derived, not written out. The six pairs could be listed by hand in
 // half the lines, and that list would type-check forever: a subset of a union
-// is still assignable to it, so a third kind added to CONFIG.BADGE_THRESHOLDS
+// is still assignable to it, so a third kind added to CONFIG.BADGE_KINDS
 // would silently produce a five-badge catalogue rather than an error. Deriving
 // makes the same change either compile into the catalogue or fail loudly,
 // which is the reason packages/api/src/badges.ts and
 // packages/web/src/api/types.ts already derive their own BadgeKind from the
-// same key set.
+// same array.
 //
-// Only the *key set* of BADGE_THRESHOLDS is read here. The numbers behind
-// those keys are the floors of Section 7.7 and are never shown to a user and
-// never returned by an endpoint; nothing in this file reads one, and nothing
-// that imports this file needs to.
+// Only the badge *kinds* are read here, and since v1.54 that is all there is
+// to read: the floors behind them are the numbers of Section 7.7, they are
+// never shown to a user and never returned by an endpoint, and they no longer
+// live in config.ts at all (server-config.ts, which this file and everything
+// downstream of it in the browser cannot reach). Nothing here reads a floor,
+// and nothing that imports this file needs to.
 
 import { CONFIG } from './config.js';
 import { BADGE_PERIODS } from './berlin-time.js';
@@ -24,10 +26,10 @@ import type { BadgePeriod } from './berlin-time.js';
 // Deliberately module-local. The canonical public name for this type would
 // mean collapsing the two copies packages/api and packages/web already
 // derive, which is a refactor of the API package rather than part of this
-// change; both copies are `keyof typeof CONFIG.BADGE_THRESHOLDS` too, so
+// change; both copies are `(typeof CONFIG.BADGE_KINDS)[number]` too, so
 // BadgeType below is structurally the same type at every call site without a
 // third exported name to keep in step.
-type BadgeKind = keyof typeof CONFIG.BADGE_THRESHOLDS;
+type BadgeKind = (typeof CONFIG.BADGE_KINDS)[number];
 
 /** One badge that exists: a kind awarded for a period. Not an award. */
 export interface BadgeType {
@@ -38,15 +40,17 @@ export interface BadgeType {
 /**
  * Every badge the game can award, kind-major and then shortest period first.
  *
- * The order is what a shelf of placeholders is drawn in, so it is fixed here
- * rather than left to whatever `Object.keys` happens to return: the two
- * pictograms group together, and within each the period modifier ascends
- * nothing -> star -> crown (Section 8.1), which reads as a progression rather
- * than as six unrelated glyphs.
+ * The order is what a shelf of placeholders is drawn in, so both axes of it
+ * are stated rather than incidental: the kinds come from an array
+ * (CONFIG.BADGE_KINDS) rather than from whatever `Object.keys` happens to
+ * return, and the periods from BADGE_PERIODS. The two pictograms group
+ * together, and within each the period modifier ascends nothing -> star ->
+ * crown (Section 8.1), which reads as a progression rather than as six
+ * unrelated glyphs.
  */
-export const BADGE_CATALOGUE: readonly BadgeType[] = (
-  Object.keys(CONFIG.BADGE_THRESHOLDS) as BadgeKind[]
-).flatMap((kind) => BADGE_PERIODS.map((period) => ({ kind, period })));
+export const BADGE_CATALOGUE: readonly BadgeType[] = CONFIG.BADGE_KINDS.flatMap((kind: BadgeKind) =>
+  BADGE_PERIODS.map((period) => ({ kind, period })),
+);
 
 /**
  * The badge types a player has never earned, in catalogue order.
@@ -78,13 +82,14 @@ export function unearnedBadgeTypes(earned: readonly BadgeType[]): BadgeType[] {
 // ---------------------------------------------------------------------------
 // What a badge is, in words.
 //
-// Copy rather than specification constants, so CLAUDE.md's "every constant
-// lives in config.ts" does not apply - that rule covers rate limits, radii,
-// thresholds, tolerances and timeouts, and none of these is a number at all.
+// Copy rather than specification constants, so CLAUDE.md's rule that every
+// constant lives in config.ts or server-config.ts does not apply - that rule
+// covers rate limits, radii, thresholds, tolerances and timeouts, and none of
+// these is a number at all.
 // It lives here instead of beside the component that draws it because this is
 // where the catalogue lives: a name written next to a shelf could name a badge
 // the catalogue no longer has, and the `Record` types below make a third kind
-// added to CONFIG.BADGE_THRESHOLDS a compile error here rather than a badge
+// added to CONFIG.BADGE_KINDS a compile error here rather than a badge
 // that opens with nothing to say.
 //
 // **Section 7.7 decides every word of this.** The threshold is never shown

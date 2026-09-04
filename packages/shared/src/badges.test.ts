@@ -16,7 +16,7 @@ function key(type: BadgeType): string {
 
 describe('BADGE_CATALOGUE', () => {
   it('holds every kind in every period, once each', () => {
-    const kinds = Object.keys(CONFIG.BADGE_THRESHOLDS);
+    const kinds = CONFIG.BADGE_KINDS;
     expect(BADGE_CATALOGUE).toHaveLength(kinds.length * BADGE_PERIODS.length);
     expect(new Set(BADGE_CATALOGUE.map(key)).size).toBe(BADGE_CATALOGUE.length);
 

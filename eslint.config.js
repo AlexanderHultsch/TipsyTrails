@@ -11,6 +11,36 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
+    // SPEC.md Section 7.1's second constants module holds the constants a
+    // client may not be given (`packages/shared/src/server-config.ts`), and
+    // Section 7.7's third clause is what happens when nothing stops one
+    // reaching the browser: from v1.31 to v1.53 the badge floors shipped in the
+    // production bundle while Section 7.7 promised they never left the server.
+    //
+    // The subpath is already outside `@tipsytrails/shared`'s default entry
+    // point, so importing it takes a deliberate line rather than a stray
+    // `CONFIG`. This is what makes that line fail rather than merely look
+    // wrong. It is the second of the three guards named in server-config.ts;
+    // the one that actually proves the property is
+    // `packages/web/src/bundle.test.ts`, which greps the built output.
+    files: ['packages/web/**/*.{ts,tsx,js,jsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@tipsytrails/shared/server', '**/shared/src/server-config*'],
+              message:
+                'Server-only constants (SPEC.md Section 7.1) must not reach the browser bundle - ' +
+                'see Section 7.7. Client-safe constants are in @tipsytrails/shared (CONFIG).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The one hand-written, non-Vite-processed browser script in the repo
     // (packages/web/public/sw.js, which absorbed the separate push worker
     // this rule was first written for) - it runs in a

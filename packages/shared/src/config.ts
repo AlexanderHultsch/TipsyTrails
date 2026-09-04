@@ -1,3 +1,13 @@
+// SPEC.md Section 7.1. Every constant this specification defines lives here,
+// with exactly one exception: a constant a client must not be given lives in
+// `server-config.ts` beside this file, which `packages/web` cannot reach (see
+// that file, and Section 0 rule 3). There is no third place, and a call site
+// still never inlines a constant from either.
+//
+// This module is client-safe by definition: everything in it is bundled into
+// the browser, because `packages/web` imports `CONFIG` as a value in twelve
+// modules and one object literal is all-or-nothing.
+
 export const CONFIG = {
   FOG_REVEAL_RADIUS_M: 100,
   FOG_MAX_SPEED_KMH: 30, // above this, no reveal
@@ -253,21 +263,24 @@ export const CONFIG = {
     suggest: { limit: 10, windowMs: 24 * 60 * 60 * 1000, by: 'user' },
   },
 
-  // Badges are a per-period COMPETITION, and these are its FLOORS. A badge
-  // goes to the highest-scoring user of the period, and to nobody at all if
-  // no one reaches the floor — its only job is to stop the badge being won by
-  // being the least inactive person. Set them low: they are qualification, not
-  // the target. A user qualifies when value >= threshold (minimum, not
-  // "strictly greater"). Never sent to a client — see Section 7.7.
-  BADGE_THRESHOLDS: {
-    // Percent of playable city area newly revealed in the period.
-    // Deliberately not linear across periods: after the first weeks most walking
-    // retraces already-revealed ground, so sustained progress decays sharply.
-    // 0.1% is roughly 900 m of previously unexplored walking.
-    explorer: { week: 0.1, month: 0.3, year: 2.0 },
-    // Bars newly mastered in the period.
-    barfly: { week: 1, month: 2, year: 3 },
-  },
+  // The badge kinds of Section 7.7, and the whole of what this file says about
+  // badges. Their qualifying FLOORS are numbers a client may not have, so they
+  // live in server-config.ts instead (Section 0, rule 3) — this array is the
+  // client-safe half, because the *names* are needed everywhere: the browser
+  // draws a shelf of every badge that exists, and cannot ask the server which
+  // badges exist without being told the catalogue it already has.
+  //
+  // An array and not the key set of the thresholds record, which is what this
+  // used to be. Order is load-bearing — it is the order a shelf of
+  // placeholders draws in (badges.ts, `BADGE_CATALOGUE`) — and an array states
+  // that order instead of inheriting it from the insertion order of an object
+  // literal that now lives in another file.
+  //
+  // The two halves cannot drift: server-config.ts's thresholds record is
+  // `satisfies Record<BadgeKind, …>` over exactly this array, so a kind added
+  // here without floors, or floors added there for a kind not named here,
+  // fails to compile.
+  BADGE_KINDS: ['explorer', 'barfly'],
 
   // Map zoom and pan limits. Zoom 10 keeps the whole city plus its
   // surroundings in view and is as far out as the map may go, so it never

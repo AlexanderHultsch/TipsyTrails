@@ -8,9 +8,16 @@ them; they are not suggestions.
   the way forward, stop and report — do not work around it.
 - Implement strictly phase by phase, per Section 12. Do not start a phase
   before every Definition-of-Done item of the previous phase passes.
-- All constants defined in the spec live in `packages/shared/src/config.ts`
-  and nowhere else. Never inline a rate limit, radius, threshold, tolerance,
-  or timeout at a call site — import it from `config.ts`.
+- All constants defined in the spec live in exactly two modules and nowhere
+  else: `packages/shared/src/config.ts`, which is client-safe and is bundled
+  into the browser, and `packages/shared/src/server-config.ts`, which
+  `packages/web` cannot import. Which of the two a constant goes in is decided
+  by one question and no other: a constant a client must not be given goes in
+  `server-config.ts`; every other constant stays in `config.ts`. There is no
+  third module, no constant is in both, and adding a module is not a decision
+  an executor may take. Never inline a rate limit, radius, threshold,
+  tolerance, or timeout at a call site — import it from whichever of the two
+  holds it.
 - Unit rule (Section 0, rule 6): the database stores every timestamp and
   duration in **seconds**. Every constant in `config.ts` is in **milliseconds**
   or **metres**, as its name says. The only conversion boundary is the
