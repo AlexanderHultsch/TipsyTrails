@@ -1,8 +1,9 @@
 # Tipsy Trails — iOS Companion Specification
 
-**Version:** 0.1
+**Version:** 0.2
 **Status:** Specified, nothing built. A draft for the owner's review before any code lands.
 **Parent:** `SPEC.md` at the repository root, v1.58. This document does not replace it and cannot contradict it; Section 14 here lists the amendments the parent needs before this one is in force.
+**Keeping up with `main`:** `ios/PARENT-CONTRACT.md` — the list of what this app depends on in the parent, the record of every merge from `main`, and what to do when the pin above and the parent's version disagree. `packages/shared/src/ios-parent-pin.test.ts` fails until they agree, so the decision cannot be skipped by being forgotten.
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails, branch `ios-app`
 **Target device:** iPhone, iOS 17.0 or later
 **Distribution:** TestFlight (internal testers) or Ad Hoc — not the App Store (Section 4.3)
@@ -44,6 +45,7 @@ The server is nearly untouched. Fog reveal, discovery and mastering already happ
 | What is proven here, and what is the owner's walk? | 13 |
 | What must change in `SPEC.md`? | 14 |
 | What is still open? | 15 |
+| How does this branch keep up with `main`? | `PARENT-CONTRACT.md` |
 
 **Section numbers are an interface here as they are in the parent.** Code will cite `ios/SPEC.md Section N.N`. Rewrite freely inside a section; never renumber, merge, split or repurpose one.
 
@@ -181,6 +183,7 @@ Discovery, check-in, mastering, badges, the leaderboard and every rule of `SPEC.
 TipsyTrails/
 ├── ios/
 │   ├── SPEC.md                      # this document
+│   ├── PARENT-CONTRACT.md           # what this app depends on in the parent; the merge record
 │   ├── project.yml                  # XcodeGen; the project file is generated from this
 │   ├── Config/
 │   │   ├── Server.xcconfig          # SERVER_ORIGIN — committed, no secret in it
@@ -841,4 +844,5 @@ Made in Step A, in one commit, each inside its section without renumbering, with
 
 ## 16. Changelog
 
+- **v0.2** — Connected this branch to `main` with something that cannot rot. `ios/PARENT-CONTRACT.md` is added: the dependency surface this app has on the parent (what each entry is on both sides, why the app depends on it, what breaks if it changes), a "not a dependency" section naming what is deliberately out and how each exclusion was checked, and a merge record of one row per merge of `main` into `ios-app` — never one row per change, which is what makes it affordable to keep. The **Parent:** pin in the front matter above is made enforceable by `packages/shared/src/ios-parent-pin.test.ts`, a new test on this branch only, which fails when the pin and the root `SPEC.md`'s version disagree and says in its failure what to do about it. Nothing else in this document changed; the amendments of Section 14 are still Step A's work and are still unmade.
 - **v0.1** — First draft, for the owner's review. Specifies the three-part shape (shell, tracker, web app), the reasoning against Capacitor and a native rewrite, the JavaScriptCore decision, the session-borrowing rules, the iOS authorization ladder and its limits, the tracker's constants, host interface, state machine, queue, visits, notifications and counters, the web app's shell driver, the two server additions, the GDPR consent flow and privacy-page section, the four native screens, seven build steps with their Definitions of Done, the verification matrix, the eight-scenario replay harness, the six-walk field test, and the amendments `SPEC.md` needs. Nothing is built.
