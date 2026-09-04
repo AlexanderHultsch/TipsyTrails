@@ -141,9 +141,10 @@ export interface VapidPublicKeyResponse {
 }
 
 // GET /api/progress response shape (packages/api/src/routes/fog.ts). Section
-// 7.6's area-explored figures, city-wide and per district - the same
-// revealed/playable pair the fog mask itself is scored against, already
-// turned into a percent server-side so this is never recomputed here.
+// 7.6's figures for the signed-in player: area explored, city-wide and per
+// district - the same revealed/playable pair the fog mask itself is scored
+// against, already turned into a percent server-side so this is never
+// recomputed here - and, city-wide, the two bar counts.
 // Named for readability, not exported: like CityMeta's and FogProgress's own
 // `districts` above, these two are only ever reached through the response
 // type below, and this module names a sub-shape only where something has to
@@ -152,6 +153,15 @@ interface CityProgress {
   revealedCells: number;
   playableCells: number;
   percent: number;
+  // Section 7.6's two bar figures, scoped server-side to the active city,
+  // this caller's own discoveries and bars that are still `active` - the
+  // same set GET /api/bars answers with, so `barsDiscovered` is that
+  // response's length and `barsMastered` the number of its entries carrying
+  // Section 5.7's `mastered` flag, without any of its rows. Screens read
+  // these rather than counting a list: the start screen (Section 8.3) wants
+  // exactly these two integers.
+  barsDiscovered: number;
+  barsMastered: number;
 }
 
 interface DistrictProgress {

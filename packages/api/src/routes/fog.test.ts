@@ -580,4 +580,182 @@ describe('GET /api/progress', () => {
     });
     expect(response.headers['cache-control']).toBe('private, no-store');
   });
+
+  // SPEC.md Section 7.6's two bar figures, which this route answers so that
+  // the start screen (Section 8.3) does not have to fetch every discovered
+  // bar to count two integers.
+  //
+  // The fixtures here are deliberately not "one user, one city": a
+  // `COUNT(*)` that forgot either scope answers correctly in that fixture
+  // and wrongly in a real database, and those are the two failures a careless
+  // implementation actually has.
+  describe('the two bar counts', () => {
+    function userIdOf(username: string): number {
+      return db
+        .prepare<[string], { id: number }>('SELECT id FROM users WHERE username = ?')
+        .get(username)!.id;
+    }
+
+    function activeCityId(): number {
+      return db.prepare<[], { id: number }>('SELECT id FROM cities WHERE is_active = 1').get()!.id;
+    }
+
+    // A second city row, inactive, so `loadActiveCity` still answers
+    // Karlsruhe and a bar hung off this one is a bar in another city.
+    function insertOtherCity(): number {
+      const result = db
+        .prepare(
+          `INSERT INTO cities
+             (slug, name, origin_lat, origin_lon, grid_width, grid_height, cell_size_m,
+              playable_cells, is_active)
+           VALUES ('mannheim', 'Mannheim', 49.4, 8.4, 10, 10, 50, 100, 0)`,
+        )
+        .run();
+      return Number(result.lastInsertRowid);
+    }
+
+    function insertBar(
+      name: string,
+      options: { cityId?: number; status?: 'active' | 'hidden' } = {},
+    ): number {
+      const result = db
+        .prepare(
+          `INSERT INTO bars
+             (city_id, district_id, name, address, lat, lon, cell_index, source, status, created_at)
+           VALUES (?, NULL, ?, NULL, ?, ?, 0, 'osm', ?, 0)`,
+        )
+        .run(
+          options.cityId ?? activeCityId(),
+          name,
+          SCHLOSS.lat,
+          SCHLOSS.lon,
+          options.status ?? 'active',
+        );
+      return Number(result.lastInsertRowid);
+    }
+
+    function discover(username: string, barId: number): void {
+      db.prepare(
+        'INSERT INTO bar_discoveries (user_id, bar_id, discovered_at) VALUES (?, ?, 0)',
+      ).run(userIdOf(username), barId);
+    }
+
+    // Section 5.7's definition: a `visits` row with `status = 'completed'`.
+    // `status` is a parameter so the tests can show that the other three
+    // master nothing.
+    function insertVisit(
+      username: string,
+      barId: number,
+      status: 'pending' | 'completed' | 'expired' | 'cancelled',
+    ): void {
+      db.prepare(
+        `INSERT INTO visits
+           (user_id, bar_id, started_at, last_sample_at, onsite_samples, confirmed_s, status, completed_at)
+         VALUES (?, ?, 0, 100, 2, 100, ?, ?)`,
+      ).run(userIdOf(username), barId, status, status === 'completed' ? 100 : null);
+    }
+
+    async function progressOf(cookie: string): Promise<{
+      barsDiscovered: number;
+      barsMastered: number;
+    }> {
+      const response = await injectWithOrigin({
+        method: 'GET',
+        url: '/api/progress',
+        headers: { cookie },
+      });
+      expect(response.statusCode).toBe(200);
+      return response.json().city;
+    }
+
+    it('are zero for a player who has discovered nothing', async () => {
+      const cookie = await registerUser('walker');
+      insertBar('Undiscovered Bar');
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 0, barsMastered: 0 });
+    });
+
+    it('counts a discovered bar as discovered and not as mastered', async () => {
+      const cookie = await registerUser('walker');
+      discover('walker', insertBar('Zum Schlossgarten'));
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 1, barsMastered: 0 });
+    });
+
+    it('counts a bar with a completed visit as mastered, and only that one', async () => {
+      const cookie = await registerUser('walker');
+      const mastered = insertBar('Zum Schlossgarten');
+      const merelyFound = insertBar('Kneipe am Eck');
+      discover('walker', mastered);
+      discover('walker', merelyFound);
+      insertVisit('walker', mastered, 'completed');
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 2, barsMastered: 1 });
+    });
+
+    it.each(['pending', 'expired', 'cancelled'] as const)(
+      'does not count a visit with status %s as mastery',
+      async (status) => {
+        const cookie = await registerUser('walker');
+        const barId = insertBar('Zum Schlossgarten');
+        discover('walker', barId);
+        insertVisit('walker', barId, status);
+
+        expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 1, barsMastered: 0 });
+      },
+    );
+
+    // The scope a single-city fixture cannot see. The area figures beside
+    // these two are the active city's; a bar somewhere else must not be
+    // counted into them.
+    it('counts neither figure for a bar in another city', async () => {
+      const cookie = await registerUser('walker');
+      const here = insertBar('Zum Schlossgarten');
+      const elsewhere = insertBar('Mannheimer Bar', { cityId: insertOtherCity() });
+      discover('walker', here);
+      discover('walker', elsewhere);
+      insertVisit('walker', here, 'completed');
+      insertVisit('walker', elsewhere, 'completed');
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 1, barsMastered: 1 });
+    });
+
+    // The scope a single-user fixture cannot see, and the one that would
+    // leak another player's play into this player's screen.
+    it('counts neither figure for another player’s discoveries and mastery', async () => {
+      const cookie = await registerUser('walker');
+      const otherCookie = await registerUser('stranger');
+      const mine = insertBar('Zum Schlossgarten');
+      const theirs = insertBar('Kneipe am Eck');
+      discover('walker', mine);
+      discover('stranger', mine);
+      discover('stranger', theirs);
+      insertVisit('stranger', mine, 'completed');
+      insertVisit('stranger', theirs, 'completed');
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 1, barsMastered: 0 });
+      expect(await progressOf(otherCookie)).toMatchObject({ barsDiscovered: 2, barsMastered: 2 });
+    });
+
+    // Section 5.7: a hidden bar leaves play, and `GET /api/bars` stops
+    // returning it. These figures sit under the same rule, so the start
+    // screen cannot claim more bars than the map draws.
+    it('leaves a hidden bar out of both figures, exactly as GET /api/bars does', async () => {
+      const cookie = await registerUser('walker');
+      const visible = insertBar('Zum Schlossgarten');
+      const hidden = insertBar('Hidden Dive Bar', { status: 'hidden' });
+      discover('walker', visible);
+      discover('walker', hidden);
+      insertVisit('walker', hidden, 'completed');
+
+      expect(await progressOf(cookie)).toMatchObject({ barsDiscovered: 1, barsMastered: 0 });
+
+      const barsResponse = await injectWithOrigin({
+        method: 'GET',
+        url: '/api/bars',
+        headers: { cookie },
+      });
+      expect(barsResponse.json().bars).toHaveLength(1);
+    });
+  });
 });

@@ -28,9 +28,11 @@ import type { AcceptedPosition } from '../last-accepted.js';
 import {
   bindMasteredUserId,
   DISCOVERED_BAR_COLUMNS,
+  MASTERED_BAR_CONDITION,
   toBarSummary,
   type BarSummary,
   type DiscoveredBarRow,
+  type MasteredUserIdBinding,
 } from './bars.js';
 import { toVisitSummary, type VisitSummary } from './visits.js';
 
@@ -754,11 +756,69 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
         )
         .all(userId, city.id);
 
+      // SPEC.md Section 7.6's two bar figures, city-wide and for this caller
+      // alone, as two aggregates over one scan rather than as rows. The
+      // start screen (Section 8.3) wants exactly these two integers and used
+      // to buy them by fetching every discovered bar; a count the server
+      // computed by loading those same rows would have moved the cost rather
+      // than removed it, so this deliberately selects no `bars` row at all.
+      //
+      // `MASTERED_BAR_CONDITION` is routes/bars.ts's own expression — the
+      // one `GET /api/bars` flags each bar with — so "mastered" is defined
+      // in one place and counted here from that definition. `SUM` over it
+      // rather than a second `COUNT` with a second `WHERE`, because two
+      // aggregates over one row set is one statement; `COALESCE` because
+      // `SUM` of no rows is NULL where `COUNT` of no rows is 0.
+      //
+      // Three scopes, and each one is load-bearing:
+      //
+      //   - `bar_discoveries.user_id` — the caller's own discoveries, the
+      //     same join every bar query in this codebase makes. Without it
+      //     these are the whole server's figures.
+      //   - `bars.city_id` — the active city, matching the area figures
+      //     beside them. Section 5.1 keeps the schema multi-city ready, and
+      //     a count that ignored the column would silently start reporting
+      //     two cities as one the day a second is seeded. `GET /api/bars`
+      //     scopes itself by discovery and status but not by city, so the
+      //     two agree exactly while v1 has one city and this route is the
+      //     stricter of the two if that ever stops being true.
+      //   - `bars.status = 'active'` — the same filter `GET /api/bars` and
+      //     the discovery query apply (Section 5.7), so the discovered
+      //     figure counts the bars the map actually draws. It bounds the
+      //     mastered figure too, which is deliberate and is what the start
+      //     screen showed before this route answered it: mastering is not
+      //     revoked anywhere it is *earned* — the leaderboard, the badges
+      //     and `GET /api/profile/:handle` still count a hidden bar
+      //     (Section 5.7's asymmetry) — but a figure sitting beside "bars
+      //     discovered" has to be drawn from the same set of bars as it is.
+      const barCounts = db
+        .prepare<[number, number, MasteredUserIdBinding], { discovered: number; mastered: number }>(
+          `SELECT COUNT(*) AS discovered,
+                COALESCE(SUM(${MASTERED_BAR_CONDITION}), 0) AS mastered
+         FROM bar_discoveries
+         JOIN bars ON bars.id = bar_discoveries.bar_id
+         WHERE bar_discoveries.user_id = ? AND bars.city_id = ? AND bars.status = 'active'`,
+        )
+        .get(userId, city.id, bindMasteredUserId(userId));
+
       return {
         city: {
           revealedCells: cityRevealedCells,
           playableCells: city.playable_cells,
           percent: city.playable_cells > 0 ? (cityRevealedCells / city.playable_cells) * 100 : 0,
+          // Under `city` rather than as a `bars` sibling of `city` and
+          // `districts`, because these are city-wide figures about the
+          // caller and `city` is where this response keeps those. Section
+          // 7.6 defines both bar figures "city-wide and per district", so
+          // the per-district half — which this route does not yet answer —
+          // belongs in each `districts` entry beside its own area numbers;
+          // a `bars` sibling would have had to hold a districts array of
+          // its own, and the response would then state the same
+          // city/district split twice. `barsMastered` is also already the
+          // name this figure has in `GET /api/profile/:handle` and
+          // `GET /api/admin/users` (Section 9.6).
+          barsDiscovered: barCounts?.discovered ?? 0,
+          barsMastered: barCounts?.mastered ?? 0,
         },
         districts: districts.map((district) => ({
           id: district.id,
@@ -770,20 +830,6 @@ export function fogRoutes(lastAccepted: Map<number, AcceptedPosition>) {
               ? (district.revealed_cells / district.playable_cells) * 100
               : 0,
         })),
-        // A known gap, deliberately left rather than quietly closed.
-        // SPEC.md Section 9.2's endpoint table says this route answers with
-        // "City + per-district progress, bars mastered", and Section 7.6
-        // defines that figure - but no `barsMastered` is sent here, and the
-        // comment that used to sit in this place explained the omission by
-        // saying visits were "not built yet". They are: routes/visits.ts
-        // exists, and `barsMastered` is computed and returned by both
-        // GET /api/profile/:handle and GET /api/admin/users, so the reason
-        // recorded here outlived the condition that produced it.
-        //
-        // Adding the field is a change to a response shape rather than a
-        // comment fix, so it is not made in a behaviour-preserving pass.
-        // Either the field is added or the spec drops the promise; until one
-        // of those happens this is the honest description of the state.
       };
     });
   };

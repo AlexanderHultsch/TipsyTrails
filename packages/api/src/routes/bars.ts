@@ -123,22 +123,30 @@ interface ActiveBarForDuplicateCheck {
   lon: number;
 }
 
-// The column list every query that feeds `toBarSummary` selects, exported so
-// routes/fog.ts's `newBars` query uses this one rather than a second copy —
-// a `bars` row becomes client-facing JSON through one mapper and now also
-// through one SELECT list, so a field added here reaches all three surfaces
-// at once (SPEC.md Section 9.2's GET /api/bars, GET /api/bars/:id and POST
-// /api/samples).
+// SPEC.md Section 5.7's definition of **mastered**, as one SQL boolean and
+// as the only one in this codebase that answers it per bar: at least one
+// `visits` row for this user and this bar with `status = 'completed'`.
 //
-// `mastered` is SPEC.md Section 5.7's definition verbatim — at least one
-// `visits` row for this user and bar with `status = 'completed'` — and three
-// things about how it is written here are deliberate.
+// Extracted from `DISCOVERED_BAR_COLUMNS` below (which is its only reader
+// that also needs an alias) so that routes/fog.ts's `GET /api/progress`
+// counts exactly what `GET /api/bars` flags, rather than carrying a second
+// expression that means the same thing today and drifts tomorrow. A count
+// and a flag that disagree would put "7 bars mastered" on the start screen
+// beside six emptied glasses on the map.
+//
+// It names two columns and therefore states a requirement of every query it
+// is spliced into: `bar_discoveries` and `bars` must both be in scope under
+// those names. Every current caller joins them, because "mastered" is only
+// ever asked about a bar the caller has discovered.
+//
+// Three things about how it is written are deliberate.
 //
 //   - **It is bound by name (`@masteredUserId`), not positionally.** This
-//     list is spliced into queries whose other parameters are anonymous `?`
-//     (routes/fog.ts's `IN (...)` list), and a positional parameter inside
-//     the SELECT list would make every one of those callers depend on where
-//     the columns happen to sit in the statement. `bindMasteredUserId` below
+//     expression is spliced into queries whose other parameters are
+//     anonymous `?` (routes/fog.ts's `IN (...)` list, and its progress
+//     counts' user and city), and a positional parameter inside the spliced
+//     text would make every one of those callers depend on where the
+//     fragment happens to sit in the statement. `bindMasteredUserId` below
 //     is the only way to supply it.
 //   - **The caller's own `bar_discoveries.user_id` is compared against that
 //     same parameter, as part of the flag.** A wrong user id can then only
@@ -158,14 +166,22 @@ interface ActiveBarForDuplicateCheck {
 //     row, and SQLite probes the materialised result: 0.6 ms for that same
 //     player, 0.16 ms for a typical one. No new index is needed, and none is
 //     added — the existing one covers this shape exactly.
-export const DISCOVERED_BAR_COLUMNS = `bars.id AS id, bars.district_id AS district_id, bars.name AS name,
-  bars.address AS address, bars.lat AS lat, bars.lon AS lon, bars.source AS source,
-  bar_discoveries.discovered_at AS discovered_at,
-  (bar_discoveries.user_id = @masteredUserId
+export const MASTERED_BAR_CONDITION = `(bar_discoveries.user_id = @masteredUserId
    AND bars.id IN (
      SELECT bar_id FROM visits
      WHERE user_id = @masteredUserId AND status = 'completed'
-   )) AS mastered`;
+   ))`;
+
+// The column list every query that feeds `toBarSummary` selects, exported so
+// routes/fog.ts's `newBars` query uses this one rather than a second copy —
+// a `bars` row becomes client-facing JSON through one mapper and now also
+// through one SELECT list, so a field added here reaches all three surfaces
+// at once (SPEC.md Section 9.2's GET /api/bars, GET /api/bars/:id and POST
+// /api/samples).
+export const DISCOVERED_BAR_COLUMNS = `bars.id AS id, bars.district_id AS district_id, bars.name AS name,
+  bars.address AS address, bars.lat AS lat, bars.lon AS lon, bars.source AS source,
+  bar_discoveries.discovered_at AS discovered_at,
+  ${MASTERED_BAR_CONDITION} AS mastered`;
 
 export interface MasteredUserIdBinding {
   masteredUserId: number;

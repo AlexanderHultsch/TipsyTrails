@@ -87,20 +87,6 @@ function signedInUser(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function bar(id: number, mastered: boolean) {
-  return {
-    id,
-    districtId: null,
-    name: `Bar ${id}`,
-    address: null,
-    lat: 49,
-    lon: 8.4,
-    source: 'osm',
-    discoveredAt: 0,
-    mastered,
-  };
-}
-
 function squareAt(west: number, osmId: number) {
   return {
     type: 'Feature',
@@ -216,7 +202,8 @@ function projectedBox(d: string): { minX: number; maxX: number; minY: number; ma
 describe('the start screen (SPEC.md Section 8.3)', () => {
   function stubStartScreen(
     options: {
-      bars?: ReturnType<typeof bar>[];
+      barsDiscovered?: number;
+      barsMastered?: number;
       percent?: number;
       boundaryFails?: boolean;
       districtsFail?: boolean;
@@ -244,16 +231,19 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
           throw new Error('network down');
         }
         return jsonResponse(200, {
-          city: { revealedCells: 1, playableCells: 10, percent: options.percent ?? 18.4 },
+          city: {
+            revealedCells: 1,
+            playableCells: 10,
+            percent: options.percent ?? 18.4,
+            barsDiscovered: options.barsDiscovered ?? 0,
+            barsMastered: options.barsMastered ?? 0,
+          },
           districts: [],
         });
       }
-      if (url === '/api/bars') {
-        if (options.statsFail) {
-          throw new Error('network down');
-        }
-        return jsonResponse(200, { bars: options.bars ?? [] });
-      }
+      // Deliberately no `/api/bars` here: this screen must not ask for it,
+      // and an unstubbed request is the error below rather than a silently
+      // satisfied one.
       throw new Error(`Unexpected request: ${url}`);
     };
   }
@@ -279,18 +269,14 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
     expect(action?.textContent).toBe('Open the map');
   });
 
-  // Section 5.7's `mastered` flag is per requesting user, and the percent is
-  // this session's own progress - so the three numbers are three statements
-  // about the signed-in player and about nobody else. A screen that showed a
-  // constant, or another player's figures, would be indistinguishable from a
-  // working one on any assertion that did not pin the actual values.
-  it('counts this player’s own bars and this player’s own progress', async () => {
-    stubFetch(
-      stubStartScreen({
-        bars: [bar(1, true), bar(2, false), bar(3, true), bar(4, false), bar(5, false)],
-        percent: 18.4,
-      }),
-    );
+  // The three figures are three statements about the signed-in player and
+  // about nobody else - Section 7.6's counts, scoped server-side to this
+  // caller (routes/fog.ts), and this session's own percent. A screen that
+  // showed a constant, or another player's figures, would be
+  // indistinguishable from a working one on any assertion that did not pin
+  // the actual values.
+  it('shows this player’s own bars and this player’s own progress', async () => {
+    stubFetch(stubStartScreen({ barsDiscovered: 5, barsMastered: 2, percent: 18.4 }));
     await renderApp('/app');
 
     const stats = Array.from(container.querySelectorAll('.home__stats-list li')).map(
@@ -300,13 +286,36 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
   });
 
   it('says "1 bar" rather than "1 bars"', async () => {
-    stubFetch(stubStartScreen({ bars: [bar(1, true)], percent: 0.5 }));
+    stubFetch(stubStartScreen({ barsDiscovered: 1, barsMastered: 1, percent: 0.5 }));
     await renderApp('/app');
 
     const stats = Array.from(container.querySelectorAll('.home__stats-list li')).map(
       (item) => item.textContent,
     );
     expect(stats).toEqual(['1 bar discovered', '1 bar mastered', '0.5% of Karlsruhe explored']);
+  });
+
+  // SPEC.md Open Item O17, closed in v1.50: this screen used to read its two
+  // bar figures off GET /api/bars - every discovered bar, with name, address,
+  // coordinates, district and timestamps, for a length and a filtered length
+  // - on the screen every authenticated entry path lands on. GET /api/progress
+  // now carries both counts, and the whole point of that change is the
+  // request that is no longer made.
+  //
+  // Asserted as "these URLs and no others", not as "not /api/bars": the
+  // stub above already fails an unexpected request, but only a test that
+  // pins the whole set can stop a second figures-fetch being added back
+  // beside a stub that answers it.
+  it('asks for its three figures with one request, and never for the bar list', async () => {
+    const fetchMock = stubFetch(stubStartScreen({ barsDiscovered: 5, barsMastered: 2 }));
+    await renderApp('/app');
+
+    const apiCalls = fetchMock.mock.calls
+      .map(([input]) => (typeof input === 'string' ? input : input.toString()))
+      .filter((url) => url.startsWith('/api/') && !url.startsWith('/api/auth/me'));
+
+    expect(apiCalls).toEqual(['/api/progress']);
+    expect(Array.from(container.querySelectorAll('.home__stats-list li'))).toHaveLength(3);
   });
 
   it('draws the real city outline behind the words, out of the flow and unannounced', async () => {
@@ -439,7 +448,7 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
   // is why the two boundaries are two fetches and not one Promise.all
   // (screens/AppHome.tsx).
   it('keeps the city fill when the district edges never arrive', async () => {
-    stubFetch(stubStartScreen({ districtsFail: true, bars: [bar(1, false)] }));
+    stubFetch(stubStartScreen({ districtsFail: true, barsDiscovered: 1 }));
     await renderApp('/app');
 
     expect(container.querySelector('.home-backdrop__city')).not.toBeNull();
@@ -457,7 +466,7 @@ describe('the start screen (SPEC.md Section 8.3)', () => {
   // when it does, what is left has to be a complete screen rather than a
   // damaged one.
   it('is a complete screen when the city outline never arrives', async () => {
-    stubFetch(stubStartScreen({ boundaryFails: true, bars: [bar(1, false)] }));
+    stubFetch(stubStartScreen({ boundaryFails: true, barsDiscovered: 1 }));
     await renderApp('/app');
 
     expect(container.querySelector('.home-backdrop')).toBeNull();
@@ -555,7 +564,13 @@ describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          city: {
+            revealedCells: 1,
+            playableCells: 10,
+            percent: 1,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
       }
@@ -634,12 +649,15 @@ describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          city: {
+            revealedCells: 1,
+            playableCells: 10,
+            percent: 1,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
-      }
-      if (url === '/api/bars') {
-        return jsonResponse(200, { bars: [] });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -664,7 +682,13 @@ describe('the wordmark on every main screen (SPEC.md Section 8.1)', () => {
       }
       if (url === '/api/progress') {
         return jsonResponse(200, {
-          city: { revealedCells: 1, playableCells: 10, percent: 1 },
+          city: {
+            revealedCells: 1,
+            playableCells: 10,
+            percent: 1,
+            barsDiscovered: 0,
+            barsMastered: 0,
+          },
           districts: [],
         });
       }

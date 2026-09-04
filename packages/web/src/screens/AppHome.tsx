@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getBars, getCityBoundary, getDistrictBoundaries, getProgress } from '../api/client.js';
+import { getCityBoundary, getDistrictBoundaries, getProgress } from '../api/client.js';
 import type { BoundaryFeatureCollection } from '../api/geo-types.js';
 import { BottomNav } from '../components/BottomNav.js';
 import { Wordmark } from '../components/Wordmark.js';
@@ -107,46 +107,50 @@ export function AppHome() {
     };
   }, []);
 
-  // WHERE THE THREE NUMBERS COME FROM, since there were several ways and none
-  // of them is free. GET /api/progress answers the percent - the same
-  // city.percent screens/CityOverview.tsx renders, so the two screens cannot
-  // disagree about how much of Karlsruhe this player has walked. GET /api/bars
-  // answers the other two from one list: its length is what has been
-  // discovered, and the `mastered` flag that Section 5.7 puts on every bar is
-  // what has been mastered - the same flag the map's markers are drawn from,
-  // so "7 bars mastered" here and seven emptied glasses out there are one
+  // WHERE THE THREE NUMBERS COME FROM: one request, and all three off it.
+  // GET /api/progress answers the percent - the same city.percent
+  // screens/CityOverview.tsx renders, so the two screens cannot disagree
+  // about how much of Karlsruhe this player has walked - and, since the route
+  // answers Section 7.6 in full, the two bar counts beside it. The server
+  // scopes them to this caller, this city and bars that are still active,
+  // which is the same set GET /api/bars returns and the map draws its markers
+  // from: "7 bars mastered" here and seven emptied glasses out there are one
   // fact and not two.
   //
-  // GET /api/profile/:handle was the alternative and it loses on arithmetic:
-  // it carries areaPercent and barsMastered but no discovered count, so it
-  // cannot replace GET /api/bars, only GET /api/progress - and it is the
-  // larger of those two (it also ships every badge and every badge-progress
-  // entry, none of which this screen draws) and it needs the signed-in user's
-  // handle to ask at all. Two requests either way; this is the cheaper pair.
+  // This screen used to ask GET /api/bars for those two integers and count
+  // the list itself, which shipped every discovered bar - name, address,
+  // coordinates, district, timestamps - to read a length and a filtered
+  // length, on the screen every authenticated entry path lands on, and grew
+  // with exactly the players who play most. The map still fetches that list
+  // (map/bars/useDiscoveredBars.ts) because it draws every bar in it; a
+  // screen that draws none of them has no business asking for it.
   //
-  // The cost that remains is real and is worth naming: GET /api/bars ships
-  // every discovered bar to a screen that wants two integers. It is the same
-  // list the map fetches on every visit (map/bars/useDiscoveredBars.ts), so it
-  // is a request this application already makes routinely rather than a new
-  // kind of load - but the honest fix, a count the server already knows how to
-  // compute, is an API change and this block does not touch the API.
+  // GET /api/profile/:handle remains the wrong source for a different reason
+  // than before: it carries areaPercent and barsMastered but no discovered
+  // count, it ships every badge and every badge-progress entry that this
+  // screen does not draw, and it needs the signed-in user's handle to ask at
+  // all.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getProgress(), getBars()])
-      .then(([progress, bars]) => {
+    getProgress()
+      .then((progress) => {
         if (cancelled) return;
         setStats({
-          discovered: bars.bars.length,
-          mastered: bars.bars.filter((bar) => bar.mastered).length,
+          discovered: progress.city.barsDiscovered,
+          mastered: progress.city.barsMastered,
           percent: progress.city.percent,
         });
       })
       .catch(() => {
-        // Silent for the same reason as the backdrop, and all-or-nothing on
-        // purpose: half a row of statistics - "24 bars discovered" beside a
-        // blank where the percentage should be - reads as a broken screen,
-        // where none of them reads as a screen that simply does not mention
-        // them.
+        // Silent for the same reason as the backdrop, and still
+        // all-or-nothing: half a row of statistics - "24 bars discovered"
+        // beside a blank where the percentage should be - reads as a broken
+        // screen, where none of them reads as a screen that simply does not
+        // mention them. That used to be a decision about combining two
+        // requests with Promise.all; with one request behind all three
+        // figures it is a property of the shape - one response, one setStats,
+        // one `stats` object the row renders from or does not render at all -
+        // and the outcome the player sees is unchanged.
       });
     return () => {
       cancelled = true;

@@ -309,14 +309,11 @@ export function getPendingVisits(): Promise<PendingVisitsResponse> {
 }
 
 // GET /api/progress (Section 9.2/7.6): city-wide and per-district area
-// explored. Read by screens/CityOverview.tsx and
-// screens/DistrictOverview.tsx, and by screens/AppHome.tsx for the start
-// screen's "% of Karlsruhe explored" figure.
-//
-// Note what it does not carry: Section 9.2 lists "bars mastered" among this
-// route's answers and the route does not send it - see the matching comment
-// in packages/api/src/routes/fog.ts. AppHome.tsx therefore counts mastered
-// bars from GET /api/bars instead (Open Item O17).
+// explored, plus the caller's two city-wide bar counts. Read by
+// screens/CityOverview.tsx and screens/DistrictOverview.tsx for the area
+// figures, and by screens/AppHome.tsx for all three of the start screen's
+// numbers - which is what makes that screen one request rather than two,
+// the second of them GET /api/bars and unbounded.
 export function getProgress(): Promise<ProgressResponse> {
   return request<ProgressResponse>('/api/progress');
 }

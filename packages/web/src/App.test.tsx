@@ -536,10 +536,12 @@ describe('App', () => {
 
   // Section 8.1's branding pass turned /app from a placeholder into the start
   // screen, and a start screen fetches: the city outline it draws its backdrop
-  // from, and the two calls behind its three figures. They are stubbed in the
-  // two tests below - which are about the tab bar and not about that screen -
-  // purely so an unstubbed request is still the error this handler says it is.
-  // Both tests pass without them, because every one of those three degrades to
+  // from, and the one call behind its three figures - GET /api/progress, which
+  // since v1.50 answers the percentage and both bar counts (Section 7.6), so
+  // the bar list is not fetched here at all. They are stubbed in the two tests
+  // below - which are about the tab bar and not about that screen - purely so
+  // an unstubbed request is still the error this handler says it is. Both
+  // tests pass without them, because every one of those fetches degrades to
   // silence by design (screens/AppHome.tsx), and that is exactly why leaving
   // them unstubbed would be the wrong kind of quiet.
   function stubStartScreenData(url: string): Response | null {
@@ -548,12 +550,15 @@ describe('App', () => {
     }
     if (url === '/api/progress') {
       return jsonResponse(200, {
-        city: { revealedCells: 0, playableCells: 1, percent: 0 },
+        city: {
+          revealedCells: 0,
+          playableCells: 1,
+          percent: 0,
+          barsDiscovered: 0,
+          barsMastered: 0,
+        },
         districts: [],
       });
-    }
-    if (url === '/api/bars') {
-      return jsonResponse(200, { bars: [] });
     }
     return null;
   }
