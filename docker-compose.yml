@@ -1,3 +1,23 @@
+# The port the API listens on, resolved once here and handed to both services.
+# It has to be resolved by Compose rather than by each container for itself,
+# because Caddy picks its `reverse_proxy` upstream (caddy/Caddyfile) when it
+# loads its config and cannot ask the app which port it chose. Giving the
+# variable to the api service alone is what this replaces: any API_PORT but
+# 3000 left the API listening on one port while Caddy proxied to another, so
+# every /api/* request answered 502 while the api service still reported
+# healthy — its healthcheck followed the variable, and nothing in any log
+# named it.
+#
+# The precedence mirrors `loadEnv` in packages/api/src/env.ts exactly:
+# API_PORT wins over PORT (the name the Pi's platform supplies), and an empty
+# value counts as unset — which is what `:-` means and `-` would not. Both
+# services take this one anchor, so the two ports cannot drift apart again.
+#
+# Compose reads API_PORT and PORT for this from the shell environment and from
+# `.env`, in that order of precedence. That is a wider source than the api
+# service's `env_file` alone, which never sees the shell.
+x-api-port: &api-port '${API_PORT:-${PORT:-3000}}'
+
 services:
   api:
     build:
@@ -7,9 +27,18 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # `environment` wins over `env_file`, and sets the same value it would
+      # have read from there. Its job is to make the port explicit and
+      # identical to the one Caddy proxies to, including when the operator
+      # exported it in the shell instead of writing it into `.env`.
+      API_PORT: *api-port
     volumes:
       - ./data/db:/data/db
     healthcheck:
+      # The block above always sets API_PORT in this container, so the `|| 3000`
+      # is the value that block itself defaults to rather than a second opinion
+      # about the port.
       test:
         [
           'CMD',
@@ -29,6 +58,16 @@ services:
     restart: unless-stopped
     ports:
       - '${HTTP_PORT:-8080}:80'
+    environment:
+      # Read by Caddy's own `{$API_PORT:3000}` substitution in caddy/Caddyfile,
+      # which it resolves in this container when it loads that config.
+      #
+      # Deliberately not the api service's `env_file: .env`: that file also
+      # holds SESSION_SECRET, ADMIN_PASSWORD and VAPID_PRIVATE_KEY, and this
+      # container is the public-facing one and needs none of them. Every
+      # variable the Caddyfile references must be named here — asserted by
+      # packages/api/src/compose-caddy-env.test.ts.
+      API_PORT: *api-port
     depends_on:
       api:
         condition: service_healthy

@@ -260,6 +260,12 @@ Caddy publishes the API and SPA on `HTTP_PORT` (`.env.example`, default
 configured outside this repository — points at that port. The tunnel itself
 is not part of this compose stack.
 
+The other port, the one the API itself listens on, is `API_PORT` (or its
+alias `PORT`, default `3000`) and is internal to the stack. Compose resolves
+it once and gives it to both containers, so Caddy proxies to whatever you
+set; before v1.56 it reached only the API, and any other value answered 502
+through Caddy while the api container still reported healthy.
+
 ## Licensing
 
 Two licences, and the split matters:
