@@ -323,12 +323,19 @@ Each cost a round trip. Each looked correct on first reading.
   `bars.status` above, and the privacy overclaims above. Mutation-test any
   guard you add: break the code it covers and confirm the test fails. Several
   tests here asserted nothing until that was done.
-- **`trustProxy` must be `1`, never `true`.** With `true` Fastify takes the
-  left-most `X-Forwarded-For` entry, which the client controls, so anyone can
-  mint a fresh rate-limit bucket per request. A test fails if this changes.
-- **The reset-question decoy and the lookup must normalise the username
-  identically.** The column is `COLLATE NOCASE`; any difference in case or
-  whitespace handling between them reopens an account-enumeration oracle.
+- **`trustProxy` must never be `true`.** With `true` Fastify takes the left-most
+  `X-Forwarded-For` entry, which the client controls. Since v1.46 the value is
+  `['loopback', 'linklocal', 'uniquelocal']` — a list of private ranges, not the
+  hop count it used to be — and no rate limit is keyed on an address any more,
+  so what it decides is the address in Fastify's log lines and nothing else. A
+  test fails if it changes.
+- **The reset-question decoy, the lookup, and the rate-limit bucket key must
+  normalise the username identically.** The column is `COLLATE NOCASE`; any
+  difference in case or whitespace handling between them reopens an
+  account-enumeration oracle, and it broke the per-username rate limit in
+  exactly this way at v1.46 — `admin`, `Admin` and `ADMIN` are one account and
+  were three buckets, so the limit counted spellings instead of accounts
+  (fixed in v1.47).
 - **`pnpm deploy` needs `--legacy`** under pnpm 10, and `allowBuilds` must stay
   out of `pnpm-workspace.yaml` — it makes pnpm invoke `node-gyp`, and
   `node:22-bookworm-slim` has no compiler. `better-sqlite3` ships arm64
