@@ -1,6 +1,6 @@
 # Tipsy Trails — iOS Companion Specification
 
-**Version:** 0.4
+**Version:** 0.5
 **Status:** Specified, nothing built. A draft for the owner's review before any code lands.
 **Parent:** `SPEC.md` at the repository root, v1.59. This document does not replace it and cannot contradict it; Section 14 here lists the amendments the parent needs before this one is in force.
 **Keeping up with `main`:** `ios/PARENT-CONTRACT.md` — the list of what this app depends on in the parent, the record of every merge from `main`, and what to do when the pin above and the parent's version disagree. `packages/shared/src/ios-parent-pin.test.ts` fails until they agree, so the decision cannot be skipped by being forgotten.
@@ -65,7 +65,7 @@ The parent's Section 0 applies in full. Three rules are restated because they bi
 
 `SPEC.md` Section 1, C1–C11, applies in full. The ones that bite here: C2 (the Pi serves API and static assets only — the app does nothing that adds computation to the Pi), C3 (no third-party analytics, trackers or SDKs — see I3), C4 (no raw movement trails — see I2), C6 (no secrets in the repository — signing material never enters it), C9 (English only), C11 (reproducible from the repository alone).
 
-Six constraints are added for this app:
+Seven constraints are added for this app:
 
 | # | Constraint |
 | --- | --- |
@@ -75,6 +75,7 @@ Six constraints are added for this app:
 | I4 | **One sampler.** Inside the shell the tracker is the only source of position samples. The web app never calls `navigator.geolocation` there and never posts to `POST /api/samples` itself. |
 | I5 | **The web app remains the product.** Every game screen is the existing web app in a web view. The shell adds screens only for what a web view cannot do: permissions, consent, diagnostics, and an error page for a server it cannot reach (Section 11). No screen is rebuilt natively. |
 | I6 | **Background tracking is opt-in, separately, and reversible.** The foreground game works with "While Using" permission and no consent beyond what the web app already asks. Background tracking needs the player's explicit in-app consent (Section 10.1) and "Always" from iOS, and withdrawing either stops it at once. |
+| I7 | **This branch writes only to `ios/` and `packages/tracker/`.** It reads `packages/shared` and never writes to it. Every change the app needs from `packages/web`, `packages/api`, `packages/shared` or a root file is written into the list for `main` (Section 12, "The list for `main`") and applied to `main` in a separate session, reviewed as website work — `main` is the website's baseline, and iOS work must not be able to change what a player of the website sees or what a developer of it has to keep green. `PARENT-CONTRACT.md` Section 0 names the two channels this permits. |
 
 ---
 
@@ -280,6 +281,8 @@ Section 10.1 needs a record that the player consented to background tracking and
 
 Withdrawal is `backgroundTracking: false` on the same endpoint, which clears the column to `NULL` — the wire field is a boolean and is never sent as `null` (9.2) — from the web app's Settings screen (Section 8.6) or the shell's own Consent screen, and it stops background tracking on the next state change and at the latest on the next start.
 
+**The tracker has no setter for consent, deliberately.** It learns of a change only because the shell re-calls `start`, which re-reads `GET /api/auth/me` (7.3) — consent is the server's record, and the tracker should never hold a value for it the server did not give. The shell calls `start` again whenever the Consent screen or the web app's Settings row changes it, and significant-change monitoring follows (7.3, 6.4): it is turned on or off wherever background tracking changes, which is why a withdrawal stops it at once rather than waiting for the process to be killed and restarted.
+
 ---
 
 ## 6. Location on iOS
@@ -426,7 +429,9 @@ The shell installs it as `globalThis.__tipsyTrailsHost` before evaluating the bu
    └─ consent withdrawn ∧ background ──▶ idle
 ```
 
-**Start.** The shell calls `start` with the app state (`foreground` | `background` | `launchedHeadless`), whether the cookie is present, the authorization pair of 6.2, and the low-power flag. The tracker then, in order: calls `GET /api/auth/me` (a 401 here is `sessionLost` before anything else is tried, and the consent field on the answer is what decides whether background is allowed — 5.4); calls `GET /api/visits/pending` to seed the visit set (7.6); chooses the profile; calls `configureLocation`; and emits `tracking`. A headless launch does exactly this with no web view, which is why the tracker has to be able to learn everything it needs from the API and the shell and nothing from the page.
+**Start.** The shell calls `start` with the app state (`foreground` | `background` | `launchedHeadless`), whether the cookie is present, the authorization of 6.2 widened by a third field, and the low-power flag. The tracker then, in order: calls `GET /api/auth/me` (a 401 here is `sessionLost` before anything else is tried, and the consent field on the answer is what decides whether background is allowed — 5.4 — and significant-change monitoring, 6.4, is armed or disarmed by that same field, independently of whatever the authorization ladder decides next, so a temporary block does not disarm the one thing that lets a killed app relaunch to find its authorization improved); calls `GET /api/visits/pending` to seed the visit set (7.6); fetches `GET /api/bars/:id` for any pending visit whose bar it cannot already locate (7.6); chooses the profile; calls `configureLocation`; and emits `tracking`. A headless launch does exactly this with no web view, which is why the tracker has to be able to learn everything it needs from the API and the shell and nothing from the page.
+
+**The third field.** `BlockedReason` names `servicesOff` and no `AuthorizationStatus` produces it — iOS reports both "the user refused" and "Location Services is off device-wide" as `.denied` — and 6.5 says the shell's words must name the global switch rather than the app's. So the shell passes `servicesEnabled` alongside the authorization pair, and the tracker derives the reason: `denied` with services off is `servicesOff`, `denied` with services on is `denied`.
 
 **Profiles.** The profile is a function of the app state and the visit set, and it is recomputed on every change of either:
 
@@ -442,7 +447,7 @@ The shell installs it as `globalThis.__tipsyTrailsHost` before evaluating the bu
 
 **Idle** is where the tracker sits with no session or no authorization at all. It emits nothing but its own state and makes no request until `start` is called again with a session.
 
-**Every transition emits a `tracking` event**, and every event the shell forwards to the web view is idempotent, so a web view that mounts late gets the current state by asking (8.2) rather than by replaying history.
+**`tracking` is a snapshot — of `state`, `profile`, `reason`, `background`, the authorization pair and the low-power flag together — and it is emitted whenever that snapshot changes, not only on an idle/tracking/blocked transition.** 11.3's Diagnostics screen reads the profile and the low-power flag from it, and under the narrower rule a walk into a bar's radius, or low power coming on, changed what the event would say and told nobody. Every event the shell forwards to the web view is idempotent — a listener that sees the same snapshot twice does nothing — which is what makes emitting more of them safe, and what lets a web view that mounts late get the current state by asking (8.2) rather than by replaying history. `configureLocation` (7.2) is called on the same rule: only when the profile recomputed on a fix actually differs from what is already configured, because the profile is recomputed on every fix and a fix arrives every second or two.
 
 ### 7.4 The queue and the flush
 
@@ -464,19 +469,23 @@ One event union, `TrackerEvent`, and the shell forwards each to the web view ver
 
 | Event | Payload | When |
 | --- | --- | --- |
-| `tracking` | `{ state: 'idle' \| 'tracking' \| 'blocked', profile?, reason?, background: boolean, authorization: { status, accuracy }, lowPower: boolean }` | every transition, and on request |
+| `tracking` | `{ state: 'idle' \| 'tracking' \| 'blocked', profile?, reason?, background: boolean, authorization: { status, accuracy }, lowPower: boolean }` | whenever the snapshot changes, and on request |
 | `position` | the sample, plus `receivedAt: now()` | every sample enqueued — the web app's marker, nearby panel and check-in enablement read this |
 | `flush` | `SamplesResponse` from the server, plus `{ sent, behind, queued }` | every successful flush |
 | `queue` | `{ queued, behind }` | every enqueue and every drop, so the indicator's queued count is live |
-| `visit` | `VisitSummary` | a visit entering or leaving the tracker's set (7.6), whichever side learned of it |
+| `visit` | `VisitSummary` | a `flush`'s `visitUpdates` entry — the tracker learning something the page does not already know |
 | `sessionLost` | `{ cause: 'cookie' \| 'unauthenticated' \| 'password_change_required' }` | once per loss |
 | `notification` | `LocalNotification` | mirrored to the web app for its own display, if it wants one |
 
 The web app never receives a fix that was not accepted into the queue, so `position` already carries the accuracy the indicator needs and nothing the server would refuse on accuracy.
 
+**`visit` does not answer the web app's own `visitStarted` and `visitEnded` messages (8.2).** Those come *from* the web app, which already knows what it just told the tracker, so an echo would only tell it what it just said. For `visitEnded` that matters doubly: an id is all the tracker is given, so any `VisitSummary` it could echo back would carry a stale `status` — the pending one, since that is all the tracker still has on hand — rather than the true reason the visit ended. `visit` is emitted only where the tracker learns something the page does not already know, which is a flush's `visitUpdates` entries (7.6, substep B6).
+
 ### 7.6 Visits, and how a bar is mastered from a pocket
 
 The tracker keeps the set of the player's pending visits, because the dwelling profile depends on it. The set is seeded by `GET /api/visits/pending` at start, updated by every `visitUpdates` entry in a `flush` (`pending` adds or refreshes; `completed`, `expired` and — from the web app's cancel — `cancelled` removes), and told directly by the web app when it creates or cancels a visit (8.2), so the profile changes the moment the player taps "Check in" rather than a flush later. On every return to the foreground the tracker re-fetches `GET /api/visits/pending` and reconciles, for the same reason `SPEC.md` 7.5 makes the banner do so: it is the only source that can say a visit ended for a reason no client saw.
+
+**Knowing where the bar is.** `VisitSummary` carries `barId` and `barName` and no coordinates, and a flush's `newBars` covers only what that batch discovered, so the tracker cannot locate the bar of a visit the player checked into at a place discovered last week. It therefore fetches `GET /api/bars/:id` **lazily** — only for a pending visit whose bar it cannot already locate, so a start with no pending visit makes no such request. The answer is held three-valued: not asked; known; asked and refused. The third exists because `SPEC.md` 9.5 gives that route one deliberately identical 404 for "no such bar" and "not discovered by you" — an admin hiding the bar is the realistic cause — and recording it stops the tracker asking again, on every cold start, about a bar the server will never describe. A bar it cannot locate leaves the visit on the walking profile, which is the safe direction: the visit then needs the app opened to complete, exactly as it does in the browser today, and nothing is broken by it. Any other failure of the fetch records nothing, so it is retried on a later start.
 
 **What this makes possible is precisely what `SPEC.md` 7.5 describes and never enforces.** A visit completes on two accepted on-site samples at least `VISIT_REQUIRED_MS` apart. Today the second one needs the app opened at the bar; with the dwelling profile the phone supplies one every few seconds for as long as the player stands within the on-site radius, and the server completes the visit at twenty minutes on its own ordinary rule. Nothing is added to the server's judgement and nothing is taken from the player: a player who leaves after five minutes has a pending visit exactly as before, and a player who comes back later completes it exactly as before.
 
@@ -773,13 +782,13 @@ Sections 7.2–7.8 in full, under Vitest with a fake host and a controllable clo
 | --- | --- | --- |
 | B1 | `host.ts`, `events.ts`, `counters.ts` — the interface, the event union, the counters of 7.8 | `pnpm --filter @tipsytrails/tracker test` |
 | B2 | `queue.ts` — 7.4's enqueue, the two local drops, the cap, `behind` | as above |
-| B3 | `api.ts` — the three calls the tracker makes, with their response guards | as above |
+| B3 | `api.ts` — the four calls the tracker makes, with their response guards | as above |
 | B4 | `visits.ts` — 7.6's visit set and its near-bar test | as above |
 | B5 | `tracker.ts` — 7.3's states and the profile table | as above |
 | B6 | The flush — 7.4's cadence, batch, backoff, and the three statuses that do not retry | as above |
 | B7 | `notifications.ts` — 7.7's four, and what cancels each | as above |
 
-`counters.ts` is in B1 and not last because the queue drops and counts in the same step; `visits.ts` precedes the state machine because profile selection reads the visit set. B2's `behind` and `useSampleTracking`'s share one test fixture rather than being two implementations that agree today.
+`counters.ts` is in B1 and not last because the queue drops and counts in the same step; `visits.ts` precedes the state machine because profile selection reads the visit set. B3's fourth call is `GET /api/bars/:id`, not yet in this document when B3 was built; 7.6 says why. `computeBehindDepth` lives in the tracker's `queue.ts`, beside `depth`, because it is queue arithmetic; the web app applies the same rule inline in `useSampleTracking`'s `flush()`; the two are kept in step by 8.3's requirement and by the list for `main` naming the adoption, rather than by a shared function — a shared function was built here and given back under I7 (Section 1).
 
 **Definition of Done**
 
@@ -794,6 +803,8 @@ Sections 7.2–7.8 in full, under Vitest with a fake host and a controllable clo
 - [ ] The tracker's response guard accepts the parent's `POST /api/samples` shape plus `rejected` and rejects a batch answer missing any field it reads
 
 ### Step C — The server
+
+**Not built on this branch.** I7 (Section 1) confines this branch to `ios/` and `packages/tracker/`, and Section 9's two additions are `packages/api` and `packages/shared` changes. Its substeps below are carried out on `main`, in a separate session from the list that follows Step G, and reviewed as website work; this step's Definition of Done is checked here once that work has been merged in. The table and the Definition of Done stay in place — a rebuilder on `main` needs them.
 
 Section 9.
 
@@ -810,6 +821,8 @@ Section 9.
 - [ ] `DELETE /api/account` takes it with the row (cascade already does; a test says so)
 
 ### Step D — The web app
+
+**Not built on this branch**, for the same reason as Step C: Section 8 is entirely `packages/web`. Its substeps below are carried out on `main`, in a separate session from the list that follows Step G, and reviewed as website work; this step's Definition of Done is checked here once that work has been merged in. The table and the Definition of Done stay in place for the same reason Step C's do.
 
 Section 8.
 
@@ -834,7 +847,7 @@ D2 is the largest risk in this plan: it puts a seam through the hook every scree
 
 ### Step E — The replay harness
 
-Section 13.2. This is the step that proves the whole pipeline in this repository, and it is deliberately before the Swift so that the contract the Swift has to meet is a passing test rather than a paragraph.
+Section 13.2. This is the step that proves the whole pipeline in this repository, and it is deliberately before the Swift so that the contract the Swift has to meet is a passing test rather than a paragraph. It runs only after `main` has carried out Step C, because the harness runs the built tracker against the real API and needs `rejected` from it.
 
 | # | Does | Verification |
 | --- | --- | --- |
@@ -879,6 +892,30 @@ Step G has no substeps: it is six walks, and the owner runs them.
 - [ ] Each of the six walks has a report, and the observations column of 13.3 is filled in from them
 - [ ] Any sentence in this document the walk falsified is corrected in the same commit, with the report as the evidence
 
+#### The list for `main`
+
+This is the consequence of I7 (Section 1): everything Steps C and D used to build on this branch, plus what substep B2 (`computeBehindDepth`, given back to `main`) added to it. Nothing here is written by this branch — I7 forbids it — so each row is a pointer for the session that does the work on `main`, naming the file, the change, and the section of this document that specifies it. `PARENT-CONTRACT.md`'s merge record (Section 3 there) gets the row once a merge carries the work back.
+
+| # | File | Change | `ios/SPEC.md` |
+| --- | --- | --- | --- |
+| 1 | `packages/api/src/routes/fog.ts`, `packages/api/src/routes/admin-teleport.ts` | `POST /api/samples` and `POST /api/admin/teleport` answer with `rejected`, one count per gate (Step C's C1) | 9.1 |
+| 2 | migration, `packages/api/src/routes/account.ts` | `background_tracking_consented_at` column; `PATCH /api/settings` takes the partial body of two optional booleans; `User` carries the field on every route that returns one (Step C's C2) | 9.2 |
+| 3 | `packages/web/src/shell/` | the shell detection of 8.1 and the typed bridge wrapper of 8.2 (Step D's D1) | 8.1, 8.2 |
+| 4 | `packages/web/src/tracking/useSampleTracking.ts` | the driver seam and the shell driver of 8.3 — every one of the thirteen members produced under it, `SampleTrackingState` unchanged (Step D's D2) | 8.3 |
+| 5 | `packages/web/src/components/TrackingIndicator.tsx` | the third icon's four shell states and their words (Step D's D3) | 8.3, parent's 8.6 |
+| 6 | `packages/web/src/screens/HowMasteringWorks.tsx`, `packages/web/src/tracking/usePushSubscription.ts` | the push offer becomes `requestNotifications` under the shell (Step D's D4) | 8.4 |
+| 7 | `packages/web/src/screens/Settings.tsx` | the shell-only "Background tracking" row (Step D's D4/D5) | 8.6 |
+| 8 | `packages/web/src/screens/Privacy.tsx` | the iPhone-app section of 10.2, rendered everywhere (Step D's D4) | 8.6, 10.2 |
+| 9 | `packages/web/src/tracking/useSampleTracking.ts` | adopts `computeBehindDepth` from the tracker's `queue.ts` at both `flush()` call sites, so the web app and the tracker cannot compute "behind" differently. Until it does, the two are kept in step by 8.3's wording alone | 8.3, `PARENT-CONTRACT` D2 |
+| 10 | `packages/shared/src/config.ts` | already carries the nine `TRACKER_*` constants — Step A landed them on `main` before I7 existed. Recorded here as done, and as staying: `CLAUDE.md` permits no third constants module, so there is nowhere else for them to be | 7.1 |
+
+#### Found while building the app
+
+Web-app defects and improvements found while building the iOS side, each also filed as a GitHub issue labelled `from-ios` at the moment it is found (`PARENT-CONTRACT.md` Section 0) — an issue reaches whoever works on `main` immediately, and this table is the durable record beside it, in the same words. Empty today; nothing has been found yet.
+
+| Date | Issue | What |
+| --- | --- | --- |
+
 ---
 
 ## 13. Verification
@@ -888,8 +925,8 @@ Step G has no substeps: it is six walks, and the owner runs them.
 | Claim | Proven in this repository | Needs the owner's phone |
 | --- | --- | --- |
 | The tracker's every decision (7.3–7.8) | Vitest, Step B | — |
-| The server's two additions (9) | Vitest, Step C | — |
-| The web app's behaviour under the shell (8) | Vitest with a fake bridge, Step D | — |
+| The server's two additions (9) | Vitest, on `main`, in the separate session I7 requires | — |
+| The web app's behaviour under the shell (8) | Vitest with a fake bridge, on `main`, in the separate session I7 requires | — |
 | A walk through Karlsruhe reveals the right cells, discovers the right bars, completes a dwelt visit, survives a dead spot, a relaunch, a 401 and a 429 — through the built bundle against the real API (13.2) | Vitest, Step E | — |
 | The shell's configuration files are consistent with this document and with `config.ts` | Vitest, Step F | — |
 | The Swift compiles and the `Host` bridge works | — | Xcode |
@@ -980,6 +1017,11 @@ Made in Step A, in one commit, each inside its section without renumbering, with
 
 ## 16. Changelog
 
+- **v0.5** — Two groups of correction, and a note on what B1–B5 actually built. **The owner's isolation rule.** I7 (Section 1) confines this branch to `ios/` and `packages/tracker/`; it reads `packages/shared` and never writes to it, and every change the app needs from `packages/web`, `packages/api`, `packages/shared` or a root file now goes on a closed list instead of being made here. Section 12 gains "The list for `main`", naming the file, the change and the section each entry needs, built from Section 9's two server additions, every web change 8.1–8.6 names, `useSampleTracking`'s still-unmade adoption of `computeBehindDepth`, and a note that the nine `TRACKER_*` constants are already done and stay in `config.ts` because `CLAUDE.md` allows no third module. Steps C and D each gain a paragraph saying they are not built on this branch — their substeps are `main`'s, in a separate session, reviewed as website work, with the Definition of Done checked here once that work is merged in; their tables and Definitions of Done are kept for whoever does it. Step E now runs only after that merge, because the harness needs `rejected` from the server it proves against. 13.1's rows for Section 9 and Section 8 point at that separate session rather than at Step C or D. `ios/PARENT-CONTRACT.md` Section 0 states I7 in its own terms and adds "Two directions, two channels": a web fix reaches the app for free at runtime through the shared origin, but what the tracker itself depends on reaches the branch only by merging `main` into `ios-app`, on a stated cadence — after every `SPEC.md` version bump on `main` and at least once a week while both are active — and under I7 that merge is conflict-free by construction. A defect found in the web app while building the app is not fixed here either: it is filed as a GitHub issue labelled `from-ios` at the moment it is found, and logged in a new, empty "Found while building the app" table beside "The list for `main`" in Section 12. I7 itself now points at `PARENT-CONTRACT.md` Section 0 for both channels.
+
+  **Seven places where the code substeps B1–B5 already built are the more considered text, and this document said otherwise.** Section 12's paragraph under Step B credited `behind` to a shared test fixture that was never built; it now says `computeBehindDepth` lives in the tracker's `queue.ts`, that the web app applies the same rule inline, and that the two are kept in step by 8.3's wording and by the list for `main` naming the adoption, not by construction. Step B's B3 said `api.ts` makes three calls; it makes four, and 7.6 says why the fourth, `GET /api/bars/:id`, exists. 7.6 gains a paragraph on how the tracker locates a visit's bar — lazily, three-valued, and why a bar it cannot locate leaves the visit on the safe, walking-profile side. 7.3's `start` paragraph now says the authorization the shell passes carries a third field, `servicesEnabled`, and why: iOS reports "the user refused" and "Location Services is off device-wide" identically as `.denied`, and 6.5 already requires the shell's words to name the global switch. 7.3's closing paragraph and 7.5's `tracking` row now say the event is a snapshot, emitted whenever it changes rather than only on a transition, and that `configureLocation` is called only when the recomputed profile actually differs from what is configured. 5.4 and 7.3 now say the tracker learns of a consent change only because the shell re-calls `start`, which re-reads it from the server, with significant-change monitoring following consent's own value. 7.5's `visit` row no longer reads as firing on the web app's own `visitStarted`/`visitEnded`; a new paragraph says it fires only on a flush's `visitUpdates`, and why an echo of the other two would be worse than silence.
+
+  Nothing of Phase 9 is yet built beyond `packages/tracker` through substep B5. The parent pin stays v1.58; nothing on `main` moved.
 - **v0.4** — Three claims in the amendment bookkeeping that were already false on this branch. 4.2 said `.prettierignore` "gains" `ios/SPEC.md`; it has carried that line since the branch's first commit, and 4.2 now says so, records why `ios/PARENT-CONTRACT.md` is deliberately not listed beside it, and notes that none of the `.gitignore` entries exist yet because there is no Xcode project. Step A's checklist no longer asks for a `.prettierignore` edit it cannot make. Section 14's row for the parent's 4.2 asked Step A to name the file in "`.prettierignore`'s comment" — that file is a bare list with no comments in it, and the line reaches `main` with `ios/` itself rather than by amendment; the row says that instead. `PARENT-CONTRACT.md` gains E4 for `.prettierignore`, which is the one file in the workspace whose contents already differ between the two branches and therefore the one place a merge can conflict over text neither side thinks of as iOS work. The parent pin stays v1.58.
 - **v0.3** — Two things this document asked for that could not be built as written. **9.2's `PATCH /api/settings`**: "accepts `{ backgroundTracking }` beside `isAnonymous`" had no implementation, because `settingsSchema` is not partial and a body without `isAnonymous` is a 400 before the route sees it. The endpoint now takes two optional booleans of which at least one must be present, with a table saying what every body does — an omitted key means unchanged, `{}` and an unknown-key-only body are 400, neither key may be `null`, both together are one `UPDATE`, and every body that answers 200 today still answers 200. The alternative, a route of its own, is weighed and rejected in the same section. Section 14's row for the parent's 9.2 says the request note itself changes; its row for 9.6 says why nothing about the request lands there. **8.3's seam**: the section claimed `behindDepth` was an output of the hook when it is local state no screen can read, and left `trackingActive`, `postError`, `newBarsVersion` and `visitVersion` unaccounted for. All thirteen members of `SampleTrackingState` are now in one table with their source under the shell driver; `behindDepth` is corrected and fed by the driver so that one `computeConnectionStatus` serves both; the four counters are the hook's own, start at nought per mount and are never advanced by the bridge's replayed payload; `trackingActive` is the tracker's state rather than a watch's; `postError` is `null` by argument rather than by omission; and the interface is deliberately not widened. Steps C and D's Definitions of Done follow. O-I8 records the two posters an admin teleport produces inside the shell. No amendment of Section 14 is added or removed — there are still eighteen — and the parent pin stays v1.58; nothing on `main` moved.
 - **v0.2** — Connected this branch to `main` with something that cannot rot. `ios/PARENT-CONTRACT.md` is added: the dependency surface this app has on the parent (what each entry is on both sides, why the app depends on it, what breaks if it changes), a "not a dependency" section naming what is deliberately out and how each exclusion was checked, and a merge record of one row per merge of `main` into `ios-app` — never one row per change, which is what makes it affordable to keep. The **Parent:** pin in the front matter above is made enforceable by `packages/shared/src/ios-parent-pin.test.ts`, a new test on this branch only, which fails when the pin and the root `SPEC.md`'s version disagree and says in its failure what to do about it. Nothing else in this document changed; the amendments of Section 14 are still Step A's work and are still unmade.
