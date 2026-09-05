@@ -735,9 +735,20 @@ Shown in place of the web view when the initial load of `SERVER_ORIGIN` fails an
 
 `SPEC.md` Section 12 gains one phase, **Phase 9 — iOS companion**, whose Definition of Done is the union of the steps below. The parent's rule on gating applies: an item only the owner's phone can settle stays `[ ]` with what it needs named, and does not gate the next step; an unticked item with no annotation does. Each step ends in a commit with the four root commands green.
 
+Each step is delegated as a sequence of **substeps**, and a substep exists exactly where a command can prove it. The verification column names that command: it is the narrow, fast one the executor runs. It is not authoritative on its own — `HANDOVER.md` records that a single package's tests bypass the shared rebuild hook and can read a stale `dist` — so the four root commands of `CLAUDE.md` are run at every step boundary by the reviewer, and they are what decides.
+
 ### Step A — Amendments and scaffold
 
 The `SPEC.md` amendments of Section 14, in one commit, with `HANDOVER.md` updated in the same commit (`CLAUDE.md`). `packages/tracker` created with its manifest, `tsconfig`, Vite config and an entry that evaluates and exposes an empty tracker. The constants of 7.1 added to `config.ts`. `.gitignore` updated (4.2); `.prettierignore` needs nothing, because its one line arrives with `ios/` itself.
+
+| # | Does | Verification |
+| --- | --- | --- |
+| A0 | This substep table into Section 12 | `pnpm format:check` |
+| A1 | The nine constants of 7.1 into `packages/shared/src/config.ts` | `pnpm --filter @tipsytrails/shared test` |
+| A2 | `packages/tracker` scaffold, its two tests, the `pnpm build` wiring, `.gitignore` | `pnpm --filter @tipsytrails/tracker test`, `pnpm build` |
+| A3 | The eighteen `SPEC.md` amendments of Section 14 and `HANDOVER.md`, version 1.59 | `pnpm --filter @tipsytrails/shared test` |
+
+A1 precedes A3: `SPEC.md` 7.1 reproduces `config.ts` key for key and nothing tests that agreement, so the reproduction is written by copying a file that already exists.
 
 **Definition of Done**
 
@@ -749,6 +760,18 @@ The `SPEC.md` amendments of Section 14, in one commit, with `HANDOVER.md` update
 ### Step B — The tracker
 
 Sections 7.2–7.8 in full, under Vitest with a fake host and a controllable clock.
+
+| # | Does | Verification |
+| --- | --- | --- |
+| B1 | `host.ts`, `events.ts`, `counters.ts` — the interface, the event union, the counters of 7.8 | `pnpm --filter @tipsytrails/tracker test` |
+| B2 | `queue.ts` — 7.4's enqueue, the two local drops, the cap, `behind` | as above |
+| B3 | `api.ts` — the three calls the tracker makes, with their response guards | as above |
+| B4 | `visits.ts` — 7.6's visit set and its near-bar test | as above |
+| B5 | `tracker.ts` — 7.3's states and the profile table | as above |
+| B6 | The flush — 7.4's cadence, batch, backoff, and the three statuses that do not retry | as above |
+| B7 | `notifications.ts` — 7.7's four, and what cancels each | as above |
+
+`counters.ts` is in B1 and not last because the queue drops and counts in the same step; `visits.ts` precedes the state machine because profile selection reads the visit set. B2's `behind` and `useSampleTracking`'s share one test fixture rather than being two implementations that agree today.
 
 **Definition of Done**
 
@@ -766,6 +789,11 @@ Sections 7.2–7.8 in full, under Vitest with a fake host and a controllable clo
 
 Section 9.
 
+| # | Does | Verification |
+| --- | --- | --- |
+| C1 | `rejected` on `POST /api/samples` and on the teleport; the web types and guard beside them | `pnpm --filter @tipsytrails/api test` |
+| C2 | The migration, the consent column, `PATCH /api/settings`, the `User` shape, and the absence and cascade tests | as above |
+
 **Definition of Done**
 
 - [ ] `POST /api/samples` and `POST /api/admin/teleport` answer with `rejected`; a test per gate sends a batch that fails only that gate and asserts the one count; the existing web response guard still passes on the new shape
@@ -776,6 +804,16 @@ Section 9.
 ### Step D — The web app
 
 Section 8.
+
+| # | Does | Verification |
+| --- | --- | --- |
+| D1 | `packages/web/src/shell/` — 8.1's detection and 8.2's typed bridge | `pnpm --filter @tipsytrails/web test` |
+| D2 | `useSampleTracking` gains the driver seam and the shell driver | as above |
+| D3 | The indicator's four shell states, their words and their accessible names | as above |
+| D4 | The push offer, the Settings row, and `/privacy`'s section | as above |
+| D5 | The five outbound messages, at the moments 8.2 fixes | as above |
+
+D2 is the largest risk in this plan: it puts a seam through the hook every screen reads. Its evidence is spies that must not be called — no `watchPosition`, no post to `/api/samples`, no wake lock — and the existing screen tests re-run against the new driver.
 
 **Definition of Done**
 
@@ -790,6 +828,12 @@ Section 8.
 
 Section 13.2. This is the step that proves the whole pipeline in this repository, and it is deliberately before the Swift so that the contract the Swift has to meet is a passing test rather than a paragraph.
 
+| # | Does | Verification |
+| --- | --- | --- |
+| E1 | The harness: the route, the fake host, `app.inject` as `fetch`, and loading the built bundle | `pnpm --filter @tipsytrails/tracker test` |
+| E2 | Scenarios 1–4 of 13.2 | as above |
+| E3 | Scenarios 5–8 of 13.2 | as above |
+
 **Definition of Done**
 
 - [ ] The eight scenarios of 13.2 run under `pnpm test`, loading `packages/tracker/dist/tracker.js` — the built bundle, not the source — against `buildApp` from `@tipsytrails/api` on an in-memory SQLite, and each asserts what 13.2 says it asserts
@@ -797,6 +841,15 @@ Section 13.2. This is the step that proves the whole pipeline in this repository
 ### Step F — The shell
 
 Sections 4–6, 8.5, 10.3, 11. Written without a compiler, and the Definition of Done says so item by item.
+
+| # | Does | Verification |
+| --- | --- | --- |
+| F1 | `project.yml`, `Server.xcconfig`, `Info.plist`, `PrivacyInfo.xcprivacy`, and the test that parses all four | `pnpm --filter @tipsytrails/tracker test` |
+| F2 | The Swift of `App/`, `Location/`, `Runtime/`, `Web/`, `Notifications/`, `Diagnostics/` | none — reviewed by reading |
+| F3 | The Swift of `Screens/` — Section 11's four screens | none — reviewed by reading |
+| F4 | The two mechanical guards: no numeric literal in Swift, and `Host` method parity | `pnpm --filter @tipsytrails/tracker test` |
+
+F2 and F3 are the only substeps in this plan whose output nothing in this repository can execute (13.1). They are reviewed by reading, and F4 is what turns two of this document's rules into something a machine checks.
 
 **Definition of Done**
 
@@ -810,6 +863,8 @@ Sections 4–6, 8.5, 10.3, 11. Written without a compiler, and the Definition of
 ### Step G — The walk
 
 Section 13.3, run by the owner, with the report of 7.8 attached to the commit that closes the step.
+
+Step G has no substeps: it is six walks, and the owner runs them.
 
 **Definition of Done**
 
