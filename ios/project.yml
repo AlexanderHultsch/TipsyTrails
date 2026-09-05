@@ -1,0 +1,101 @@
+# ios/SPEC.md Section 4.3 — XcodeGen's specification, not the project file
+# itself. `cd ios && xcodegen generate` produces TipsyTrails.xcodeproj from
+# this; the project file is never hand-edited and never committed
+# (.gitignore already lists it).
+#
+# This file holds no game constant (I1): the only numbers below are Xcode
+# project mechanics — the deployment target and the Swift version — neither
+# of which is a threshold, radius, tolerance or timeout `config.ts` could
+# hold instead. packages/tracker/src/ios-config.test.ts checks that no
+# number here duplicates a TRACKER_* value.
+name: TipsyTrails
+
+options:
+  bundleIdPrefix: com.ahultsch
+  deploymentTarget:
+    iOS: '17.0'
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  TipsyTrails:
+    type: application
+    platform: iOS
+    deploymentTarget: '17.0'
+    sources:
+      - TipsyTrails
+    # Config/Server.xcconfig is the base configuration for both build
+    # configurations (ios/SPEC.md 4.3) — SERVER_ORIGIN, SERVER_HOST and the
+    # owner's DEVELOPMENT_TEAM all come from there, not from the settings
+    # below.
+    configFiles:
+      Debug: Config/Server.xcconfig
+      Release: Config/Server.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ahultsch.tipsytrails
+        SWIFT_VERSION: '5.0'
+        # Automatic signing (ios/SPEC.md 4.3); DEVELOPMENT_TEAM is left
+        # unset here on purpose so the value the xcconfig supplies (empty in
+        # the committed file, filled in by the owner's gitignored
+        # Server.local.xcconfig) is the only one in force.
+        CODE_SIGN_STYLE: Automatic
+    # The run-script build phase of ios/SPEC.md 4.3: it runs before Compile
+    # Sources and therefore before Copy Bundle Resources, which is what
+    # "preBuildScripts" is documented to guarantee. It builds the tracker
+    # bundle and copies it into Resources/, where it is picked up by Copy
+    # Bundle Resources itself; a build with no bundle is a defect the phase
+    # refuses to hide.
+    preBuildScripts:
+      - name: 'Build the tracker bundle'
+        inputFiles:
+          - $(SRCROOT)/../packages/tracker/src
+          - $(SRCROOT)/../packages/tracker/package.json
+        outputFiles:
+          - $(SRCROOT)/TipsyTrails/Resources/tracker.js
+        script: |
+          set -e
+          REPO_ROOT="$SRCROOT/.."
+          if ! (cd "$REPO_ROOT" && pnpm --filter @tipsytrails/tracker build); then
+            echo "error: 'pnpm --filter @tipsytrails/tracker build' failed - run that command by hand from the repository root, fix the error, and build again" >&2
+            exit 1
+          fi
+          mkdir -p "$SRCROOT/TipsyTrails/Resources"
+          cp "$REPO_ROOT/packages/tracker/dist/tracker.js" "$SRCROOT/TipsyTrails/Resources/tracker.js"
+    info:
+      path: TipsyTrails/Resources/Info.plist
+      properties:
+        # ios/SPEC.md 6.1 — background location and nothing else. Asserted
+        # as equality in ios-config.test.ts, not membership: a second mode
+        # is a capability this app must not have.
+        UIBackgroundModes:
+          - location
+        # Required for a modern app; without it iOS letterboxes the app to
+        # its launch storyboard's frame instead of the full screen.
+        UILaunchScreen: {}
+        # The three purpose strings of ios/SPEC.md 10.3 — the consent
+        # screen's words (10.1), in short, in English (C9). No
+        # NSLocationAlwaysUsageDescription: that key is pre-iOS-11 and this
+        # app targets 17.0+.
+        NSLocationWhenInUseUsageDescription: >-
+          Tipsy Trails uses your location to reveal the streets and bars
+          around you while you play. It only checks your position while the
+          app is open.
+        NSLocationAlwaysAndWhenInUseUsageDescription: >-
+          With your separate consent in the app, Tipsy Trails can keep
+          tracking your position while it is closed, so fog keeps clearing
+          and bar visits still count with your phone in your pocket. iOS
+          shows a status bar indicator the whole time this runs, and it uses
+          some extra battery.
+        NSLocationTemporaryUsageDescriptionDictionary:
+          TTPlay: >-
+            Tipsy Trails needs your exact position, not an approximate one,
+            to tell which street or bar you are actually standing near.
+        # ios/SPEC.md 8.5: exactly one entry, the host of SERVER_ORIGIN, so
+        # the web app's service worker can register inside the web view and
+        # so the web view can load nothing else.
+        WKAppBoundDomains:
+          - $(SERVER_HOST)
+        TTServerOrigin: $(SERVER_ORIGIN)
