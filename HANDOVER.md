@@ -2,8 +2,10 @@
 
 For the next Claude Code session, and for the owner. Written after the
 session that completed Phase 8 — the last phase in `SPEC.md` Section 12's
-plan. There is no Phase 9. The frame this file used to write in, "before
-Phase N", no longer applies: every phase is built, and what remains is not
+plan of what runs on the Pi. There is now a Phase 9, the iPhone companion
+specified in full in `ios/SPEC.md`, and nothing of it is built. The frame
+this file used to write in, "before Phase N", no longer applies to Phases
+0–8: every one of them is built, and what remains for the site itself is not
 more building but the operational work of actually running this on the Pi,
 plus the handful of spec items nobody has built at all (Section 3 below).
 
@@ -26,7 +28,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.58                                                       |
+| Spec version          | 1.59                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
@@ -189,6 +191,23 @@ sandbox regardless of who is asking:**
     sandbox; `packages/web/src/map/fog/webgl-fog-layer.test.ts` exercises the
     layer class's call sequence against a fake WebGL context, which proves
     nothing about the GLSL itself.
+15. The baseline walk (`ios/SPEC.md` 13.3, walk 1) — twenty minutes with the
+    map on screen, the walked streets revealed and `rejected` all zero — has
+    never been run; it needs the owner's iPhone and a built shell.
+16. The pocket walk (walk 2) — the phone locked and put away for thirty
+    minutes, the streets revealed on next open with no gap except at a
+    relaunch — has never been run.
+17. The force-quit walk (walk 3) — whether the app is relaunched by a
+    location event after being force-quit from the app switcher, the
+    question Section 6.4 leaves open — has never been run.
+18. The dwell walk (walk 4) — checking in, locking the phone for twenty-five
+    minutes, and seeing the visit complete and the bar's glass empty without
+    the app having been opened — has never been run.
+19. The Low Power Mode walk (walk 5), repeating walk 2 with the flag on to
+    compare fixes per hour against it — has never been run.
+20. The Precise Location walk (walk 6) — turning it off in Settings and
+    confirming the app blocks with zero flushes and prompts once — has never
+    been run.
 
 ---
 
