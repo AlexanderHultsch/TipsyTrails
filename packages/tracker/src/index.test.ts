@@ -5,6 +5,8 @@ import vm from 'node:vm';
 import { CONFIG } from '@tipsytrails/shared';
 import { build } from 'vite';
 import { beforeAll, describe, expect, it } from 'vitest';
+import type { Host } from './host.js';
+import type { Tracker } from './tracker.js';
 
 // ios/SPEC.md Section 12, Step A's Definition of Done, and Section 7.2: the
 // two properties this substep must prove about the BUILT bundle, not the
@@ -57,15 +59,92 @@ function evaluateWithHost(host: object | undefined): Record<string, unknown> {
   return context;
 }
 
+// Hand-kept against `Tracker` (tracker.ts) - not derived, because deriving it
+// from the interface's own source would mean parsing TypeScript here, and
+// that needs the `typescript` package, which `packages/tracker/package.json`
+// does not declare (only the root does; this file resolving it today is
+// pnpm's hoisting, not a declared dependency of this package). If this list
+// drifts from `Tracker`, `pnpm typecheck` catches half of it for free:
+// `index.ts` assigns `{ ...createTracker(host), config: CONFIG }` to a global
+// declared as `Tracker & { config: typeof CONFIG }`, so a member missing from
+// the spread is a compile error before this test ever runs. What typecheck
+// cannot see, and what this list is actually for, is whether a member that
+// does exist in the source survives into the BUILT IIFE below - the bundler
+// is the one step between the two that nothing else here looks at, and a
+// member the shell calls that the bundle does not expose is a runtime
+// failure on a device, which is the one place nothing in this repository can
+// look.
+const TRACKER_MEMBER_NAMES: (keyof Tracker)[] = [
+  'start',
+  'submitFix',
+  'setAppState',
+  'setAuthorization',
+  'setLowPower',
+  'visitStarted',
+  'visitEnded',
+  'signedOut',
+  'requestState',
+  'snapshotCounters',
+  'setDiscoveryNotifications',
+];
+
 describe('the built tracker bundle', () => {
-  it('defines globalThis.__tipsyTrails given a host, and throws given none', () => {
+  it('defines globalThis.__tipsyTrails given a host, exposing every Tracker member as a function, and throws given none', () => {
     const withHost = evaluateWithHost({});
     expect(withHost.__tipsyTrails).toBeDefined();
-    expect((withHost.__tipsyTrails as { config: typeof CONFIG }).config.FOG_REVEAL_RADIUS_M).toBe(
-      CONFIG.FOG_REVEAL_RADIUS_M,
-    );
+    const exposed = withHost.__tipsyTrails as Tracker & { config: typeof CONFIG } & Record<
+        string,
+        unknown
+      >;
+
+    expect(exposed.config.FOG_REVEAL_RADIUS_M).toBe(CONFIG.FOG_REVEAL_RADIUS_M);
+
+    for (const name of TRACKER_MEMBER_NAMES) {
+      expect(typeof exposed[name], `__tipsyTrails.${name} is not a function`).toBe('function');
+    }
 
     expect(() => evaluateWithHost(undefined)).toThrow();
+  });
+
+  it('does not call any host method merely by being evaluated', () => {
+    // ios/SPEC.md 4.4: the shell evaluates the bundle on its serial queue and
+    // only later calls `start` once it is ready - construction must be inert.
+    // Every method on this host throws, so any call at all during evaluation
+    // fails the test.
+    const throwingHost: Host = {
+      now: () => {
+        throw new Error('Host.now called during evaluation');
+      },
+      setTimeout: () => {
+        throw new Error('Host.setTimeout called during evaluation');
+      },
+      clearTimeout: () => {
+        throw new Error('Host.clearTimeout called during evaluation');
+      },
+      fetch: () => {
+        throw new Error('Host.fetch called during evaluation');
+      },
+      configureLocation: () => {
+        throw new Error('Host.configureLocation called during evaluation');
+      },
+      requestSignificantChanges: () => {
+        throw new Error('Host.requestSignificantChanges called during evaluation');
+      },
+      scheduleNotification: () => {
+        throw new Error('Host.scheduleNotification called during evaluation');
+      },
+      cancelNotification: () => {
+        throw new Error('Host.cancelNotification called during evaluation');
+      },
+      emit: () => {
+        throw new Error('Host.emit called during evaluation');
+      },
+      log: () => {
+        throw new Error('Host.log called during evaluation');
+      },
+    };
+
+    expect(() => evaluateWithHost(throwingHost)).not.toThrow();
   });
 
   it('contains no reference to window, document, navigator or localStorage', () => {
