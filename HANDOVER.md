@@ -28,7 +28,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.61                                                       |
+| Spec version          | 1.62                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no

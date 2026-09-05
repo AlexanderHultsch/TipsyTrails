@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { CONFIG, TELEPORT_FIX } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
-import type { Bar, Sample, VisitSummary } from '../api/types.js';
+import type { Bar, Sample, SamplesResponse, VisitSummary } from '../api/types.js';
+import { isShell, subscribeToShellEvents } from '../shell/bridge.js';
+import type { TrackerEvent } from '../shell/events.js';
 import { clearLastKnownPosition, setLastKnownPosition } from './lastKnownPosition.js';
 import { computeConnectionStatus, computeGpsStatus } from './status.js';
 import type { ConnectionStatus, GpsStatus } from './status.js';
@@ -157,6 +159,44 @@ export type TeleportMode =
 // is already there, so a sample from the same point implies zero speed and
 // passes. There is no bypass anywhere on that path and there must never be
 // one - Section 10.1 is the whole argument.
+//
+// ios/SPEC.md 8.3: THE HOOK HAS TWO DRIVERS, CHOSEN ONCE AT MOUNT. In every
+// browser it is the `watchPosition` driver described above, unchanged. Inside
+// the iPhone shell it is the shell driver, which subscribes to the tracker's
+// events through shell/bridge.ts and starts no watch, holds no wake lock,
+// keeps no queue and posts nothing - inside the shell the tracker is the only
+// sampler (ios/SPEC.md I4). `SampleTrackingState` is identical under both,
+// which is what lets every screen read it without knowing which is running.
+//
+// HOW THE SEAM IS EXPRESSED, AND WHAT WAS REJECTED. The branch is one `if` on
+// `shellDriven` inside the single existing effect, and its two arms are
+// `attachGeolocationDriver` and `attachShellDriver` below. Each arm owns only
+// what is its own - the watch, the wake lock and `visibilitychange`; the
+// subscription - and everything both drivers need is shared between them: the
+// teleport, `flush()`, the `online`/`offline` listeners, the cadence interval,
+// and `applyServerAnswer`. That shared middle is not left over from a
+// refactor, it is what 8.3 requires: one `computeConnectionStatus` over one
+// `behindDepth`, so SPEC.md Section 8.6's `syncing` cannot mean two things on
+// one icon, and one teleport path under both drivers.
+//
+// Three other shapes were weighed and rejected:
+//
+//  - TWO HOOKS BEHIND ONE DISPATCHER - the clearest to read, and not
+//    available: a hook cannot be called conditionally, so both would have to
+//    run with the inactive one made inert, which is two live drivers to keep
+//    honest instead of one branch.
+//  - A DRIVER OBJECT PASSED IN BY THE CALLER - screens/Map.tsx would then
+//    have to know which platform it is on in order to construct one, which
+//    puts the shell into the one file 8.3 exists to keep ignorant of it, and
+//    makes the hook's signature, read by every screen, part of the change.
+//  - A SECOND MODULE THE SAFARI PATH IS MOVED INTO - moving working code is
+//    the one thing that would turn "the Safari path is unchanged" from a diff
+//    into a reading exercise. Nothing that was here has moved.
+//
+// What makes the Safari path provably unchanged: `shellDriven` is false
+// whenever `window.__tipsyTrails` is absent (shell/bridge.ts), which is every
+// browser; nothing new runs behind that false; and the existing tracking,
+// teleport, locate, check-in and PWA suites pass unedited.
 export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
   // In-memory only, deliberately - this is what SPEC.md Section 12's
   // "queued samples survive going offline and are posted on reconnect"
@@ -198,6 +238,14 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
   const [visitUpdates, setVisitUpdates] = useState<VisitSummary[]>([]);
   const [visitVersion, setVisitVersion] = useState(0);
   const [lastPosition, setLastPosition] = useState<LastAcceptedPosition | null>(null);
+  // ios/SPEC.md 8.3: the driver, "chosen once at mount". A lazy useState
+  // initialiser rather than a plain `isShell()` call, and that is the whole
+  // of "once": the initialiser runs on the first render and never again, so
+  // an injected object arriving later - a shell that finished booting, a test
+  // installing one - cannot move a mounted hook from one driver to the other
+  // halfway through. It is in the effect's dependency list below for honesty
+  // and never changes, so the effect never re-runs for it.
+  const [shellDriven] = useState(isShell);
   // Whether the effect below last ran with a teleport standing, so that
   // leaving the mode can drop the position it asserted. A ref rather than
   // state: it is a latch the effect reads and writes, and the effect that
@@ -312,6 +360,64 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       sentinel?.release().catch(() => {});
     }
 
+    // What the server said about a batch: the seven members that read the
+    // answer rather than the attempt, and the four counters over them.
+    //
+    // ONE IMPLEMENTATION FOR BOTH DRIVERS, and that is the point of it being
+    // a function rather than two copies. Safari's flush() calls it with the
+    // body of its own POST; the shell driver calls it with the tracker's
+    // `flush` event, which carries the same server answer (ios/SPEC.md 7.5,
+    // shell/events.ts's `FlushEvent extends SamplesResponse`). Two copies
+    // could advance `discoveryVersion` on different predicates, and the
+    // symptom would be a bar list that refetches in one app and not the
+    // other - invisible in a browser, which is where every one of these
+    // predicates is tested.
+    //
+    // `advanceCounters` is the whole of ios/SPEC.md 8.2's `isReplay` rule as
+    // this hook sees it. A replayed payload is the tracker's latest answer
+    // handed to a listener that arrived late, so it must SEED the four
+    // replaced-on-every-post members and must never ADVANCE a counter:
+    // map/bars/useBarStamps.ts and tracking/useVisits.ts read `version === 0`
+    // as "nothing has happened yet in this mount", so a counter advanced by a
+    // replay re-stamps bars discovered before the map existed, every time the
+    // player returns to the map. Safari passes `true` always, because a POST
+    // this hook made is by definition not a replay.
+    function applyServerAnswer(result: SamplesResponse, advanceCounters: boolean) {
+      // Set from the answer either way round, never only when it is true:
+      // a message about a train that survives the player getting off it is
+      // the same kind of lie as a banner claiming time the player never
+      // spent at a bar.
+      setTooFastToReveal(result.tooFastToReveal === true);
+      if (advanceCounters && result.newCells > 0) {
+        setRevealVersion((version) => version + 1);
+      }
+      // Section 5.7 / 8.1: mastering a bar changes the glass its marker
+      // draws, and a bar reaching `completed` is one the player discovered
+      // long before — so nothing else in this response refetches the bar
+      // list for it, and the marker would keep drawing the full glass
+      // until the next discovery or the next time the map is opened.
+      // `completed` is terminal and permanent, so this fires once per bar
+      // in a player's whole history, not once per sample.
+      const masteredABar = (result.visitUpdates ?? []).some(
+        (visit) => visit.status === 'completed',
+      );
+      // Read once and used three times below, so "was anything discovered
+      // by this batch" cannot come out differently for the bar list, the
+      // stamp and the stamp's signal.
+      const discovered = result.newBars ?? [];
+      if (advanceCounters && (discovered.length > 0 || masteredABar)) {
+        setDiscoveryVersion((version) => version + 1);
+      }
+      setNewBars(discovered);
+      if (advanceCounters && discovered.length > 0) {
+        setNewBarsVersion((version) => version + 1);
+      }
+      setVisitUpdates(result.visitUpdates ?? []);
+      if (advanceCounters && (result.visitUpdates?.length ?? 0) > 0) {
+        setVisitVersion((version) => version + 1);
+      }
+    }
+
     async function flush() {
       if (flushingRef.current || queueRef.current.length === 0 || !navigator.onLine) {
         return;
@@ -333,39 +439,8 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
         // samples. Nought whenever the queue fitted in one batch, which is the
         // normal case and is what puts the icon back to `online`.
         setBehindDepth(queuedAtAttempt - batch.length);
-        // Set from the answer either way round, never only when it is true:
-        // a message about a train that survives the player getting off it is
-        // the same kind of lie as a banner claiming time the player never
-        // spent at a bar.
-        setTooFastToReveal(result.tooFastToReveal === true);
-        if (result.newCells > 0) {
-          setRevealVersion((version) => version + 1);
-        }
-        // Section 5.7 / 8.1: mastering a bar changes the glass its marker
-        // draws, and a bar reaching `completed` is one the player discovered
-        // long before — so nothing else in this response refetches the bar
-        // list for it, and the marker would keep drawing the full glass
-        // until the next discovery or the next time the map is opened.
-        // `completed` is terminal and permanent, so this fires once per bar
-        // in a player's whole history, not once per sample.
-        const masteredABar = (result.visitUpdates ?? []).some(
-          (visit) => visit.status === 'completed',
-        );
-        // Read once and used three times below, so "was anything discovered
-        // by this batch" cannot come out differently for the bar list, the
-        // stamp and the stamp's signal.
-        const discovered = result.newBars ?? [];
-        if (discovered.length > 0 || masteredABar) {
-          setDiscoveryVersion((version) => version + 1);
-        }
-        setNewBars(discovered);
-        if (discovered.length > 0) {
-          setNewBarsVersion((version) => version + 1);
-        }
-        setVisitUpdates(result.visitUpdates ?? []);
-        if ((result.visitUpdates?.length ?? 0) > 0) {
-          setVisitVersion((version) => version + 1);
-        }
+        // A post this hook made is never a replay, so the counters advance.
+        applyServerAnswer(result, true);
         setPostError(null);
       } catch (err) {
         // The send failed and nothing left the queue, so everything that was
@@ -396,6 +471,129 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       setIsOnline(false);
     }
 
+    // THE SAFARI DRIVER (SPEC.md Section 7.2). Everything above is shared;
+    // this is the half that is only ever this one's - the watch, the wake
+    // lock, and the visibility event that starts and stops both. It is the
+    // code this effect has always run, gathered behind one call so that the
+    // other driver's absence of it is a fact about a branch rather than a
+    // trail of conditions through a function.
+    function attachGeolocationDriver(): () => void {
+      if (document.visibilityState === 'visible') {
+        startWatch();
+        acquireWakeLock();
+      }
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        stopWatch();
+        releaseWakeLock();
+      };
+    }
+
+    // THE SHELL DRIVER (ios/SPEC.md 8.3). One subscription, and every one of
+    // the thirteen members below comes off 7.5's events by that section's
+    // table. There is no watchPosition here, no wake lock, no queue of this
+    // hook's own and no POST - the tracker owns all four inside the shell
+    // (I4), and the only sample this hook can still put on the wire is a
+    // standing teleport's, which keeps its own path under both drivers.
+    function attachShellDriver(): () => void {
+      // One function for both callbacks, because ios/SPEC.md 8.3's table is
+      // the same table for a replayed payload and a live one: every row but
+      // the four counters is "the latest such event", which a replay is by
+      // definition. `advanceCounters` is the single difference, and it is
+      // passed to the single place that could act on it.
+      function receive(event: TrackerEvent, advanceCounters: boolean): void {
+        switch (event.type) {
+          // 8.3: `trackingActive` is the TRACKER's state and not this web
+          // view's visibility. A phone in a pocket with the map unmounted is
+          // recording, and that is the entire point of the app; `blocked` is
+          // false because nothing is being queued and `idle` is false because
+          // nothing is being tracked (7.3).
+          case 'tracking':
+            setTrackingActive(event.state === 'tracking');
+            return;
+          case 'position': {
+            // The same computeGpsStatus and the same GPS_STALE_MS timer as
+            // Safari, over the event's own `receivedAt` rather than this
+            // page's clock (shell/events.ts says why it rides along). 8.3
+            // records the one consequence and accepts it: the web app never
+            // sees a fix the tracker refused, so a stretch of bad fixes
+            // arrives as no events at all and this reaches `poor` through
+            // staleness up to GPS_STALE_MS later than Safari reaches it
+            // through accuracy. Both end in the same state.
+            const now = Date.now();
+            setGpsStatus(
+              computeGpsStatus({ accuracy: event.accuracy, receivedAt: event.receivedAt }, now),
+            );
+            scheduleStaleCheck();
+            // Section 9.3 / 8.3: while a teleport stands the teleported point
+            // IS the position, and the shell's fixes are the real one - which
+            // is exactly what the mode exists to override. So they are
+            // ignored for `lastPosition` and for nothing else: the GPS
+            // reading above is still the honest state of this device's
+            // receiver, and Safari has no equivalent only because it stopped
+            // its watch.
+            if (teleported) {
+              return;
+            }
+            const accepted: LastAcceptedPosition = {
+              lat: event.lat,
+              lon: event.lon,
+              accuracy: event.accuracy,
+              // No course under the shell (ios/SPEC.md 6.6, O-I3): Core
+              // Location's course is not forwarded, so the direction cone is
+              // absent there rather than pointed the wrong way.
+              heading: null,
+            };
+            setLastPosition(accepted);
+            // The same out-of-band holder Safari fills, for the same reader -
+            // map/MapPicker.tsx. In memory only, here as there (C4 / Section
+            // 10.2); ios/SPEC.md I2 says the same of the device.
+            setLastKnownPosition(accepted);
+            return;
+          }
+          // The tracker's queue is the only queue there is under this driver
+          // (7.4), so its `queued` is `queueDepth` and its `behind` is this
+          // hook's internal `behindDepth` - the tracker computes the latter
+          // "exactly as useSampleTracking computes it", which is what lets
+          // one computeConnectionStatus serve both drivers (8.3, D2).
+          //
+          // Both are the teleport path's while a teleport stands, exactly as
+          // in Safari, so the tracker's counts are not written over them.
+          case 'queue':
+            if (!teleported) {
+              setQueueDepth(event.queued);
+              setBehindDepth(event.behind);
+            }
+            return;
+          case 'flush':
+            if (!teleported) {
+              setQueueDepth(event.queued);
+              setBehindDepth(event.behind);
+            }
+            // Whoever posted them, these are the server's answers, so they
+            // keep feeding the members that read the server (8.3).
+            applyServerAnswer(event, advanceCounters);
+            return;
+          // `visit`, `sessionLost` and `notification` (7.5) reach no member of
+          // this interface. `sessionLost` in particular is deliberately not
+          // `postError`: the shell reloads the web view to its login screen on
+          // it (5.2), so a message on the map would be shown to nobody.
+          default:
+            return;
+        }
+      }
+
+      return subscribeToShellEvents({
+        onEvent: (event) => {
+          receive(event, true);
+        },
+        onReplay: (event) => {
+          receive(event, false);
+        },
+      });
+    }
+
     // Section 9.3, the whole client half of the mode. The teleported point
     // becomes this device's position immediately, without waiting for a
     // cadence tick, because the map marker, the nearby panel and the
@@ -413,7 +611,16 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       };
       setLastPosition(standingAt);
       setLastKnownPosition(standingAt);
-      setTrackingActive(true);
+      // In Safari this is what keeps the third icon honest while the watch is
+      // stopped: the interval below is posting, so "paused" would be false.
+      // Under the shell driver the icon reports the tracker's own state
+      // (ios/SPEC.md 8.3's table, which gives `trackingActive` no teleport
+      // exception where it gives the other four one) - the phone in the
+      // pocket is still what the player is being told about, and a `tracking`
+      // event is the only thing entitled to say otherwise.
+      if (!shellDriven) {
+        setTrackingActive(true);
+      }
     } else if (wasTeleportedRef.current) {
       // Leaving the mode. The teleported point is dropped rather than left
       // standing until the first real fix replaces it: the server has just
@@ -425,14 +632,21 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       clearLastKnownPosition();
     }
 
-    if (document.visibilityState === 'visible') {
-      startWatch();
-      acquireWakeLock();
-    }
+    // THE SEAM, and it is one expression. Everything above this line runs
+    // under both drivers; everything either driver owns alone is inside the
+    // call it is behind. Chosen from `shellDriven`, which was fixed at mount.
+    const detachDriver = shellDriven ? attachShellDriver() : attachGeolocationDriver();
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    // Left running under both drivers, and under the shell driver it has
+    // nothing to do unless a teleport stands. That is a fact about the queue
+    // rather than about this timer: `queueRef` is written in exactly two
+    // places, `handlePosition` (which only the watch calls, and the watch
+    // never starts under the shell) and the teleport branch just below, so
+    // under the shell driver an empty queue makes flush() return before it
+    // can reach postSamples. Cutting the timer instead would strand whatever
+    // the teleport queued at the moment the admin left the mode.
     const flushInterval = setInterval(() => {
       // The teleported point, on the ordinary cadence and through the
       // ordinary route. It needs no bypass and must not have one: the
@@ -441,6 +655,10 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       // What these samples buy is Section 7.5's visit progress - mastering
       // needs on-site samples twenty minutes apart, and a teleport that
       // posted once could never produce the second one.
+      //
+      // ios/SPEC.md 8.3: this is the one thing the hook still posts under the
+      // shell driver, and O-I8 records what it costs - two posters against one
+      // account for as long as an admin stays teleported inside the app.
       if (teleported) {
         queueRef.current.push({
           ...teleported,
@@ -453,22 +671,27 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
     }, CONFIG.SAMPLE_MIN_INTERVAL_MS);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       clearInterval(flushInterval);
       if (staleTimeoutRef.current !== null) {
         clearTimeout(staleTimeoutRef.current);
       }
-      stopWatch();
-      releaseWakeLock();
+      // Last, so that the Safari driver's own teardown - the visibility
+      // listener, the watch, the wake lock - still happens in the order it
+      // always did, after the interval and the stale timer.
+      detachDriver();
     };
-    // Deliberately keyed on the teleport mode and nothing else. Entering or
-    // leaving it is the one thing that changes what this hook does, and it
-    // happens at most twice in a session; the queue, the in-flight latch and
-    // the watch id are all refs, so they survive the rebuild. Every other
-    // value this effect closes over is a setter, which React keeps stable.
-  }, [teleportStatus, teleportLat, teleportLon]);
+    // Deliberately keyed on the teleport mode and the driver, and nothing
+    // else. Entering or leaving the mode is the one thing that changes what
+    // this hook does, and it happens at most twice in a session; the driver
+    // is fixed at mount and can never change, so it never re-runs this. The
+    // queue, the in-flight latch and the watch id are all refs, so they
+    // survive the rebuild - and so, under the shell driver, does the
+    // bridge's cache, which replays the tracker's latest payloads into the
+    // new subscription without advancing a counter. Every other value this
+    // effect closes over is a setter, which React keeps stable.
+  }, [teleportStatus, teleportLat, teleportLon, shellDriven]);
 
   return {
     gpsStatus,
