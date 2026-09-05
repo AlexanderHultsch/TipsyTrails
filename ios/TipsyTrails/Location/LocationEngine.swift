@@ -102,6 +102,21 @@ final class LocationEngine: NSObject {
         manager.requestWhenInUseAuthorization()
     }
 
+    // Section 6.2's step two/10.1 step 4: the Consent screen's own request
+    // for Always, offered here beside `requestWhenInUseAuthorization()`
+    // above for the same reason - on `manager`, this class's own retained
+    // `CLLocationManager`, and not a transient instance the Consent screen
+    // might otherwise construct itself: a `CLLocationManager` must stay
+    // alive for the duration of an authorization request, or the request
+    // can be torn down by ARC before iOS has presented anything, or before
+    // its answer is delivered to anyone. Screens/ConsentScreen.swift calls
+    // this only after its own checkbox (Section 10.1's step 3) is checked -
+    // that ordering is 10.1's legal basis for Always, not a nicety, and is
+    // this call's caller's responsibility, not this method's.
+    func requestAlwaysAuthorization() {
+        manager.requestAlwaysAuthorization()
+    }
+
     // Section 6.3: Core Location takes a named constant, not a metre
     // figure, so this is a ladder over Core Location's OWN constants -
     // every value compared here is one Apple already named, never a
