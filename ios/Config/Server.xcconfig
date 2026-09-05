@@ -1,0 +1,26 @@
+// ios/SPEC.md Section 4.3 — the server origin is a build setting, not a game
+// constant. It answers "which deployment does this build talk to", not a
+// rate limit, radius, threshold, tolerance or timeout, so CLAUDE.md's
+// constants rule keeps it out of packages/shared entirely; it lives here
+// instead. It is the same value the server holds as PUBLIC_ORIGIN
+// (SPEC.md 4.3).
+//
+// The $() is xcconfig's way of writing // without opening a comment: a bare
+// // here would end the line, and the value would silently become
+// "https:".
+SERVER_ORIGIN = https:/$()/tipsytrails.ahultsch.com
+
+// WKAppBoundDomains (Info.plist) is a static array and cannot compute a
+// host from a URL at build time, so the host is repeated here as its own
+// setting rather than derived from SERVER_ORIGIN above. SERVER_HOST and
+// SERVER_ORIGIN are one value in two shapes and must be edited together —
+// nothing in this file enforces that, only the comment does; the actual
+// check is packages/tracker/src/ios-config.test.ts, which reads both and
+// fails if SERVER_ORIGIN stops ending in SERVER_HOST.
+SERVER_HOST = tipsytrails.ahultsch.com
+
+// The owner's Apple Developer team ID. Left empty here — never a secret or
+// signing material in the repository (C6) — and filled in by
+// Server.local.xcconfig, which is gitignored and read by project.yml's
+// automatic-signing settings.
+DEVELOPMENT_TEAM =
