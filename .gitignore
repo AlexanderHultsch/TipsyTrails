@@ -11,4 +11,10 @@ data/tiles/
 
 .tmp-input/
 
+ios/TipsyTrails.xcodeproj/
+ios/TipsyTrails/Resources/tracker.js
+ios/Config/Server.local.xcconfig
+xcuserdata/
+DerivedData/
+
 .DS_Store

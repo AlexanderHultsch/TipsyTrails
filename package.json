@@ -8,7 +8,7 @@
   },
   "scripts": {
     "prepare": "pnpm --filter @tipsytrails/shared build",
-    "build": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build && pnpm --filter @tipsytrails/web build",
+    "build": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/tracker build && pnpm --filter @tipsytrails/api build && pnpm --filter @tipsytrails/web build",
     "pretypecheck": "pnpm --filter @tipsytrails/shared build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
