@@ -141,6 +141,34 @@ final class TrackerRuntime {
         }
     }
 
+    // Section 7.1/7.8: the same read `createContext` above makes for
+    // `TRACKER_RESTART_MIN_INTERVAL_MS`, generalised to any key on the
+    // bundle's own `config` object - I1 forbids a Swift literal standing in
+    // for one of these, and this is the one seam the shell has for reading
+    // any of them. Diagnostics/DiagnosticsStore.swift's `retentionDays`
+    // (`TRACKER_DIAGNOSTIC_DAYS`) is this method's only caller so far.
+    // Asynchronous, like every other entry into the context (Section 4.4) -
+    // App/'s composition root calls this once, right after construction,
+    // and the bundle may still be mid-evaluation at that exact moment; a
+    // synchronous answer would mean blocking whichever queue called this
+    // until that finishes, and the main queue is what calls it. The
+    // completion runs on the tracker queue, not the caller's - a caller
+    // that stores the value on shared state hops it back itself.
+    func configNumber(_ key: String, completion: @escaping (Double?) -> Void) {
+        queue.async { [weak self] in
+            guard
+                let configValue = self?.tracker?
+                    .objectForKeyedSubscript("config")?
+                    .objectForKeyedSubscript(key),
+                configValue.isNumber
+            else {
+                completion(nil)
+                return
+            }
+            completion(configValue.toDouble())
+        }
+    }
+
     // A JavaScript exception JavaScriptCore could not otherwise report -
     // Section 4.4's own words: "the context's exceptionHandler logs it,
     // counts it, and the shell recreates the context and restarts the
