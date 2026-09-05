@@ -124,3 +124,27 @@ export function removeFront(queue: SampleQueue, count: number, counters: Counter
 export function depth(queue: SampleQueue): number {
   return queue.samples.length;
 }
+
+// The "behind" rule (SPEC.md Section 8.6, ios/SPEC.md Sections 7.4 and 8.3).
+//
+// Pure and side-effect free, in the same spirit as the rest of this module -
+// no network, no timers, no React.
+//
+// The rule: of the samples that were queued when a flush attempt began, how
+// many are *still* queued once the attempt is over. A sample that arrived
+// after the attempt began has not missed anything yet, so it never counts
+// here even though it may still be sitting in the queue. `sentCount` is
+// everything the attempt actually removed - the whole batch on a success,
+// nothing on a failure, since a failed post leaves the batch at the front of
+// the queue for a retry (ios/SPEC.md 7.4).
+//
+// This used to be shared with `packages/web/src/tracking/useSampleTracking.ts`'s
+// `flush()`, which called one common implementation for both its success and
+// its failure path. It no longer does: `useSampleTracking.flush()` now applies
+// this same rule inline as `queuedAtAttempt - batch.length` / `queuedAtAttempt`,
+// and the two are kept in step by `ios/SPEC.md` 8.3's requirement rather than
+// by a shared function. `ios/SPEC.md`'s list of changes for `main` names
+// adopting this function as one of them.
+export function computeBehindDepth(queuedAtAttemptStart: number, sentCount: number): number {
+  return queuedAtAttemptStart - sentCount;
+}
