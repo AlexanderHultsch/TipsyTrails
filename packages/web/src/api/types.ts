@@ -9,12 +9,16 @@ export interface User {
   isAnonymous: boolean;
   mustChangePassword: boolean;
   // Section 9.6: epoch seconds, or null when this account has not consented
-  // to the iPhone app's background tracking (Section 5.3). No web screen
-  // reads it - it is on this shape because every route that answers with a
-  // user answers with the same body, and the iPhone shell reads it from that
-  // body (`ios/SPEC.md` 5.4). `isUser` does not exist and must not be added
-  // for it: Section 9.6's rule is that a response is validated only where a
-  // wrong shape renders as data.
+  // to the iPhone app's background tracking (Section 5.3). It is on this
+  // shape because every route that answers with a user answers with the same
+  // body, and the iPhone shell reads it from that body (`ios/SPEC.md` 5.4).
+  // **One web screen reads it since v1.63** - the Settings screen's shell-only
+  // "Background tracking" row (`ios/SPEC.md` 8.6) shows it as on or off - and
+  // no screen writes it: the write path is `PATCH /api/settings` called in
+  // answer to the shell (8.2, shell/useShellSettingsUpdate.ts). `isUser` does
+  // not exist and must not be added for it: Section 9.6's rule is that a
+  // response is validated only where a wrong shape renders as data, and a
+  // missing timestamp here renders as "Off" rather than as a broken screen.
   backgroundTrackingConsentedAt: number | null;
 }
 

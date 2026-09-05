@@ -299,11 +299,18 @@ function injectShell(): ShellDouble {
 // (Section 9.6) plus the three the tracker adds, because a `FlushEvent` is a
 // `SamplesResponse` and a fixture that omitted one would be a payload no
 // tracker could send.
-function trackingEvent(state: 'idle' | 'tracking' | 'blocked'): TrackerEvent {
+function trackingEvent(
+  state: 'idle' | 'tracking' | 'blocked',
+  // `background` is the one field of this fixture a test outside 8.3's table
+  // has a reason to set: since D3 the third icon reads it (`SPEC.md` 8.6's
+  // "on in the background" against "on while open only"), so a test that
+  // wants the icon's ok level has to say which of the two it means.
+  overrides: { background?: boolean } = {},
+): TrackerEvent {
   return {
     type: 'tracking',
     state,
-    background: false,
+    background: overrides.background ?? false,
     authorization: { status: 'authorizedWhenInUse', accuracy: 'fullAccuracy' },
     lowPower: false,
   };
@@ -1188,8 +1195,11 @@ describe('the existing screens, driven by the tracker’s events instead of a wa
 
   // SPEC.md 8.6's three icons, unchanged in shape and reading the same three
   // members, from events rather than from a watch. The third icon's four shell
-  // states are D3's work and are deliberately not asserted here: this block is
-  // about the icons still moving at all under the new driver.
+  // states are D3's work and are asserted in App.shellscreens.test.tsx, not
+  // here: this block is about the icons still moving at all under the new
+  // driver. The one mark D3 left on this test is `background: true` below -
+  // before it, any `tracking` event made the icon ok, and now only the state
+  // `SPEC.md` 8.6 calls "on in the background" does.
   it('moves all three status icons from tracker events', async () => {
     const shell = injectShell();
     stubGeolocation();
@@ -1203,7 +1213,7 @@ describe('the existing screens, driven by the tracker’s events instead of a wa
 
     await act(async () => {
       shell.dispatch(positionEvent({ accuracy: CONFIG.GPS_ACCURACY_GOOD_M }));
-      shell.dispatch(trackingEvent('tracking'));
+      shell.dispatch(trackingEvent('tracking', { background: true }));
       shell.dispatch(queueEvent(5, 3));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });

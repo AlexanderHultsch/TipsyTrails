@@ -2,7 +2,7 @@
 
 **Version:** 0.8
 **Status:** Specified, nothing built. A draft for the owner's review before any code lands.
-**Parent:** `SPEC.md` at the repository root, v1.62. This document does not replace it and cannot contradict it; Section 14 here lists the amendments the parent needs before this one is in force.
+**Parent:** `SPEC.md` at the repository root, v1.63. This document does not replace it and cannot contradict it; Section 14 here lists the amendments the parent needs before this one is in force.
 **Keeping up with `main`:** `ios/PARENT-CONTRACT.md` — the list of what this app depends on in the parent, the record of every merge from `main`, and what to do when the pin above and the parent's version disagree. `packages/shared/src/ios-parent-pin.test.ts` fails until they agree, so the decision cannot be skipped by being forgotten.
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails, branch `ios-app`
 **Target device:** iPhone, iOS 17.0 or later
