@@ -505,18 +505,26 @@ Rules that bound them:
 
 ### 7.8 Counters, and the diagnostic report
 
-The tracker counts, and this is the part of the design that makes the owner's walk (13.3) produce a report instead of an impression. Every counter is an integer or a timestamp, none is a coordinate, and the set is closed:
+The tracker counts, and this is the part of the design that makes the owner's walk (13.3) produce a report instead of an impression. Every counter is an integer or a timestamp, save the one named below whose whole job is to carry a message and so is a string by nature; none is a coordinate, and the set is closed:
 
 - fixes: received, dropped invalid (negative accuracy), dropped reduced-accuracy, dropped accuracy, dropped stale at enqueue, dropped stale at flush, dropped by cap
 - queue: current depth, current behind, maximum depth seen
-- flushes: attempted, succeeded, failed by HTTP status class, transport failures, backoff currently in force
+- flushes: attempted, succeeded, failed by HTTP status class — `4xx`, `5xx`, `other` — transport failures, backoff currently in force
 - samples: sent, and from the server's answer (9.1) rejected per gate — accuracy, future, stale, outsideCity, tooFast — so "accepted" is sent minus the sum
 - results: `newCells` total, bars discovered, visits completed, `tooFastToReveal` batches
-- state: transitions of `tracking` with timestamps; the current profile; low-power flag and how many fixes arrived under it
+- state: a count per target state (`idle`, `tracking`, `blocked`) plus one timestamp of the last transition; a count of activations per profile; a count of times low power was newly observed on, alongside the fixes-under-low-power count
 - process: starts by cause (`user`, `location`, `unknown`), context restarts after an exception, last exception message
 - session: `sessionLost` events by cause
 
-The tracker emits them on request; the shell persists the *daily* buckets in `UserDefaults` for `TRACKER_DIAGNOSTIC_DAYS` days (Berlin days, computed by the shared helper the badge job uses — `berlinDateString` in `packages/shared`) and shows them on the Diagnostics screen (11.3). The report is those buckets plus the device model, iOS version, app version, tracker bundle hash, authorization pair, and the timestamp of the last time the tracker ran. It is exported through the share sheet as JSON. **It contains no position, no cell index, no bar id and no bar name.** It is a report about the pipeline, and reading it tells you whether the pipeline worked and not where anyone went.
+`other` is not dead in the flushes bucket: Section 7.2's `Host.fetch` follows no redirect and returns every status as a response, so a 3xx arrives as a failure with nowhere else to be counted, and a failure with nowhere to be counted is an invisible one, which is what this report exists to prevent.
+
+The state bullet gave up three things the set cannot hold, all for the same reason. An array of (state, timestamp) pairs growing for as long as the process runs is neither an integer nor a timestamp, and nothing bounds it. A profile name and a boolean are values rather than counts, and this set holds counts. What is lost is the live reading — which profile the tracker is in *now*, whether low power is on *now* — and that loss is deliberate and costs nothing, because those live values reach the Diagnostics screen (11.3) from the `tracking` event of Section 7.5 and from the tracker's own state, which is where a live value belongs. A counter is a count of history.
+
+The tracker emits them on request; the shell persists the *daily* buckets in `UserDefaults` for `TRACKER_DIAGNOSTIC_DAYS` days (Berlin days, computed by the shared helper the badge job uses — `berlinDateString` in `packages/shared`) and shows them on the Diagnostics screen (11.3). The report is those buckets plus the device model, iOS version, app version, tracker bundle hash, authorization pair, and the timestamp of the last time the tracker ran. It is exported through the share sheet as JSON. **It contains no position, no cell index, no bar id and no bar name.**
+
+That is a property a test asserts rather than a promise this document makes: a test in `packages/tracker` walks the counter set generically, so a counter added later is covered without anyone remembering to. It checks for exactly the four shapes that sentence names — a coordinate word, or a key whose last word is an identifier word (`id`, `name`, `index`, and their plurals) — rather than banning the substrings "cell" and "bar", which would reject `newCells` and `barsDiscovered`, both of which are aggregate counts and both of which are this section's own words. What actually stops a coordinate is the other half of the check: every numeric field must be an integer, since a coordinate is a float whatever its key is called, and the key-name check is the weaker half beside it.
+
+It is a report about the pipeline, and reading it tells you whether the pipeline worked and not where anyone went.
 
 ---
 
