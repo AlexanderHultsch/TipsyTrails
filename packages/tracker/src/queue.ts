@@ -100,24 +100,38 @@ export function dropStale(queue: SampleQueue, nowMs: number, counters: Counters)
 // first. This is a PEEK, not a take: it does not remove anything.
 // Section 7.4 keeps a failed batch at the front of the queue for a retry, so
 // removal has to be the caller's own separate decision, taken only after a
-// successful flush (`removeFront` below) - a `peek` a reader mistakes for a
+// successful flush (`removeSent` below) - a `peek` a reader mistakes for a
 // `take` would drop a whole batch of a walk on the first failed post.
 export function peekBatch(queue: SampleQueue): Sample[] {
   return queue.samples.slice(0, CONFIG.SAMPLE_MAX_BATCH);
 }
 
-// Removes `count` samples from the front of the queue - the caller's
-// separate decision after `peekBatch` returned a batch that was
-// successfully sent (Section 7.4). Takes `counters` for the same reason
-// `enqueue` and `dropStale` do: a successful flush is the single largest
-// change the queue's depth ever undergoes - up to `SAMPLE_MAX_BATCH`
-// samples leave at once - and `currentDepth` left stale from that moment
-// until the next fix happens to correct it is a wrong number sitting in
-// Section 7.8's report for as long as tens of seconds under the walking
-// profile. `maxDepthSeen` is untouched here on purpose: removal can only
-// lower the depth, and a high-water mark that fell would not be one.
-export function removeFront(queue: SampleQueue, count: number, counters: Counters): void {
-  queue.samples.splice(0, count);
+// Removes exactly the given samples, by identity (`===`), wherever they sit
+// in the queue - the caller's own separate decision after `peekBatch`
+// returned a batch that was successfully sent (Section 7.4). Removal by
+// POSITION (an earlier `removeFront(queue, count, counters)`) was wrong: a
+// batch in flight is not the only thing that can shrink the front of the
+// queue, because `enqueue`'s cap shifts the OLDEST sample off the front
+// whenever it is exceeded, and the oldest are exactly the samples a flush
+// has peeked and posted. A queue at `TRACKER_QUEUE_CAP` with a batch in
+// flight, and a handful of fixes arriving before that batch's flush
+// completes, shifts some in-flight samples off the front by the cap alone -
+// so a `removeFront(batch.length)` on success would remove some samples
+// that were never sent, silently, with no counter to say so. Removing by
+// identity instead means only the samples actually sent are ever removed,
+// wherever the cap has since moved everything else.
+//
+// Takes `counters` for the same reason `enqueue` and `dropStale` do: a
+// successful flush is the single largest change the queue's depth ever
+// undergoes - up to `SAMPLE_MAX_BATCH` samples leave at once - and
+// `currentDepth` left stale from that moment until the next fix happens to
+// correct it is a wrong number sitting in Section 7.8's report for as long
+// as tens of seconds under the walking profile. `maxDepthSeen` is untouched
+// here on purpose: removal can only lower the depth, and a high-water mark
+// that fell would not be one.
+export function removeSent(queue: SampleQueue, sent: Sample[], counters: Counters): void {
+  const sentSet = new Set(sent);
+  queue.samples = queue.samples.filter((sample) => !sentSet.has(sample));
   counters.queue.currentDepth = queue.samples.length;
 }
 

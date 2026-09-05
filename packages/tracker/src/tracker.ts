@@ -1,20 +1,26 @@
 // ios/SPEC.md Section 7.3: the tracker's state machine, its start sequence
-// and its profile table. This is substep B5 - the states, the start
-// sequence, the profile table, the visit hooks, and the authorization
-// ladder's derivation into a `BlockedReason` - and it deliberately builds no
-// flush: no timer, no `postSamples` call, no backoff, no handling of a
-// flush's response. Substep B6 adds all of that to this file. `index.ts` is
-// not wired to any of this yet - Section 12's Step B7 is where the global
-// surface is wired, in one atomic change after every substep of Step B lands.
+// and its profile table; Section 7.4: the queue's flush - the timer, the
+// post, the outcome handling and the backoff. This is substep B6, built on
+// top of B5's states, start sequence, profile table, visit hooks and
+// authorization ladder: the flush timer (started on entering `tracking`,
+// stopped on leaving it), `postSamples`, the success path (Sections 7.4,
+// 7.5, 7.6, 7.8) and Section 7.4's outcome branches with their backoff.
+// `index.ts` is not wired to any of this yet - Section 12's Step B7 is where
+// the global surface is wired, in one atomic change after every substep of
+// Step B lands, and where the discovered-bars/mastered notifications this
+// file marks (in the success path below) are built.
 //
 // This module follows `queue.ts`'s and `visits.ts`'s own idiom: a mutable
 // structure (`Internal`) plus functions over it, no class - and Section
-// 4.4's process model is why no lock or re-entrancy guard appears anywhere
-// here: the shell runs the tracker on one serial queue, so two calls into
-// this module never interleave.
+// 4.4's process model is why "one flush in flight" below is a boolean on
+// `Internal` rather than a lock: the shell runs the tracker on one serial
+// queue, so two calls into this module never interleave, and the boolean
+// exists only to refuse a second flush attempt while one is still awaiting
+// its response.
 import { CONFIG } from '@tipsytrails/shared';
 import type { LatLon } from '@tipsytrails/shared';
-import { getBar, getMe, getPendingVisits } from './api.js';
+import { getBar, getMe, getPendingVisits, postSamples } from './api.js';
+import type { ApiResult } from './api.js';
 import { createCounters } from './counters.js';
 import type { Counters } from './counters.js';
 import type {
@@ -22,15 +28,25 @@ import type {
   AuthorizationStatus,
   BlockedReason,
   Sample,
+  SamplesResponse,
   TrackerProfile,
   TrackingEvent,
   VisitSummary,
 } from './events.js';
 import type { Host, LocationProfile } from './host.js';
-import { createQueue, depth, enqueue } from './queue.js';
+import {
+  computeBehindDepth,
+  createQueue,
+  depth,
+  dropStale,
+  enqueue,
+  peekBatch,
+  removeSent,
+} from './queue.js';
 import type { SampleQueue } from './queue.js';
 import {
   addPendingVisit,
+  applyVisitUpdates,
   barsNeedingPosition,
   createVisitSet,
   isDwelling,
@@ -103,6 +119,21 @@ interface Internal {
   // first one - `maybeEmitTracking` below reads this to emit only when the
   // snapshot changes (7.5).
   lastEmittedTracking: TrackingEvent | null;
+  // ios/SPEC.md 7.4: the flush timer's id, or `null` when none is running -
+  // `startFlushTimer`/`stopFlushTimer` below hold the one invariant that
+  // `host.clearTimeout` needs an id to stop the right thing, and this is
+  // also how each is made idempotent (starting an already-running timer, or
+  // stopping one that never started, is a no-op).
+  flushTimerId: number | null;
+  // Section 7.4's "one request in flight at a time", as a boolean rather
+  // than a lock (Section 4.4 - see the header comment on why a lock has no
+  // work to do here). Set for the duration of the `postSamples` call only.
+  flushInFlight: boolean;
+  // Section 7.4's backoff: the number of flushes that have failed in a row,
+  // reset to 0 by a success and by a 429 (whose own `Retry-After` wait is
+  // not itself backoff). `computeBackoffDelayMs` below turns this into a
+  // delay.
+  consecutiveFailures: number;
 }
 
 function createInternal(host: Host): Internal {
@@ -122,6 +153,9 @@ function createInternal(host: Host): Internal {
     location: null,
     significantChangesOn: null,
     lastEmittedTracking: null,
+    flushTimerId: null,
+    flushInFlight: false,
+    consecutiveFailures: 0,
   };
 }
 
@@ -292,12 +326,14 @@ function maybeEmitTracking(t: Internal): void {
   t.host.emit(event);
 }
 
-// Applies a state change unconditionally: sets `state`/`reason` and bumps
-// `state.transitions[newState]`/`state.lastTransitionAtMs`. Emission is a
-// separate concern (`maybeEmitTracking` above) - every caller below invokes
-// both. `start` and `signedOut` always represent a real transition by their
-// own rules and call this directly; `transitionIfChanged` is what guards
-// the callers that do not.
+// Applies a state change unconditionally: sets `state`/`reason`, bumps
+// `state.transitions[newState]`/`state.lastTransitionAtMs`, and starts or
+// stops the flush timer (Section 7.4: started on entering `tracking`,
+// stopped on leaving it - `idle`, `blocked` and `signedOut`, which is `idle`
+// under another name). Emission is a separate concern (`maybeEmitTracking`
+// above) - every caller below invokes both. `start` and `signedOut` always
+// represent a real transition by their own rules and call this directly;
+// `transitionIfChanged` is what guards the callers that do not.
 function transition(
   t: Internal,
   newState: 'idle' | 'tracking' | 'blocked',
@@ -307,6 +343,11 @@ function transition(
   t.reason = reason;
   t.counters.state.transitions[newState] += 1;
   t.counters.state.lastTransitionAtMs = t.host.now();
+  if (newState === 'tracking') {
+    startFlushTimer(t);
+  } else {
+    stopFlushTimer(t);
+  }
 }
 
 function transitionIfChanged(
@@ -458,6 +499,254 @@ function submitFix(t: Internal, sample: Sample): void {
   // A fix is what moves the player in or out of a bar's radius.
   recomputeProfile(t);
   maybeEmitTracking(t);
+}
+
+// ios/SPEC.md 7.4: "there is no other clock for flushes" - `startFlushTimer`
+// is the only place `host.setTimeout` is called for this purpose, and it is
+// idempotent (a second call while a timer is already running does nothing)
+// because `transition` (above) calls it on every entry into `tracking`,
+// including one that follows another without the timer ever having
+// stopped - Section 7.3's `rederiveState` can re-derive `tracking` while
+// already `tracking` (a profile-only change), and `transitionIfChanged`
+// already guards most of that, but `start` calls `transition` directly and
+// can do so more than once across a process's life.
+function startFlushTimer(t: Internal): void {
+  if (t.flushTimerId !== null) {
+    return;
+  }
+  scheduleFlushTick(t, CONFIG.SAMPLE_MIN_INTERVAL_MS);
+}
+
+function stopFlushTimer(t: Internal): void {
+  if (t.flushTimerId === null) {
+    return;
+  }
+  t.host.clearTimeout(t.flushTimerId);
+  t.flushTimerId = null;
+}
+
+// Schedules the next tick at `delayMs` - the ordinary cadence on an empty
+// queue or a success, the exact `Retry-After` wait on a 429, or the backoff
+// delay on an ordinary failure (Section 7.4, Part 3). The id is held on
+// `Internal` so `stopFlushTimer` can cancel it, and is cleared before the
+// tick's own work runs so a tick that lands after the tracker has already
+// left `tracking` (e.g. a `sessionLost` from a *different* in-flight
+// request) finds nothing left to cancel.
+function scheduleFlushTick(t: Internal, delayMs: number): void {
+  t.flushTimerId = t.host.setTimeout(() => {
+    t.flushTimerId = null;
+    void runFlushTick(t);
+  }, delayMs);
+}
+
+// Runs one flush and, only while still `tracking`, schedules the next tick
+// at the delay that flush produced. A flush that leaves `tracking` (a
+// `sessionLost` outcome) has already stopped the timer through `transition`;
+// re-scheduling here regardless of that would resurrect a timer this
+// process no longer wants running.
+async function runFlushTick(t: Internal): Promise<void> {
+  const nextDelayMs = await oneFlush(t);
+  if (t.state === 'tracking') {
+    scheduleFlushTick(t, nextDelayMs);
+  }
+}
+
+// ios/SPEC.md 7.4's backoff: `TRACKER_FLUSH_BACKOFF_BASE_MS` doubled per
+// consecutive failure, capped at `TRACKER_FLUSH_BACKOFF_MAX_MS`. Every
+// number here is `CONFIG`'s own - CLAUDE.md forbids inlining a rate limit,
+// radius, threshold or timeout at a call site.
+function computeBackoffDelayMs(consecutiveFailures: number): number {
+  const delayMs = CONFIG.TRACKER_FLUSH_BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1);
+  return Math.min(delayMs, CONFIG.TRACKER_FLUSH_BACKOFF_MAX_MS);
+}
+
+// The bookkeeping every ordinary failure shares (httpError, notFound-as-404,
+// invalidResponse, transportError - Section 7.4, Part 3): bump the streak,
+// compute the delay it now implies, and record that delay as the backoff
+// currently in force (Section 7.8) so the diagnostic report shows it live.
+function ordinaryFailureDelay(t: Internal): number {
+  t.consecutiveFailures += 1;
+  const delayMs = computeBackoffDelayMs(t.consecutiveFailures);
+  t.counters.flushes.backoffCurrentlyInForceMs = delayMs;
+  return delayMs;
+}
+
+// Section 7.8's `other` bucket exists precisely because `Host.fetch` follows
+// no redirect and returns every status as a response (Section 7.2), so a
+// 3xx has nowhere else to be counted; this is the one place that bucketing
+// happens.
+function statusClass(status: number): '4xx' | '5xx' | 'other' {
+  if (status >= 400 && status < 500) {
+    return '4xx';
+  }
+  if (status >= 500 && status < 600) {
+    return '5xx';
+  }
+  return 'other';
+}
+
+// ios/SPEC.md 7.4/7.5/7.6/7.8: the success path, kept as one readable
+// function per the task brief, so B7's notification scheduling has one
+// place to hook into (marked at the bottom). In order: remove exactly the
+// samples this batch sent (by identity - `removeSent`'s own comment says
+// why position is not safe here), emit `queue` with the depth that removal
+// just produced (7.5's `queue`/`visit`/`flush` ordering - `queue` first),
+// move every counter Section 7.8 names for a success, apply the visit
+// updates and emit `visit` for each one (7.5's amendment: this is the one
+// place `visit` fires), emit `flush`, seed the position of every bar this
+// batch discovered (7.6: a bar a batch just discovered may be one a visit is
+// about to name, and this saves the fetch - and does so BEFORE the profile
+// is recomputed below, because `newBars` and a `pending` `visitUpdates`
+// entry for the same bar can arrive in the same response: a player who
+// checks in the moment a bar stamps onto the map must reach `dwelling` from
+// this very flush, not from the next fix), and recompute the profile (a
+// completed or expired visit can end the dwelling profile; a newly
+// positioned one, just seeded, can start it).
+function handleFlushSuccess(
+  t: Internal,
+  batch: Sample[],
+  response: SamplesResponse,
+  queuedAtAttempt: number,
+): void {
+  removeSent(t.queue, batch, t.counters);
+
+  const behind = computeBehindDepth(queuedAtAttempt, batch.length);
+  t.counters.queue.currentBehind = behind;
+  const queued = depth(t.queue);
+  t.host.emit({ type: 'queue', queued, behind });
+
+  t.counters.flushes.succeeded += 1;
+  t.counters.samples.sent += batch.length;
+  t.counters.samples.rejected.accuracy += response.rejected.accuracy;
+  t.counters.samples.rejected.future += response.rejected.future;
+  t.counters.samples.rejected.stale += response.rejected.stale;
+  t.counters.samples.rejected.outsideCity += response.rejected.outsideCity;
+  t.counters.samples.rejected.tooFast += response.rejected.tooFast;
+  t.counters.results.newCells += response.newCells;
+  t.counters.results.barsDiscovered += response.newBars.length;
+  if (response.tooFastToReveal) {
+    t.counters.results.tooFastToRevealBatches += 1;
+  }
+  t.consecutiveFailures = 0;
+  t.counters.flushes.backoffCurrentlyInForceMs = 0;
+
+  applyVisitUpdates(t.visits, response.visitUpdates, t.counters);
+  for (const update of response.visitUpdates) {
+    t.host.emit({ ...update, type: 'visit' });
+  }
+
+  t.host.emit({ ...response, type: 'flush', sent: batch.length, behind, queued });
+
+  for (const bar of response.newBars) {
+    setBarPosition(t.visits, bar.id, { lat: bar.lat, lon: bar.lon });
+  }
+
+  recomputeProfile(t);
+  maybeEmitTracking(t);
+
+  // B7 schedules the discovered-bars and mastered notifications from here
+  // (Section 7.7) - not built by this substep.
+}
+
+// ios/SPEC.md 7.4, Part 3: every failure outcome. The batch is never touched
+// here - it stays at the front of the queue for the next tick to retry,
+// exactly as `peekBatch`'s own comment promises. Returns the delay the next
+// tick should use.
+function handleFlushFailure(
+  t: Internal,
+  result: Exclude<ApiResult<SamplesResponse>, { outcome: 'ok' }>,
+  queuedAtAttempt: number,
+): number {
+  let nextDelayMs: number;
+
+  switch (result.outcome) {
+    // 5.2: a 401 from any tracker request means the session has ended
+    // elsewhere. No retry - the shell has to see a cookie again before this
+    // tracker posts anything else.
+    case 'unauthenticated':
+      t.counters.session.sessionLostByCause.unauthenticated += 1;
+      t.host.emit({ type: 'sessionLost', cause: 'unauthenticated' });
+      transition(t, 'idle', undefined);
+      maybeEmitTracking(t);
+      nextDelayMs = CONFIG.SAMPLE_MIN_INTERVAL_MS;
+      break;
+    // The web app has to be opened to clear this - no retry here either.
+    case 'passwordChangeRequired':
+      t.counters.session.sessionLostByCause.passwordChangeRequired += 1;
+      t.host.emit({ type: 'sessionLost', cause: 'password_change_required' });
+      transition(t, 'idle', undefined);
+      maybeEmitTracking(t);
+      nextDelayMs = CONFIG.SAMPLE_MIN_INTERVAL_MS;
+      break;
+    // `retryAfterMs` already carries `TRACKER_FLUSH_BACKOFF_BASE_MS`'s floor
+    // (api.ts). The failure streak resets so the tick after this wait is
+    // back on the ordinary cadence rather than compounding into a further
+    // backoff.
+    case 'rateLimited':
+      t.counters.flushes.failedByStatusClass['4xx'] += 1;
+      t.consecutiveFailures = 0;
+      t.counters.flushes.backoffCurrentlyInForceMs = 0;
+      nextDelayMs = result.retryAfterMs;
+      break;
+    case 'httpError':
+      t.counters.flushes.failedByStatusClass[statusClass(result.status)] += 1;
+      nextDelayMs = ordinaryFailureDelay(t);
+      break;
+    // Section 7.6's route is the only caller that gives `notFound` a
+    // meaning of its own; on the samples route a 404 means the API has
+    // moved out from under the app, and it is an ordinary 4xx failure.
+    case 'notFound':
+      t.counters.flushes.failedByStatusClass['4xx'] += 1;
+      nextDelayMs = ordinaryFailureDelay(t);
+      break;
+    // 7.4's last paragraph: a response the guard rejects is an ordinary
+    // failure too - not an HTTP failure, but not nothing, so it goes to
+    // `other` rather than going uncounted.
+    case 'invalidResponse':
+      t.counters.flushes.failedByStatusClass.other += 1;
+      nextDelayMs = ordinaryFailureDelay(t);
+      break;
+    // 7.4: no reachability watching - the failed request is the signal.
+    case 'transportError':
+      t.counters.flushes.transportFailures += 1;
+      nextDelayMs = ordinaryFailureDelay(t);
+      break;
+  }
+
+  const behind = computeBehindDepth(queuedAtAttempt, 0);
+  t.counters.queue.currentBehind = behind;
+  t.host.emit({ type: 'queue', queued: depth(t.queue), behind });
+
+  return nextDelayMs;
+}
+
+// ios/SPEC.md 7.4: one flush, in order - not tracking or already in flight,
+// do nothing; drop what went stale while queued; peek a batch, done if
+// there is none; remember the depth before the post (what makes `behind`
+// measurable); post; branch on the outcome. Returns the delay the caller
+// should schedule the next tick at.
+async function oneFlush(t: Internal): Promise<number> {
+  if (t.state !== 'tracking' || t.flushInFlight) {
+    return CONFIG.SAMPLE_MIN_INTERVAL_MS;
+  }
+
+  dropStale(t.queue, t.host.now(), t.counters);
+  const batch = peekBatch(t.queue);
+  if (batch.length === 0) {
+    return CONFIG.SAMPLE_MIN_INTERVAL_MS;
+  }
+
+  const queuedAtAttempt = depth(t.queue);
+  t.counters.flushes.attempted += 1;
+  t.flushInFlight = true;
+  const result = await postSamples(t.host, batch);
+  t.flushInFlight = false;
+
+  if (result.outcome === 'ok') {
+    handleFlushSuccess(t, batch, result.value, queuedAtAttempt);
+    return CONFIG.SAMPLE_MIN_INTERVAL_MS;
+  }
+  return handleFlushFailure(t, result, queuedAtAttempt);
 }
 
 function setAppState(t: Internal, appState: AppState): void {

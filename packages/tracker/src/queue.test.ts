@@ -10,7 +10,7 @@ import {
   dropStale,
   enqueue,
   peekBatch,
-  removeFront,
+  removeSent,
 } from './queue.js';
 
 // A fixed instant rather than Date.now() everywhere - ios/SPEC.md Section
@@ -197,8 +197,8 @@ describe('peekBatch', () => {
   });
 });
 
-describe('removeFront', () => {
-  it('removes the given count from the front, in arrival order, and updates currentDepth', () => {
+describe('removeSent', () => {
+  it('removes exactly the given samples by identity, in whatever order they were passed, and updates currentDepth', () => {
     const queue = createQueue();
     const counters = createCounters();
     const a = sample({ timestamp: BASE_NOW_MS });
@@ -206,10 +206,49 @@ describe('removeFront', () => {
     const c = sample({ timestamp: BASE_NOW_MS + 2 });
     queue.samples.push(a, b, c);
 
-    removeFront(queue, 2, counters);
+    removeSent(queue, [a, b], counters);
 
     expect(queue.samples).toEqual([c]);
     expect(counters.queue.currentDepth).toBe(1);
+  });
+
+  // The defect removeSent replaces removeFront to fix: enqueue's cap
+  // (queue.ts) shifts the OLDEST sample off the front whenever the queue
+  // exceeds TRACKER_QUEUE_CAP, and the oldest are exactly the samples a
+  // flush has just peeked and posted. A queue at cap, with a batch in
+  // flight, and fixes still arriving before that flush's outcome is known,
+  // shifts some in-flight samples off the front by the cap alone - so
+  // removal by position would remove the wrong samples once the batch
+  // finally succeeds: some still in flight, and some that arrived after the
+  // batch was sent and were never posted at all.
+  it('removes only the samples actually sent, even after the cap has shifted others out from under them', () => {
+    const queue = createQueue();
+    const counters = createCounters();
+
+    for (let i = 0; i < CONFIG.TRACKER_QUEUE_CAP; i += 1) {
+      enqueue(queue, sample({ timestamp: BASE_NOW_MS + i }), BASE_NOW_MS + i, counters);
+    }
+    const batch = peekBatch(queue);
+
+    // Fixes keep arriving while that batch is in flight, pushing the queue
+    // past the cap and shifting the oldest samples - some of them in
+    // `batch` - off the front.
+    for (let i = 0; i < CONFIG.SAMPLE_MAX_BATCH / 2; i += 1) {
+      enqueue(
+        queue,
+        sample({ timestamp: BASE_NOW_MS + CONFIG.TRACKER_QUEUE_CAP + i }),
+        BASE_NOW_MS + CONFIG.TRACKER_QUEUE_CAP + i,
+        counters,
+      );
+    }
+
+    removeSent(queue, batch, counters);
+
+    const batchIdentities = new Set(batch);
+    for (const remaining of queue.samples) {
+      expect(batchIdentities.has(remaining)).toBe(false);
+    }
+    expect(counters.queue.currentDepth).toBe(depth(queue));
   });
 });
 
@@ -217,13 +256,16 @@ describe('maxDepthSeen', () => {
   it('holds the high-water mark after the queue drains', () => {
     const queue = createQueue();
     const counters = createCounters();
+    const samples: Sample[] = [];
 
     for (let i = 0; i < 5; i += 1) {
-      enqueue(queue, sample({ timestamp: BASE_NOW_MS + i }), BASE_NOW_MS + i, counters);
+      const s = sample({ timestamp: BASE_NOW_MS + i });
+      samples.push(s);
+      enqueue(queue, s, BASE_NOW_MS + i, counters);
     }
     expect(counters.queue.maxDepthSeen).toBe(5);
 
-    removeFront(queue, 5, counters);
+    removeSent(queue, samples, counters);
 
     expect(depth(queue)).toBe(0);
     // Removal can only lower the depth, so the high-water mark it passed
@@ -233,13 +275,13 @@ describe('maxDepthSeen', () => {
 });
 
 describe('counters.queue.currentDepth', () => {
-  // enqueue (queue.ts:72), dropStale (:94) and removeFront (:121) each set
-  // currentDepth themselves, and a per-function test asserting it once each
-  // is exactly what let removeFront ship without it: nobody had written an
-  // assertion for the one mutator that lacked the line. This test instead
-  // drives one realistic sequence - several
-  // enqueues, a no-op dropStale, a peekBatch, a removeFront, more enqueues, a
-  // dropStale that actually drops some, a final removeFront - and checks the
+  // enqueue (queue.ts:72), dropStale (:94) and removeSent (its own setter)
+  // each set currentDepth themselves, and a per-function test asserting it
+  // once each is exactly what let a mutator ship without it: nobody had
+  // written an assertion for the one mutator that lacked the line. This test
+  // instead drives one realistic sequence - several
+  // enqueues, a no-op dropStale, a peekBatch, a removeSent, more enqueues, a
+  // dropStale that actually drops some, a final removeSent - and checks the
   // invariant after EVERY mutating call in a loop, so a mutator added later
   // is covered by construction rather than by someone remembering to name it
   // here. The same habit counters.test.ts follows by walking the counter
@@ -248,30 +290,29 @@ describe('counters.queue.currentDepth', () => {
     const queue = createQueue();
     const counters = createCounters();
 
+    const firstBatch: Sample[] = [0, 1, 2, 3, 4, 5].map((i) =>
+      sample({ timestamp: BASE_NOW_MS + i }),
+    );
+    const secondBatch: Sample[] = [10, 11, 12].map((i) =>
+      sample({ timestamp: BASE_NOW_MS + CONFIG.SAMPLE_MAX_AGE_MS + i }),
+    );
+
     const operations: Array<() => void> = [
-      ...[0, 1, 2, 3, 4, 5].map(
-        (i) => () =>
-          enqueue(queue, sample({ timestamp: BASE_NOW_MS + i }), BASE_NOW_MS + i, counters),
-      ),
+      ...firstBatch.map((s, i) => () => enqueue(queue, s, BASE_NOW_MS + i, counters)),
       // Nothing is old enough yet - a no-op mutation must hold the invariant
       // too, not only a call that actually changes the depth.
       () => dropStale(queue, BASE_NOW_MS + 5, counters),
       // Does not mutate at all; included because the sequence names it.
       () => peekBatch(queue),
-      () => removeFront(queue, 2, counters),
-      ...[10, 11, 12].map(
-        (i) => () =>
-          enqueue(
-            queue,
-            sample({ timestamp: BASE_NOW_MS + CONFIG.SAMPLE_MAX_AGE_MS + i }),
-            BASE_NOW_MS + CONFIG.SAMPLE_MAX_AGE_MS + i,
-            counters,
-          ),
+      () => removeSent(queue, firstBatch.slice(0, 2), counters),
+      ...secondBatch.map(
+        (s, i) => () =>
+          enqueue(queue, s, BASE_NOW_MS + CONFIG.SAMPLE_MAX_AGE_MS + [10, 11, 12][i], counters),
       ),
       // Now old enough to drop the four samples still left over from the
       // first batch, and only those.
       () => dropStale(queue, BASE_NOW_MS + CONFIG.SAMPLE_MAX_AGE_MS + 12, counters),
-      () => removeFront(queue, 1, counters),
+      () => removeSent(queue, secondBatch.slice(0, 1), counters),
     ];
 
     for (const operation of operations) {
