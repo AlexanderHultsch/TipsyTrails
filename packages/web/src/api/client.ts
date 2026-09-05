@@ -459,7 +459,16 @@ export function unsubscribePush(input: { endpoint: string }): Promise<{ ok: true
   });
 }
 
-export function updateSettings(input: { isAnonymous: boolean }): Promise<User> {
+// PATCH /api/settings (Section 9.2). A partial body: both keys are optional
+// and at least one must be present, an omitted key meaning unchanged. The one
+// caller here passes `{ isAnonymous }` exactly as it did when that key was
+// required; `backgroundTracking` is the iPhone app's consent flag and is sent
+// by the shell's page-side bridge (`ios/SPEC.md` 9.2), not from this package
+// today.
+export function updateSettings(input: {
+  isAnonymous?: boolean;
+  backgroundTracking?: boolean;
+}): Promise<User> {
   return request<User>('/api/settings', {
     method: 'PATCH',
     body: JSON.stringify(input),

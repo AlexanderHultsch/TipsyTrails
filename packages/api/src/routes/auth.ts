@@ -123,6 +123,12 @@ export interface UserRow {
   is_admin: number;
   is_anonymous: number;
   must_change_password: number;
+  // Section 5.3: NULL until the player consents to background tracking in the
+  // iPhone app, and NULL again on withdrawal. Nothing on the server reads it;
+  // it is carried here because every route that answers with a user answers
+  // with the same body, and the shell reads it from that body at start
+  // (ios/SPEC.md 5.4, 7.3).
+  background_tracking_consented_at: number | null;
 }
 
 interface UserRowWithHash extends UserRow {
@@ -139,6 +145,11 @@ interface PublicUser {
   isAdmin: boolean;
   isAnonymous: boolean;
   mustChangePassword: boolean;
+  // Epoch seconds, or null (Section 9.6). Not coerced to a boolean the way
+  // the three flags above are: `ios/SPEC.md` 9.2 has the caller learn the
+  // recorded timestamp from the same response that wrote it, so this is the
+  // one user field whose value and not merely its truthiness is the answer.
+  backgroundTrackingConsentedAt: number | null;
 }
 
 export function toPublicUser(row: UserRow): PublicUser {
@@ -149,6 +160,7 @@ export function toPublicUser(row: UserRow): PublicUser {
     isAdmin: Boolean(row.is_admin),
     isAnonymous: Boolean(row.is_anonymous),
     mustChangePassword: Boolean(row.must_change_password),
+    backgroundTrackingConsentedAt: row.background_tracking_consented_at,
   };
 }
 
@@ -223,6 +235,10 @@ export function authRoutes(env: Env) {
         is_admin: 0,
         is_anonymous: 0,
         must_change_password: 0,
+        // The INSERT above does not name the column, so the row carries the
+        // migration's NULL: a new account has consented to nothing
+        // (Section 5.3).
+        background_tracking_consented_at: null,
       });
     });
 
@@ -236,7 +252,8 @@ export function authRoutes(env: Env) {
 
       const row = request.server.db
         .prepare<[string], UserRowWithHash>(
-          `SELECT id, username, password_hash, avatar_seed, is_admin, is_anonymous, must_change_password
+          `SELECT id, username, password_hash, avatar_seed, is_admin, is_anonymous, must_change_password,
+                  background_tracking_consented_at
            FROM users WHERE username = ?`,
         )
         .get(username);
@@ -276,7 +293,8 @@ export function authRoutes(env: Env) {
 
       const row = request.server.db
         .prepare<[number], UserRow>(
-          `SELECT id, username, avatar_seed, is_admin, is_anonymous, must_change_password
+          `SELECT id, username, avatar_seed, is_admin, is_anonymous, must_change_password,
+                  background_tracking_consented_at
            FROM users WHERE id = ?`,
         )
         .get(request.userId);

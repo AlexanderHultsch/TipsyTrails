@@ -356,6 +356,26 @@ describe('stable tie-breaking', () => {
   });
 });
 
+// SPEC.md Section 5.3 and ios/SPEC.md 9.2: the leaderboard row has no reason
+// to know when a player consented to background tracking. Asserted with the
+// column set on a ranked account, so the absence is the shape refusing to
+// carry a value rather than the value happening to be NULL.
+describe('the background-tracking consent timestamp', () => {
+  it('never appears on a leaderboard entry, even for a player who has consented', async () => {
+    const { cookie, userId } = await registerUser('viewer');
+    insertFogState(userId, 100, 1000);
+    db.prepare('UPDATE users SET background_tracking_consented_at = 1700000000 WHERE id = ?').run(
+      userId,
+    );
+
+    const response = await getLeaderboard(cookie, '?metric=area&period=all');
+
+    expect(entryFor(response, userId)).not.toHaveProperty('backgroundTrackingConsentedAt');
+    expect(response.payload).not.toContain('backgroundTrackingConsentedAt');
+    expect(response.payload).not.toContain('background_tracking_consented_at');
+  });
+});
+
 describe('anonymous users', () => {
   it('are ranked and counted, with identity masked but badges present', async () => {
     const { cookie } = await registerUser('viewer');

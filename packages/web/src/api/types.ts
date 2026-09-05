@@ -8,6 +8,14 @@ export interface User {
   isAdmin: boolean;
   isAnonymous: boolean;
   mustChangePassword: boolean;
+  // Section 9.6: epoch seconds, or null when this account has not consented
+  // to the iPhone app's background tracking (Section 5.3). No web screen
+  // reads it - it is on this shape because every route that answers with a
+  // user answers with the same body, and the iPhone shell reads it from that
+  // body (`ios/SPEC.md` 5.4). `isUser` does not exist and must not be added
+  // for it: Section 9.6's rule is that a response is validated only where a
+  // wrong shape renders as data.
+  backgroundTrackingConsentedAt: number | null;
 }
 
 // Section 7.2: what each client-side position sample carries.

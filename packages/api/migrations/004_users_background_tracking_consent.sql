@@ -1,0 +1,28 @@
+-- Adds the background-tracking consent record to `users`. See SPEC.md
+-- Section 5.3 for the column and ios/SPEC.md 9.2 and 10.1 for what it is: the
+-- timestamp of the separate, explicit consent the iPhone app's background
+-- location collection rests on (GDPR Art. 6(1)(a)), which is the record
+-- Art. 7(1) wants a controller to be able to produce.
+
+-- Nullable, with no DEFAULT, and that is the whole design rather than an
+-- omission. NULL means "this account has not consented", so every row that
+-- already exists and every INSERT that does not name the column
+-- (db/seed-admin.ts, routes/auth.ts's register handler, every test fixture)
+-- means exactly that: nobody is opted into background tracking by a schema
+-- change, and consenting has to be a deliberate act through
+-- PATCH /api/settings (Section 9.2).
+--
+-- Contrast 003, which is NOT NULL DEFAULT 0 because "not excluded" is a real
+-- value every account has. Here the absence of a timestamp is not a third
+-- state to be avoided but the one this column is for: withdrawal writes NULL
+-- back, so "never consented" and "no longer consented" are deliberately the
+-- same stored value -- neither permits background tracking, and a consent
+-- record that outlived its withdrawal would be the wrong thing to keep.
+--
+-- Epoch seconds like every other timestamp this database holds (Section 0,
+-- rule 6), so INTEGER rather than TEXT.
+--
+-- SQLite adds a nullable column without a default in place, without
+-- rewriting the table, so this is cheap on a live database and needs no data
+-- migration of its own -- unlike 002, which had rows to correct.
+ALTER TABLE users ADD COLUMN background_tracking_consented_at INTEGER;

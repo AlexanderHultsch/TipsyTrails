@@ -66,6 +66,7 @@ describe('runMigrations', () => {
       '001_init.sql',
       '002_clear_admin_must_change_password.sql',
       '003_users_excluded_from_rankings.sql',
+      '004_users_background_tracking_consent.sql',
     ]);
 
     const secondRun = runMigrations(db, migrationsDir);
@@ -74,7 +75,7 @@ describe('runMigrations', () => {
     const row = db
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(row?.count).toBe(3);
+    expect(row?.count).toBe(4);
 
     db.close();
   });
@@ -116,12 +117,58 @@ describe('runMigrations', () => {
     expect(applied).toEqual([
       '002_clear_admin_must_change_password.sql',
       '003_users_excluded_from_rankings.sql',
+      '004_users_background_tracking_consent.sql',
     ]);
 
     expect(flagOf(1)).toBe(0);
     // Non-admins are outside the migration's scope: the gate still holds for
     // anyone who legitimately carries the flag.
     expect(flagOf(2)).toBe(1);
+
+    db.close();
+    rmSync(initOnlyDir, { recursive: true, force: true });
+  });
+
+  it('adds background_tracking_consented_at as NULL on accounts that predate it', () => {
+    // SPEC.md Section 5.3 / ios/SPEC.md 9.2: no existing account consents by
+    // default. Reproduce the live database's ordering the way the 002 test
+    // above does — migrate from a directory holding 001 alone, insert the
+    // rows, then let the real directory apply the rest.
+    const initOnlyDir = join(tmpdir(), `tipsytrails-migrate-test-consent-${randomUUID()}`);
+    mkdirSync(initOnlyDir);
+    copyFileSync(join(migrationsDir, '001_init.sql'), join(initOnlyDir, '001_init.sql'));
+
+    const db = openDatabase(dbPath);
+    runMigrations(db, initOnlyDir);
+
+    db.prepare(
+      `INSERT INTO users
+        (id, username, password_hash, security_question, security_answer_hash, avatar_seed, age_confirmed_at, created_at)
+       VALUES (1, 'alex', 'hash', 'question', 'answer-hash', 'seed', 0, 0)`,
+    ).run();
+
+    runMigrations(db, migrationsDir);
+
+    const consentOf = (id: number): number | null | undefined =>
+      db
+        .prepare<[number], { background_tracking_consented_at: number | null }>(
+          'SELECT background_tracking_consented_at FROM users WHERE id = ?',
+        )
+        .get(id)?.background_tracking_consented_at;
+    expect(consentOf(1)).toBeNull();
+
+    // Nullable with no default, so an INSERT that does not name the column —
+    // which is every INSERT in this repository — leaves it NULL too, and one
+    // that names NULL explicitly is accepted rather than rejected.
+    db.prepare(
+      `INSERT INTO users
+        (id, username, password_hash, security_question, security_answer_hash, avatar_seed, age_confirmed_at, created_at)
+       VALUES (2, 'bea', 'hash', 'question', 'answer-hash', 'seed', 0, 0)`,
+    ).run();
+    expect(consentOf(2)).toBeNull();
+
+    db.prepare('UPDATE users SET background_tracking_consented_at = NULL WHERE id = 2').run();
+    expect(consentOf(2)).toBeNull();
 
     db.close();
     rmSync(initOnlyDir, { recursive: true, force: true });

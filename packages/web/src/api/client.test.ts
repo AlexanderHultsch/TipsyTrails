@@ -15,6 +15,7 @@ import {
   postSamples,
   subscribePush,
   unsubscribePush,
+  updateSettings,
 } from './client.js';
 
 function stubFetchOnce(response: Response) {
@@ -366,5 +367,64 @@ describe('request: response validation', () => {
     // that discards it - see the note on cancelVisit in client.ts.
     stubFetchOnce(jsonResponse(200, {}));
     expect(await cancelVisit(7)).toEqual({});
+  });
+});
+
+// SPEC.md Section 9.2: the body is partial, and an omitted key means
+// unchanged on the server. So what matters here is that the client sends
+// exactly the keys it was given and invents neither - a client that filled in
+// the missing key with a default would turn "leave anonymity alone" into an
+// assertion about anonymity, which is the one thing `ios/SPEC.md` 9.2 says a
+// consent write must never do.
+describe('updateSettings sends exactly the keys it was given', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubUser() {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(200, {
+        id: 1,
+        username: 'alice',
+        avatarSeed: 'seed',
+        isAdmin: false,
+        isAnonymous: false,
+        mustChangePassword: false,
+        backgroundTrackingConsentedAt: null,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function bodyOf(fetchMock: ReturnType<typeof stubUser>): unknown {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string);
+  }
+
+  // The Settings screen's anonymity toggle, unchanged by the widening.
+  it('sends { isAnonymous } alone', async () => {
+    const fetchMock = stubUser();
+    await updateSettings({ isAnonymous: true });
+    expect(bodyOf(fetchMock)).toEqual({ isAnonymous: true });
+  });
+
+  it('sends { backgroundTracking } alone', async () => {
+    const fetchMock = stubUser();
+    await updateSettings({ backgroundTracking: true });
+    expect(bodyOf(fetchMock)).toEqual({ backgroundTracking: true });
+  });
+
+  it('sends both when both are given', async () => {
+    const fetchMock = stubUser();
+    await updateSettings({ isAnonymous: false, backgroundTracking: false });
+    expect(bodyOf(fetchMock)).toEqual({ isAnonymous: false, backgroundTracking: false });
+  });
+
+  it('answers with the user the server sent, consent field included', async () => {
+    stubUser();
+    expect(await updateSettings({ backgroundTracking: true })).toMatchObject({
+      backgroundTrackingConsentedAt: null,
+    });
   });
 });

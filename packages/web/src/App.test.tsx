@@ -417,6 +417,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -507,6 +508,7 @@ describe('App', () => {
           isAdmin: true,
           isAnonymous: false,
           mustChangePassword: true,
+          backgroundTrackingConsentedAt: null,
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -600,6 +602,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       const startScreen = stubStartScreenData(url);
@@ -795,6 +798,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       const startScreen = stubStartScreenData(url);
@@ -855,6 +859,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       if (url === '/api/settings' && init?.method === 'PATCH') {
@@ -865,6 +870,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: true,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -901,6 +907,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       if (url === '/api/account' && init?.method === 'DELETE') {
@@ -944,6 +951,7 @@ describe('App', () => {
           isAdmin: false,
           isAnonymous: false,
           mustChangePassword: false,
+          backgroundTrackingConsentedAt: null,
         });
       }
       if (url === '/api/account' && init?.method === 'DELETE') {
@@ -978,6 +986,7 @@ describe('App', () => {
       isAdmin: false,
       isAnonymous: false,
       mustChangePassword: false,
+      backgroundTrackingConsentedAt: null,
     });
   }
 
