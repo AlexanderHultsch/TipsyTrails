@@ -244,6 +244,63 @@ describe('/privacy', () => {
     expect(container.textContent).toContain("served by this app's own server");
   });
 
+  // SPEC.md Section 10.3's "The iPhone app" paragraph, and ios/SPEC.md 10.2,
+  // which states the same six things. Two properties are asserted here and
+  // both matter.
+  //
+  // **It is not conditional on the shell.** 10.3's words are that it is
+  // rendered "everywhere it renders, because the policy is one document and
+  // not one per client", so this test deliberately runs with no
+  // `window.__tipsyTrails` at all - and says so, rather than relying on the
+  // global happening to be absent in this file. Gating the section on
+  // detection is the easiest wrong turn available here and nothing else would
+  // catch it: the app's own reader would still see the section, and the suite
+  // would still be green.
+  //
+  // **Each of the six is asserted.** Every one is a claim of absence about a
+  // legal document - no push service, no position on the device, no
+  // coordinates in the report - and HANDOVER.md's Section 7 records what
+  // happened the last time this page's claims were checked by reading the
+  // heading and trusting the rest: three of them were wrong. "The heading
+  // rendered" is not evidence.
+  it('states the six things SPEC.md 10.3 requires of the iPhone app section, in a browser with no shell', async () => {
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+
+    expect(window.__tipsyTrails, 'this reader is in a browser, not in the shell').toBeUndefined();
+
+    const text = container.textContent ?? '';
+    const headings = Array.from(container.querySelectorAll('h2')).map((h) => h.textContent);
+    expect(headings).toContain('The iPhone app');
+    // 1. Collection while closed, only after the separate in-app consent.
+    expect(text).toContain('can collect your position while it is closed');
+    expect(text).toContain('only after you have given the separate consent it asks for in the app');
+    // 2. Processed as the browser's samples are, stored as little.
+    expect(text).toContain('processed exactly as the ones a browser sends');
+    expect(text).toContain('stored exactly as little');
+    // 3. Its own notifications, no push service - and the browser bullet above
+    //    is scoped so the two paragraphs cannot contradict each other.
+    expect(text).toContain('schedules its notifications on your device itself and uses no push');
+    expect(text).toContain('does not apply to the app');
+    expect(text).toContain('in a browser, only if you turn on notifications');
+    // 4. What the device holds, and that none of it is a position.
+    expect(text).toContain(
+      'stores only your consent choice, your notification choice and its own diagnostic counters',
+    );
+    expect(text).toContain('none of which is a position');
+    // 5. The consent timestamp is on the account and goes with it.
+    expect(text).toContain('The time you consented is stored on your account');
+    expect(text).toContain('deleted with your account');
+    // 6. The diagnostic report holds counts, not coordinates.
+    expect(text).toContain('diagnostic report you can share from the app holds counts and no');
+  });
+
   it('notes that routine server backups can outlive an account deletion', async () => {
     stubFetch((url) => {
       if (url.startsWith('/api/auth/me')) {

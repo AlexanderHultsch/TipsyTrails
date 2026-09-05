@@ -106,12 +106,53 @@ export function Privacy() {
           Tipsy Trails runs no third-party analytics, trackers or advertising of any kind. Two
           outside services still see your traffic, though: Cloudflare tunnels every request to the
           server - including your position samples - so the app never needs an open port of its own;
-          and, only if you turn on notifications, your subscription and each reminder travel through
-          your browser vendor's own push service (Google, Apple or Mozilla, depending on your
-          browser). Map tiles are served by this app's own server, not by OpenStreetMap directly -
-          OpenStreetMap is where the underlying map data came from, and it is credited on the map
-          itself.
+          and, in a browser, only if you turn on notifications, your subscription and each reminder
+          travel through your browser vendor's own push service (Google, Apple or Mozilla, depending
+          on your browser). That second one is about browsers: the iPhone app schedules its
+          notifications itself and uses no push service, as the next section says. Map tiles are
+          served by this app's own server, not by OpenStreetMap directly - OpenStreetMap is where
+          the underlying map data came from, and it is credited on the map itself.
         </p>
+
+        {/* SPEC.md Section 10.3, "The iPhone app" (and ios/SPEC.md 10.2, which
+            states the same six things). Rendered on the same page, everywhere
+            it renders: the policy is one document and not one per client, so
+            this is deliberately NOT behind the shell detection of
+            shell/bridge.ts. A reader in Safari sees it too, and a reader in
+            the app sees everything above it. Gating it on the shell would make
+            the policy fork per client, and would hide the app's own section
+            from exactly the reader most likely to be checking what an app on
+            their phone does before installing it. */}
+        <h2>The iPhone app</h2>
+        <p>
+          There is an iPhone app, and this policy covers it as well as the browser - it is one
+          policy, shown in full to everyone, not one version per device. Everything above applies to
+          the app too; what follows is what is different about it.
+        </p>
+        <ul>
+          <li>
+            The app can collect your position while it is closed - but only after you have given the
+            separate consent it asks for in the app, which explains what background tracking does
+            and is a box you tick yourself before iOS asks its own question
+          </li>
+          <li>
+            Those positions are processed exactly as the ones a browser sends, and stored exactly as
+            little: revealed grid cells, discovered bars and visit timestamps, never a trail
+          </li>
+          <li>
+            The app schedules its notifications on your device itself and uses no push service, so
+            no outside party carries them - the browser vendor's push service named above is about
+            notifications in a browser, and does not apply to the app
+          </li>
+          <li>
+            On your device the app stores only your consent choice, your notification choice and its
+            own diagnostic counters - none of which is a position
+          </li>
+          <li>
+            The time you consented is stored on your account, and it is deleted with your account
+          </li>
+          <li>The diagnostic report you can share from the app holds counts and no coordinates</li>
+        </ul>
 
         <h2>More information</h2>
         <p>
