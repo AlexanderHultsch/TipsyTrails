@@ -6,13 +6,20 @@ import type { Counters } from './counters.js';
 import type {
   Bar,
   FlushEvent,
+  NotificationEvent,
   Sample,
   SamplesResponse,
   TrackerEvent,
   TrackingEvent,
   VisitSummary,
 } from './events.js';
-import type { Host, HostRequest, HostResponse, LocationProfile } from './host.js';
+import type {
+  Host,
+  HostRequest,
+  HostResponse,
+  LocalNotification,
+  LocationProfile,
+} from './host.js';
 import type { Authorization, AppState, StartInput } from './tracker.js';
 import { createTracker, selectProfile } from './tracker.js';
 
@@ -155,6 +162,18 @@ function fakeHost(scripted: Scripted = {}): {
   emitted: TrackerEvent[];
   configureLocationCalls: LocationProfile[];
   significantChangesCalls: boolean[];
+  // Section 7.7: every `host.scheduleNotification`/`host.cancelNotification`
+  // call this fake has seen, in call order - this is what the hook tests
+  // (`notifications (7.7)` below) assert against, alongside `emitted`'s own
+  // `notification` events.
+  scheduledNotifications: LocalNotification[];
+  cancelledNotificationIds: string[];
+  // Every `scheduleNotification`/`cancelNotification`/`emit` call this fake
+  // has seen, as one interleaved log in call order - `schedule:<id>`,
+  // `cancel:<id>`, `emit:<event.type>`. This is what proves `loseSession`'s
+  // three call sites run through it in the same order, not merely that each
+  // one ends up calling the right things.
+  callLog: string[];
   setNow: (ms: number) => void;
   // Every timer this host has scheduled and not yet fired or cleared, in
   // the order `setTimeout` was called - Section 7.4 schedules at most one
@@ -170,6 +189,9 @@ function fakeHost(scripted: Scripted = {}): {
   const emitted: TrackerEvent[] = [];
   const configureLocationCalls: LocationProfile[] = [];
   const significantChangesCalls: boolean[] = [];
+  const scheduledNotifications: LocalNotification[] = [];
+  const cancelledNotificationIds: string[] = [];
+  const callLog: string[] = [];
   let nextTimerId = 1;
   const timers = new Map<number, FakeTimer>();
   const clearedTimerIds: number[] = [];
@@ -218,9 +240,18 @@ function fakeHost(scripted: Scripted = {}): {
     },
     configureLocation: (profile) => configureLocationCalls.push(profile),
     requestSignificantChanges: (on) => significantChangesCalls.push(on),
-    scheduleNotification: () => {},
-    cancelNotification: () => {},
-    emit: (event) => emitted.push(event),
+    scheduleNotification: (n) => {
+      scheduledNotifications.push(n);
+      callLog.push(`schedule:${n.id}`);
+    },
+    cancelNotification: (id) => {
+      cancelledNotificationIds.push(id);
+      callLog.push(`cancel:${id}`);
+    },
+    emit: (event) => {
+      emitted.push(event);
+      callLog.push(`emit:${event.type}`);
+    },
     log: () => {},
   };
 
@@ -230,6 +261,9 @@ function fakeHost(scripted: Scripted = {}): {
     emitted,
     configureLocationCalls,
     significantChangesCalls,
+    scheduledNotifications,
+    cancelledNotificationIds,
+    callLog,
     setNow: (ms) => {
       nowMs = ms;
     },
@@ -252,6 +286,7 @@ function startInput(overrides: Partial<StartInput> = {}): StartInput {
     hasCookie: true,
     authorization: fullyAuthorized(),
     lowPower: false,
+    discoveryNotifications: true,
     ...overrides,
   };
 }
@@ -1030,12 +1065,28 @@ describe('flush - the success path', () => {
     expect(tracker.snapshotCounters().queue.currentBehind).toBe(0);
 
     const emittedDuringFlush = fake.emitted.slice(emittedBefore);
-    expect(emittedDuringFlush.map((e) => e.type)).toEqual(['queue', 'visit', 'flush', 'tracking']);
+    // The completed visit's reminder (scheduled from `start`'s seed) is
+    // cancelled with no event of its own (Section 7.7: a cancellation
+    // carries no payload to mirror) - what follows `tracking` is the
+    // mastered notification, then the discovered one, in Section 7.7's own
+    // table order.
+    expect(emittedDuringFlush.map((e) => e.type)).toEqual([
+      'queue',
+      'visit',
+      'flush',
+      'tracking',
+      'notification',
+      'notification',
+    ]);
     expect(emittedDuringFlush[1]).toEqual({ ...completedVisit, type: 'visit' });
     const flushEvent = emittedDuringFlush[2] as FlushEvent;
     expect(flushEvent.sent).toBe(1);
     expect(flushEvent.behind).toBe(0);
     expect(flushEvent.newCells).toBe(5);
+    expect(fake.cancelledNotificationIds).toContain('reminder:1');
+    const notificationEvents = emittedDuringFlush.slice(4) as NotificationEvent[];
+    expect(notificationEvents[0].id).toBe('mastered:1');
+    expect(notificationEvents[1].id).toBe(`discovered:${BASE_NOW_MS}`);
 
     // The completed visit was the only thing keeping the tracker dwelling -
     // it drops back to walking.
@@ -1409,5 +1460,398 @@ describe('flush - the cap-during-flight scenario, end to end', () => {
       expect(seenTimestamps).toContain(ts);
     }
     expect(seenTimestamps).toHaveLength(expectedRemaining);
+  });
+});
+
+// ios/SPEC.md Section 7.7, hooked at the points substeps B5/B6 left open.
+// `notifications.test.ts` covers the builders and the id scheme; these
+// tests cover only that the tracker calls them at the right moment.
+describe('notifications (7.7)', () => {
+  describe('the reminder', () => {
+    it('is scheduled for every pending visit in start’s seed', async () => {
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, {
+          visits: [visit({ id: 1, barId: 10, startedAt: BASE_NOW_MS / 1000 })],
+        }),
+      });
+      const tracker = createTracker(fake.host);
+
+      await tracker.start(startInput({ appState: 'background' }));
+
+      expect(fake.scheduledNotifications).toContainEqual(
+        expect.objectContaining({ id: 'reminder:1' }),
+      );
+    });
+
+    it('is scheduled on visitStarted', async () => {
+      const fake = fakeHost();
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+
+      tracker.visitStarted(visit({ id: 7, barId: 99 }));
+
+      expect(fake.scheduledNotifications).toContainEqual(
+        expect.objectContaining({ id: 'reminder:7' }),
+      );
+    });
+
+    it('is scheduled for a flush’s entered visit', async () => {
+      const newVisit = visit({ id: 5, barId: 42, status: 'pending' });
+      const fake = fakeHost({
+        samples: jsonResponse(200, validSamplesResponse({ visitUpdates: [newVisit] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.scheduledNotifications).toContainEqual(
+        expect.objectContaining({ id: 'reminder:5' }),
+      );
+    });
+
+    it('is cancelled when a flush reports the visit left', async () => {
+      const completedVisit = visit({ id: 1, barId: 10, status: 'completed' });
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, { visits: [visit({ id: 1, barId: 10 })] }),
+        samples: jsonResponse(200, validSamplesResponse({ visitUpdates: [completedVisit] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.cancelledNotificationIds).toContain('reminder:1');
+    });
+
+    it('is cancelled on visitEnded when the visit was present', async () => {
+      const fake = fakeHost();
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.visitStarted(visit({ id: 7, barId: 99 }));
+
+      tracker.visitEnded(7);
+
+      expect(fake.cancelledNotificationIds).toContain('reminder:7');
+    });
+
+    it('is not cancelled for a visitEnded id that was never present', async () => {
+      const fake = fakeHost();
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+
+      tracker.visitEnded(999);
+
+      expect(fake.cancelledNotificationIds).toEqual([]);
+    });
+
+    it('is cancelled when a re-seed drops a visit no longer pending', async () => {
+      const scripted: Scripted = {
+        pendingVisits: jsonResponse(200, { visits: [visit({ id: 1, barId: 10 })] }),
+      };
+      const fake = fakeHost(scripted);
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+      expect(fake.scheduledNotifications).toContainEqual(
+        expect.objectContaining({ id: 'reminder:1' }),
+      );
+
+      scripted.pendingVisits = jsonResponse(200, { visits: [] });
+      await tracker.start(startInput({ appState: 'background' }));
+
+      expect(fake.cancelledNotificationIds).toContain('reminder:1');
+    });
+
+    it('is cancelled for every pending visit on signedOut', async () => {
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, {
+          visits: [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })],
+        }),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+
+      tracker.signedOut();
+
+      expect(fake.cancelledNotificationIds).toEqual(
+        expect.arrayContaining(['reminder:1', 'reminder:2']),
+      );
+    });
+  });
+
+  describe('mastered', () => {
+    it('is scheduled on a completed visitUpdates entry, with the bar’s name', async () => {
+      const completedVisit = visit({ id: 1, barId: 10, barName: 'The Fox', status: 'completed' });
+      const fake = fakeHost({
+        samples: jsonResponse(200, validSamplesResponse({ visitUpdates: [completedVisit] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.scheduledNotifications).toContainEqual(
+        expect.objectContaining({
+          id: 'mastered:1',
+          title: 'The Fox mastered',
+          body: 'Your visit is complete.',
+        }),
+      );
+    });
+  });
+
+  describe('discovered', () => {
+    it('is scheduled once per flush when newBars is non-empty and the preference is on', async () => {
+      const discoveredBar: Bar = { ...validBar(20, BAR_POSITION), source: 'osm' };
+      const fake = fakeHost({
+        samples: jsonResponse(200, validSamplesResponse({ newBars: [discoveredBar] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ discoveryNotifications: true }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(
+        fake.scheduledNotifications.filter((n) => n.id.startsWith('discovered:')),
+      ).toHaveLength(1);
+    });
+
+    it('is NOT scheduled when the preference is off', async () => {
+      const discoveredBar: Bar = { ...validBar(20, BAR_POSITION), source: 'osm' };
+      const fake = fakeHost({
+        samples: jsonResponse(200, validSamplesResponse({ newBars: [discoveredBar] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ discoveryNotifications: false }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(
+        fake.scheduledNotifications.filter((n) => n.id.startsWith('discovered:')),
+      ).toHaveLength(0);
+    });
+
+    it('resumes once setDiscoveryNotifications(true) is called', async () => {
+      const discoveredBar: Bar = { ...validBar(20, BAR_POSITION), source: 'osm' };
+      const fake = fakeHost({
+        samples: jsonResponse(200, validSamplesResponse({ newBars: [discoveredBar] })),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ discoveryNotifications: false }));
+
+      tracker.setDiscoveryNotifications(true);
+      tracker.submitFix(sample());
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(
+        fake.scheduledNotifications.filter((n) => n.id.startsWith('discovered:')),
+      ).toHaveLength(1);
+    });
+  });
+
+  describe('signed out', () => {
+    it('is scheduled once on signedOut()', async () => {
+      const fake = fakeHost();
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+
+      tracker.signedOut();
+
+      expect(fake.scheduledNotifications.filter((n) => n.id === 'signedOut')).toHaveLength(1);
+    });
+
+    it('is scheduled once on a flush’s unauthenticated sessionLost', async () => {
+      const fake = fakeHost({
+        samples: jsonResponse(401, { code: 'unauthenticated', message: 'nope' }),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.scheduledNotifications.filter((n) => n.id === 'signedOut')).toHaveLength(1);
+    });
+
+    it('is scheduled once on a flush’s password_change_required sessionLost', async () => {
+      const fake = fakeHost({
+        samples: jsonResponse(403, { code: 'password_change_required', message: 'change it' }),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.scheduledNotifications.filter((n) => n.id === 'signedOut')).toHaveLength(1);
+    });
+
+    it('is NOT scheduled on start’s own 401', async () => {
+      const fake = fakeHost({
+        me: jsonResponse(401, { code: 'unauthenticated', message: 'nope' }),
+      });
+      const tracker = createTracker(fake.host);
+
+      await tracker.start(startInput());
+
+      expect(fake.scheduledNotifications.filter((n) => n.id === 'signedOut')).toHaveLength(0);
+    });
+
+    // ios/SPEC.md 7.7's reason for the sweep - "a signed-out player must not
+    // be reminded of a visit they can no longer complete" - does not care
+    // how the session was lost, so `loseSession`'s sweep runs on a flush's
+    // 401 and its password-change-required outcome exactly as it does on
+    // `signedOut()`, covered separately above.
+    it('a 401 on a flush cancels every pending visit’s reminder', async () => {
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, {
+          visits: [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })],
+        }),
+        samples: jsonResponse(401, { code: 'unauthenticated', message: 'nope' }),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.cancelledNotificationIds).toEqual(['reminder:1', 'reminder:2']);
+    });
+
+    it('a password_change_required on a flush cancels every pending visit’s reminder', async () => {
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, {
+          visits: [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })],
+        }),
+        samples: jsonResponse(403, { code: 'password_change_required', message: 'change it' }),
+      });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      expect(fake.cancelledNotificationIds).toEqual(['reminder:1', 'reminder:2']);
+    });
+  });
+
+  // ios/SPEC.md 5.2/7.7's `loseSession`: proves the three real session-loss
+  // sites - a flush's 401, a flush's password_change_required, and the web
+  // app's `signedOut()` - run the SAME sequence of host calls from the same
+  // starting state (two pending visits, seeded at start), not merely that
+  // each one separately ends up calling the right things. `callLog` records
+  // only the id/type of each call, which is what lets the three logs come
+  // out identical despite `sessionLost`'s own `cause` differing between
+  // them - the log does not carry that payload, only that a `sessionLost`
+  // was emitted and where in the sequence.
+  describe('loseSession runs the identical sequence at every site', () => {
+    const TWO_PENDING_VISITS = jsonResponse(200, {
+      visits: [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })],
+    });
+
+    function relevantLog(callLog: string[]): string[] {
+      return callLog.filter(
+        (entry) =>
+          entry.startsWith('schedule:') ||
+          entry.startsWith('cancel:') ||
+          entry === 'emit:notification' ||
+          entry === 'emit:sessionLost' ||
+          entry === 'emit:tracking',
+      );
+    }
+
+    async function viaFlush(samplesResponse: HostResponse): Promise<string[]> {
+      const fake = fakeHost({ pendingVisits: TWO_PENDING_VISITS, samples: samplesResponse });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+      tracker.submitFix(sample());
+
+      fake.fireNextTimer();
+      await flushMicrotasks();
+
+      return relevantLog(fake.callLog);
+    }
+
+    async function viaSignedOut(): Promise<string[]> {
+      const fake = fakeHost({ pendingVisits: TWO_PENDING_VISITS });
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput({ appState: 'background' }));
+
+      tracker.signedOut();
+
+      return relevantLog(fake.callLog);
+    }
+
+    it('unauthenticated, password_change_required and signedOut() all produce it', async () => {
+      const unauthenticatedLog = await viaFlush(
+        jsonResponse(401, { code: 'unauthenticated', message: 'nope' }),
+      );
+      const passwordChangeLog = await viaFlush(
+        jsonResponse(403, { code: 'password_change_required', message: 'change it' }),
+      );
+      const signedOutLog = await viaSignedOut();
+
+      expect(unauthenticatedLog).toEqual([
+        'schedule:reminder:1',
+        'emit:notification',
+        'schedule:reminder:2',
+        'emit:notification',
+        'emit:tracking',
+        'cancel:reminder:1',
+        'cancel:reminder:2',
+        'schedule:signedOut',
+        'emit:notification',
+        'emit:sessionLost',
+        'emit:tracking',
+      ]);
+      expect(passwordChangeLog).toEqual(unauthenticatedLog);
+      expect(signedOutLog).toEqual(unauthenticatedLog);
+    });
+  });
+
+  describe('every schedule also emits the notification event (7.5)', () => {
+    it('the reminder scheduled from start’s seed emits a matching notification event', async () => {
+      const fake = fakeHost({
+        pendingVisits: jsonResponse(200, { visits: [visit({ id: 1, barId: 10 })] }),
+      });
+      const tracker = createTracker(fake.host);
+
+      await tracker.start(startInput({ appState: 'background' }));
+
+      const notificationEvents = fake.emitted.filter(
+        (e): e is NotificationEvent => e.type === 'notification',
+      );
+      expect(notificationEvents).toContainEqual(
+        expect.objectContaining({ type: 'notification', id: 'reminder:1' }),
+      );
+    });
+
+    it('a cancellation emits no notification event', async () => {
+      const fake = fakeHost();
+      const tracker = createTracker(fake.host);
+      await tracker.start(startInput());
+      tracker.visitStarted(visit({ id: 7, barId: 99 }));
+      const emittedBeforeEnd = fake.emitted.length;
+
+      tracker.visitEnded(7);
+
+      const emittedSinceEnd = fake.emitted.slice(emittedBeforeEnd);
+      expect(emittedSinceEnd.filter((e) => e.type === 'notification')).toEqual([]);
+    });
   });
 });

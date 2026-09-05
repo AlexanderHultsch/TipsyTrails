@@ -44,9 +44,17 @@ export function createVisitSet(): VisitSet {
  * it does not list is a visit that is over. It PRESERVES `barPositions` - a
  * bar does not move, and re-fetching a position the tracker already holds
  * would waste the one request this design exists to avoid.
+ *
+ * Returns the ids that were pending before this call and are not in the new
+ * seed - ios/SPEC.md 7.7 needs these to cancel their reminders, since a
+ * visit this endpoint stops listing is a visit that ended for a reason no
+ * flush ever reported.
  */
-export function seedPending(set: VisitSet, visits: VisitSummary[]): void {
+export function seedPending(set: VisitSet, visits: VisitSummary[]): number[] {
+  const seededIds = new Set(visits.map((visit) => visit.id));
+  const removedIds = [...set.pending.keys()].filter((id) => !seededIds.has(id));
   set.pending = new Map(visits.map((visit) => [visit.id, visit]));
+  return removedIds;
 }
 
 /**
@@ -54,22 +62,37 @@ export function seedPending(set: VisitSet, visits: VisitSummary[]): void {
  * refreshes, and `completed`, `expired` and `cancelled` remove. Increments
  * `counters.results.visitsCompleted` once per entry whose status is
  * `completed` - not once per call.
+ *
+ * Returns what left and entered the set, for ios/SPEC.md 7.7's reminder:
+ * `entered` is every `pending` update for an id not already in the set
+ * (a refresh of an id already pending is neither), and `left` is the id of
+ * every non-`pending` update for an id that WAS in the set - an update
+ * naming an id this set never held is not something leaving it.
  */
 export function applyVisitUpdates(
   set: VisitSet,
   updates: VisitSummary[],
   counters: Counters,
-): void {
+): { entered: VisitSummary[]; left: number[] } {
+  const entered: VisitSummary[] = [];
+  const left: number[] = [];
   for (const update of updates) {
     if (update.status === 'pending') {
+      if (!set.pending.has(update.id)) {
+        entered.push(update);
+      }
       set.pending.set(update.id, update);
       continue;
+    }
+    if (set.pending.has(update.id)) {
+      left.push(update.id);
     }
     set.pending.delete(update.id);
     if (update.status === 'completed') {
       counters.results.visitsCompleted += 1;
     }
   }
+  return { entered, left };
 }
 
 /**
@@ -80,9 +103,13 @@ export function addPendingVisit(set: VisitSet, visit: VisitSummary): void {
   set.pending.set(visit.id, visit);
 }
 
-/** The web app's `visitEnded` (ios/SPEC.md 8.2), for the same reason. */
-export function removeVisit(set: VisitSet, visitId: number): void {
-  set.pending.delete(visitId);
+/**
+ * The web app's `visitEnded` (ios/SPEC.md 8.2), for the same reason.
+ * Returns whether the visit was present - ios/SPEC.md 7.7's reminder is
+ * cancelled only then.
+ */
+export function removeVisit(set: VisitSet, visitId: number): boolean {
+  return set.pending.delete(visitId);
 }
 
 /**

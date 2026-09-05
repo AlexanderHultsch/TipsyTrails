@@ -77,14 +77,17 @@ describe('fixture geometry', () => {
 });
 
 describe('seedPending', () => {
-  it('replaces the pending map rather than merging into it', () => {
+  it('replaces the pending map rather than merging into it, returning nothing removed on a fresh set', () => {
     const set = createVisitSet();
-    seedPending(set, [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })]);
+    const removed1 = seedPending(set, [visit({ id: 1, barId: 10 }), visit({ id: 2, barId: 20 })]);
+    expect(removed1).toEqual([]);
 
-    // Visit 1 is not in the new seed - it is gone, not merged alongside it.
-    seedPending(set, [visit({ id: 2, barId: 20 })]);
+    // Visit 1 is not in the new seed - it is gone, not merged alongside it,
+    // and its id comes back as removed.
+    const removed2 = seedPending(set, [visit({ id: 2, barId: 20 })]);
 
     expect([...set.pending.keys()]).toEqual([2]);
+    expect(removed2).toEqual([1]);
   });
 
   it('preserves barPositions across a replacement', () => {
@@ -93,42 +96,55 @@ describe('seedPending', () => {
     setBarPosition(set, 20, null);
     seedPending(set, [visit({ id: 1, barId: 10 })]);
 
-    seedPending(set, [visit({ id: 2, barId: 30 })]);
+    const removed = seedPending(set, [visit({ id: 2, barId: 30 })]);
 
     expect(set.barPositions.get(10)).toEqual(BAR_POSITION);
     expect(set.barPositions.get(20)).toBeNull();
+    expect(removed).toEqual([1]);
+  });
+
+  it('returns every id absent from the new seed, in no particular guaranteed order beyond the map’s own', () => {
+    const set = createVisitSet();
+    seedPending(set, [visit({ id: 1 }), visit({ id: 2 }), visit({ id: 3 })]);
+
+    const removed = seedPending(set, []);
+
+    expect(removed.sort()).toEqual([1, 2, 3]);
   });
 });
 
 describe('applyVisitUpdates', () => {
-  it('adds a pending update to the set', () => {
+  it('adds a pending update to the set, and reports it entered', () => {
     const set = createVisitSet();
     const counters = createCounters();
     const v = visit({ id: 1, status: 'pending' });
 
-    applyVisitUpdates(set, [v], counters);
+    const result = applyVisitUpdates(set, [v], counters);
 
     expect(set.pending.get(1)).toEqual(v);
     expect(counters).toEqual(createCounters());
+    expect(result).toEqual({ entered: [v], left: [] });
   });
 
-  it('refreshes an existing pending entry rather than duplicating it', () => {
+  it('refreshes an existing pending entry rather than duplicating it, and does not report it entered', () => {
     const set = createVisitSet();
     const counters = createCounters();
     seedPending(set, [visit({ id: 1, confirmedS: 0 })]);
 
-    applyVisitUpdates(set, [visit({ id: 1, confirmedS: 300, status: 'pending' })], counters);
+    const refreshed = visit({ id: 1, confirmedS: 300, status: 'pending' });
+    const result = applyVisitUpdates(set, [refreshed], counters);
 
     expect(set.pending.size).toBe(1);
     expect(set.pending.get(1)?.confirmedS).toBe(300);
+    expect(result).toEqual({ entered: [], left: [] });
   });
 
-  it('removes a completed visit and increments visitsCompleted by exactly one', () => {
+  it('removes a completed visit, increments visitsCompleted by exactly one, and reports it left', () => {
     const set = createVisitSet();
     const counters = createCounters();
     seedPending(set, [visit({ id: 1 })]);
 
-    applyVisitUpdates(set, [visit({ id: 1, status: 'completed' })], counters);
+    const result = applyVisitUpdates(set, [visit({ id: 1, status: 'completed' })], counters);
 
     expect(set.pending.has(1)).toBe(false);
     expect(counters).toEqual(
@@ -136,36 +152,39 @@ describe('applyVisitUpdates', () => {
         c.results.visitsCompleted = 1;
       }),
     );
+    expect(result).toEqual({ entered: [], left: [1] });
   });
 
-  it('removes an expired visit without incrementing visitsCompleted', () => {
+  it('removes an expired visit without incrementing visitsCompleted, and reports it left', () => {
     const set = createVisitSet();
     const counters = createCounters();
     seedPending(set, [visit({ id: 1 })]);
 
-    applyVisitUpdates(set, [visit({ id: 1, status: 'expired' })], counters);
+    const result = applyVisitUpdates(set, [visit({ id: 1, status: 'expired' })], counters);
 
     expect(set.pending.has(1)).toBe(false);
     expect(counters).toEqual(createCounters());
+    expect(result).toEqual({ entered: [], left: [1] });
   });
 
-  it('removes a cancelled visit without incrementing visitsCompleted', () => {
+  it('removes a cancelled visit without incrementing visitsCompleted, and reports it left', () => {
     const set = createVisitSet();
     const counters = createCounters();
     seedPending(set, [visit({ id: 1 })]);
 
-    applyVisitUpdates(set, [visit({ id: 1, status: 'cancelled' })], counters);
+    const result = applyVisitUpdates(set, [visit({ id: 1, status: 'cancelled' })], counters);
 
     expect(set.pending.has(1)).toBe(false);
     expect(counters).toEqual(createCounters());
+    expect(result).toEqual({ entered: [], left: [1] });
   });
 
-  it('increments visitsCompleted once per completed entry, for several entries', () => {
+  it('increments visitsCompleted once per completed entry, for several entries, and reports every one left', () => {
     const set = createVisitSet();
     const counters = createCounters();
     seedPending(set, [visit({ id: 1 }), visit({ id: 2 }), visit({ id: 3 })]);
 
-    applyVisitUpdates(
+    const result = applyVisitUpdates(
       set,
       [
         visit({ id: 1, status: 'completed' }),
@@ -176,6 +195,16 @@ describe('applyVisitUpdates', () => {
     );
 
     expect(counters.results.visitsCompleted).toBe(2);
+    expect(result).toEqual({ entered: [], left: [1, 2, 3] });
+  });
+
+  it('does not report an id as left when a non-pending update names one the set never held', () => {
+    const set = createVisitSet();
+    const counters = createCounters();
+
+    const result = applyVisitUpdates(set, [visit({ id: 99, status: 'completed' })], counters);
+
+    expect(result).toEqual({ entered: [], left: [] });
   });
 });
 
@@ -189,21 +218,23 @@ describe('addPendingVisit / removeVisit', () => {
     expect(set.pending.get(5)).toEqual(v);
   });
 
-  it('removeVisit removes a visit by id', () => {
+  it('removeVisit removes a visit by id and reports it was present', () => {
     const set = createVisitSet();
     addPendingVisit(set, visit({ id: 5 }));
 
-    removeVisit(set, 5);
+    const wasPresent = removeVisit(set, 5);
 
+    expect(wasPresent).toBe(true);
     expect(set.pending.has(5)).toBe(false);
   });
 
-  it('removeVisit on an id not present is a no-op', () => {
+  it('removeVisit on an id not present is a no-op and reports it was not present', () => {
     const set = createVisitSet();
     addPendingVisit(set, visit({ id: 5 }));
 
-    removeVisit(set, 999);
+    const wasPresent = removeVisit(set, 999);
 
+    expect(wasPresent).toBe(false);
     expect(set.pending.has(5)).toBe(true);
   });
 });

@@ -1,14 +1,11 @@
 // ios/SPEC.md Section 7.3: the tracker's state machine, its start sequence
 // and its profile table; Section 7.4: the queue's flush - the timer, the
-// post, the outcome handling and the backoff. This is substep B6, built on
-// top of B5's states, start sequence, profile table, visit hooks and
-// authorization ladder: the flush timer (started on entering `tracking`,
-// stopped on leaving it), `postSamples`, the success path (Sections 7.4,
-// 7.5, 7.6, 7.8) and Section 7.4's outcome branches with their backoff.
-// `index.ts` is not wired to any of this yet - Section 12's Step B7 is where
-// the global surface is wired, in one atomic change after every substep of
-// Step B lands, and where the discovered-bars/mastered notifications this
-// file marks (in the success path below) are built.
+// post, the outcome handling and the backoff; Section 7.7: the four
+// notifications, built in `notifications.ts` (substep B7) and hooked in
+// here at every point Sections 7.3/7.4/7.6 create or remove a pending visit,
+// or lose the session. `index.ts` is not wired to any of this yet - Section
+// 12's Step B7 is where the global surface is wired, in one atomic change
+// after every substep of Step B lands.
 //
 // This module follows `queue.ts`'s and `visits.ts`'s own idiom: a mutable
 // structure (`Internal`) plus functions over it, no class - and Section
@@ -26,14 +23,23 @@ import type { Counters } from './counters.js';
 import type {
   AccuracyAuthorization,
   AuthorizationStatus,
+  Bar,
   BlockedReason,
   Sample,
   SamplesResponse,
+  SessionLostEvent,
   TrackerProfile,
   TrackingEvent,
   VisitSummary,
 } from './events.js';
 import type { Host, LocationProfile } from './host.js';
+import {
+  buildDiscoveredNotification,
+  buildMasteredNotification,
+  buildReminderNotification,
+  buildSignedOutNotification,
+  reminderId,
+} from './notifications.js';
 import {
   computeBehindDepth,
   createQueue,
@@ -78,6 +84,11 @@ export interface StartInput {
   hasCookie: boolean;
   authorization: Authorization;
   lowPower: boolean;
+  // ios/SPEC.md 7.7: the discovery-notifications switch, device-local
+  // `UserDefaults` the shell owns (decision (a) - a preference, not a
+  // position, so it does not widen `LocalNotification` the way tagging every
+  // notification with a kind would). The tracker only mirrors it.
+  discoveryNotifications: boolean;
 }
 
 export interface Tracker {
@@ -91,6 +102,13 @@ export interface Tracker {
   signedOut(): void;
   requestState(): void;
   snapshotCounters(): Counters;
+  // ios/SPEC.md 7.7: the one addition to this surface beyond B5's - it
+  // exists only because the discovery-notifications preference is the
+  // shell's, and the tracker has no way to learn a later change to it
+  // except being told (there is no setter for `backgroundTrackingConsentedAt`
+  // for the same reason, 5.4/7.3, but that field is re-read on the next
+  // `start`; this one is not, because it need not wait for one).
+  setDiscoveryNotifications(on: boolean): void;
 }
 
 interface Internal {
@@ -134,6 +152,11 @@ interface Internal {
   // not itself backoff). `computeBackoffDelayMs` below turns this into a
   // delay.
   consecutiveFailures: number;
+  // ios/SPEC.md 7.7: the discovery-notifications preference, mirrored from
+  // the shell (decision (a) - see `StartInput`/`Tracker.setDiscoveryNotifications`
+  // above). Set by every `start` and by `setDiscoveryNotifications`; the
+  // tracker never decides its value.
+  discoveryNotifications: boolean;
 }
 
 function createInternal(host: Host): Internal {
@@ -156,6 +179,7 @@ function createInternal(host: Host): Internal {
     flushTimerId: null,
     flushInFlight: false,
     consecutiveFailures: 0,
+    discoveryNotifications: false,
   };
 }
 
@@ -383,6 +407,75 @@ function rederiveState(t: Internal): void {
   maybeEmitTracking(t);
 }
 
+// ios/SPEC.md Section 7.7: the four notifications, wired at the hook points
+// B5/B6 left open. `notifications.ts` builds the `LocalNotification`
+// payload and its id; every function below does exactly one of two things -
+// call `host.scheduleNotification` and mirror it as the `notification` event
+// of Section 7.5 ("mirrored to the web app for its own display, if it wants
+// one"), or call `host.cancelNotification` with nothing to mirror, because a
+// cancellation carries no payload for the web app to show.
+function scheduleReminder(t: Internal, visit: VisitSummary): void {
+  const notification = buildReminderNotification(visit);
+  t.host.scheduleNotification(notification);
+  t.host.emit({ ...notification, type: 'notification' });
+}
+
+function cancelReminder(t: Internal, visitId: number): void {
+  t.host.cancelNotification(reminderId(visitId));
+}
+
+function scheduleMasteredNotification(t: Internal, visit: VisitSummary): void {
+  const notification = buildMasteredNotification(visit, t.host.now());
+  t.host.scheduleNotification(notification);
+  t.host.emit({ ...notification, type: 'notification' });
+}
+
+function scheduleDiscoveredNotification(t: Internal, bars: Bar[]): void {
+  const notification = buildDiscoveredNotification(bars, t.host.now());
+  t.host.scheduleNotification(notification);
+  t.host.emit({ ...notification, type: 'notification' });
+}
+
+// Schedules the one notification that tells the player "once" that they
+// were signed out - `loseSession` below is its only caller.
+function scheduleSignedOutNotification(t: Internal): void {
+  const notification = buildSignedOutNotification(t.host.now());
+  t.host.scheduleNotification(notification);
+  t.host.emit({ ...notification, type: 'notification' });
+}
+
+// ios/SPEC.md 5.2/7.7: the one path every REAL session loss takes - a
+// cookie vanishing (`signedOut()`), and the two flush outcomes that mean the
+// same thing server-side (`handleFlushFailure`'s `unauthenticated` and
+// `passwordChangeRequired`). In order: cancel the reminder of every
+// still-pending visit (7.7's own reason - a signed-out player must not be
+// reminded of a visit they can no longer complete, whichever of the three
+// causes cost them the session), schedule the signed-out notification, move
+// the matching `session.sessionLostByCause` counter, emit `sessionLost`,
+// transition to `idle`, and emit the tracking snapshot that follows. One
+// function is what stops this order drifting between the three call sites
+// (the same reason B5 made `tracking` a snapshot and B6 made the flush's
+// success path one function).
+//
+// `start`'s own 401 (Step 2) deliberately does NOT call this - nothing has
+// been scheduled yet when it fires (the visit seed is Step 6, later), so
+// there is nothing to sweep, and 5.2's notification is "once": the shell
+// learning there was never a session to lose is not a player losing one.
+function loseSession(t: Internal, cause: SessionLostEvent['cause']): void {
+  for (const visitId of t.visits.pending.keys()) {
+    cancelReminder(t, visitId);
+  }
+  scheduleSignedOutNotification(t);
+  if (cause === 'password_change_required') {
+    t.counters.session.sessionLostByCause.passwordChangeRequired += 1;
+  } else {
+    t.counters.session.sessionLostByCause[cause] += 1;
+  }
+  t.host.emit({ type: 'sessionLost', cause });
+  transition(t, 'idle', undefined);
+  maybeEmitTracking(t);
+}
+
 // ios/SPEC.md 7.3's start sequence, in order, stopping at the first step
 // that ends it. Step 4 (a blocking authorization) and Step 5
 // (background-without-consent) both make exactly one request when they
@@ -397,6 +490,7 @@ async function start(t: Internal, input: StartInput): Promise<void> {
   t.appState = input.appState;
   t.authorization = input.authorization;
   t.lowPower = input.lowPower;
+  t.discoveryNotifications = input.discoveryNotifications;
 
   // Step 1: no cookie.
   if (!input.hasCookie) {
@@ -405,7 +499,11 @@ async function start(t: Internal, input: StartInput): Promise<void> {
     return;
   }
 
-  // Step 2: GET /api/auth/me.
+  // Step 2: GET /api/auth/me. Deliberately NOT `loseSession` (ios/SPEC.md
+  // 5.2/7.7): nothing has been scheduled yet this early in `start` - the
+  // visit seed is Step 6, below - so there is no reminder to sweep, and this
+  // is the shell learning there was never a session to lose, not a player
+  // losing one, so it gets no signed-out notification.
   const me = await getMe(t.host);
   if (me.outcome === 'unauthenticated') {
     t.counters.session.sessionLostByCause.unauthenticated += 1;
@@ -446,10 +544,20 @@ async function start(t: Internal, input: StartInput): Promise<void> {
     return;
   }
 
-  // Step 6: GET /api/visits/pending -> seedPending.
+  // Step 6: GET /api/visits/pending -> seedPending. ios/SPEC.md 7.7: every
+  // visit this seed lists just entered the tracker's memory for this
+  // process, so every one gets a reminder scheduled; every id `seedPending`
+  // reports removed left the set with no flush to say so, so its reminder
+  // is cancelled here instead.
   const pending = await getPendingVisits(t.host);
   if (pending.outcome === 'ok') {
-    seedPending(t.visits, pending.value.visits);
+    const removedIds = seedPending(t.visits, pending.value.visits);
+    for (const removedId of removedIds) {
+      cancelReminder(t, removedId);
+    }
+    for (const seededVisit of pending.value.visits) {
+      scheduleReminder(t, seededVisit);
+    }
   }
 
   // Step 7: a bar id present but unpositioned is asked for; `ok` records
@@ -585,10 +693,10 @@ function statusClass(status: number): '4xx' | '5xx' | 'other' {
   return 'other';
 }
 
-// ios/SPEC.md 7.4/7.5/7.6/7.8: the success path, kept as one readable
-// function per the task brief, so B7's notification scheduling has one
-// place to hook into (marked at the bottom). In order: remove exactly the
-// samples this batch sent (by identity - `removeSent`'s own comment says
+// ios/SPEC.md 7.4/7.5/7.6/7.7/7.8: the success path, kept as one readable
+// function per the task brief, with Section 7.7's notification scheduling
+// hooked in at the bottom. In order: remove exactly the samples this batch
+// sent (by identity - `removeSent`'s own comment says
 // why position is not safe here), emit `queue` with the depth that removal
 // just produced (7.5's `queue`/`visit`/`flush` ordering - `queue` first),
 // move every counter Section 7.8 names for a success, apply the visit
@@ -630,7 +738,7 @@ function handleFlushSuccess(
   t.consecutiveFailures = 0;
   t.counters.flushes.backoffCurrentlyInForceMs = 0;
 
-  applyVisitUpdates(t.visits, response.visitUpdates, t.counters);
+  const { entered, left } = applyVisitUpdates(t.visits, response.visitUpdates, t.counters);
   for (const update of response.visitUpdates) {
     t.host.emit({ ...update, type: 'visit' });
   }
@@ -644,8 +752,33 @@ function handleFlushSuccess(
   recomputeProfile(t);
   maybeEmitTracking(t);
 
-  // B7 schedules the discovered-bars and mastered notifications from here
-  // (Section 7.7) - not built by this substep.
+  // ios/SPEC.md 7.7: the reminder, cancelled for every visit this flush's
+  // `visitUpdates` reported left the set and scheduled for every one it
+  // reported entered.
+  for (const leftId of left) {
+    cancelReminder(t, leftId);
+  }
+  for (const enteredVisit of entered) {
+    scheduleReminder(t, enteredVisit);
+  }
+
+  // Bar mastered: one per `completed` entry, straight off this response -
+  // `entered`/`left` above answer a different question (did the id newly
+  // join or leave the pending set) and a `completed` entry always leaves it,
+  // but only the response itself still carries the bar name a `left` id no
+  // longer does.
+  for (const update of response.visitUpdates) {
+    if (update.status === 'completed') {
+      scheduleMasteredNotification(t, update);
+    }
+  }
+
+  // ios/SPEC.md 7.7's first rule: nothing announces revealed ground -
+  // `newCells` is counted above (results.newCells) and never spoken. Do not
+  // add a notification for it here.
+  if (response.newBars.length > 0 && t.discoveryNotifications) {
+    scheduleDiscoveredNotification(t, response.newBars);
+  }
 }
 
 // ios/SPEC.md 7.4, Part 3: every failure outcome. The batch is never touched
@@ -662,20 +795,15 @@ function handleFlushFailure(
   switch (result.outcome) {
     // 5.2: a 401 from any tracker request means the session has ended
     // elsewhere. No retry - the shell has to see a cookie again before this
-    // tracker posts anything else.
+    // tracker posts anything else. Unlike `start`'s own 401 (Step 2), a
+    // session was actually lost here, so `loseSession` runs in full.
     case 'unauthenticated':
-      t.counters.session.sessionLostByCause.unauthenticated += 1;
-      t.host.emit({ type: 'sessionLost', cause: 'unauthenticated' });
-      transition(t, 'idle', undefined);
-      maybeEmitTracking(t);
+      loseSession(t, 'unauthenticated');
       nextDelayMs = CONFIG.SAMPLE_MIN_INTERVAL_MS;
       break;
     // The web app has to be opened to clear this - no retry here either.
     case 'passwordChangeRequired':
-      t.counters.session.sessionLostByCause.passwordChangeRequired += 1;
-      t.host.emit({ type: 'sessionLost', cause: 'password_change_required' });
-      transition(t, 'idle', undefined);
-      maybeEmitTracking(t);
+      loseSession(t, 'password_change_required');
       nextDelayMs = CONFIG.SAMPLE_MIN_INTERVAL_MS;
       break;
     // `retryAfterMs` already carries `TRACKER_FLUSH_BACKOFF_BASE_MS`'s floor
@@ -775,9 +903,12 @@ function setLowPower(t: Internal, on: boolean): void {
 // tracker still has on hand) rather than the true reason the visit ended.
 // `visit` is emitted only where the tracker learns something the web app
 // does not already know - a flush's `visitUpdates` entries - which is
-// substep B6's.
+// substep B6's. Section 7.7's reminder is scheduled/cancelled here
+// regardless: a visit entering or leaving the set gets one whether the
+// tracker or the web app learned of it first.
 function visitStarted(t: Internal, visit: VisitSummary): void {
   addPendingVisit(t.visits, visit);
+  scheduleReminder(t, visit);
   if (t.state === 'tracking') {
     recomputeProfile(t);
     maybeEmitTracking(t);
@@ -785,7 +916,10 @@ function visitStarted(t: Internal, visit: VisitSummary): void {
 }
 
 function visitEnded(t: Internal, visitId: number): void {
-  removeVisit(t.visits, visitId);
+  const wasPresent = removeVisit(t.visits, visitId);
+  if (wasPresent) {
+    cancelReminder(t, visitId);
+  }
   if (t.state === 'tracking') {
     recomputeProfile(t);
     maybeEmitTracking(t);
@@ -793,10 +927,7 @@ function visitEnded(t: Internal, visitId: number): void {
 }
 
 function signedOut(t: Internal): void {
-  t.counters.session.sessionLostByCause.cookie += 1;
-  t.host.emit({ type: 'sessionLost', cause: 'cookie' });
-  transition(t, 'idle', undefined);
-  maybeEmitTracking(t);
+  loseSession(t, 'cookie');
 }
 
 function requestState(t: Internal): void {
@@ -805,6 +936,14 @@ function requestState(t: Internal): void {
 
 function snapshotCounters(t: Internal): Counters {
   return t.counters;
+}
+
+// ios/SPEC.md 7.7/decision (a): the tracker has no opinion on this switch -
+// it only mirrors what the shell's `UserDefaults` says, whenever the shell
+// says it changed. Takes effect at the next flush; nothing needs recomputing
+// (the discovered notification is a flush-time decision, not a live state).
+function setDiscoveryNotifications(t: Internal, on: boolean): void {
+  t.discoveryNotifications = on;
 }
 
 export function createTracker(host: Host): Tracker {
@@ -820,5 +959,6 @@ export function createTracker(host: Host): Tracker {
     signedOut: () => signedOut(t),
     requestState: () => requestState(t),
     snapshotCounters: () => snapshotCounters(t),
+    setDiscoveryNotifications: (on) => setDiscoveryNotifications(t, on),
   };
 }
