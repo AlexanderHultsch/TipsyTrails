@@ -976,6 +976,7 @@ describe('admin teleport', () => {
         newBars: [communityBar()],
         visitUpdates: [],
         tooFastToReveal: false,
+        rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
       });
     });
 

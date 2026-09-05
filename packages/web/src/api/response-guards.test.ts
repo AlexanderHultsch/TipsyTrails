@@ -5,6 +5,29 @@ import {
   isSamplesResponse,
   isVisitSummary,
 } from './response-guards.js';
+import type { SamplesResponse } from './types.js';
+
+// `rejected` is REQUIRED on `SamplesResponse` (Section 9.6 states it
+// unconditionally, for both routes that answer with this body), and nothing
+// else in this package would notice if it stopped being. The guard below
+// deliberately does not check it and no screen reads it, so relaxing the
+// interface to `rejected?:` passes every test in the workspace and every
+// `tsc --noEmit` with it - a required field that nothing consumes is a field
+// whose required-ness has no witness.
+//
+// This is that witness, and it is a compile-time one because the property is:
+// `@ts-expect-error` is itself an error (TS2578) when the error it expects
+// does not occur, so the moment the field becomes optional this line fails
+// `pnpm typecheck` instead of passing in silence. It is here rather than in a
+// `it()` because there is nothing to run - the assertion is the assignment.
+// @ts-expect-error - a SamplesResponse missing `rejected` must not typecheck
+const withoutRejected: SamplesResponse = {
+  newCells: 0,
+  newBars: [],
+  visitUpdates: [],
+  tooFastToReveal: false,
+};
+void withoutRejected;
 
 function visit(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -102,17 +125,44 @@ describe('isPendingVisitsResponse', () => {
 });
 
 describe('isSamplesResponse', () => {
-  const ok = { newCells: 0, newBars: [], visitUpdates: [], tooFastToReveal: false };
+  const ok = {
+    newCells: 0,
+    newBars: [],
+    visitUpdates: [],
+    tooFastToReveal: false,
+    rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
+  };
 
-  it('accepts the four-field shape Section 9.6 documents', () => {
+  it('accepts the five-field shape Section 9.6 documents', () => {
     expect(isSamplesResponse(ok)).toBe(true);
     expect(isSamplesResponse({ ...ok, visitUpdates: [visit()] })).toBe(true);
+  });
+
+  // `rejected` arrived in v1.60 and this guard was deliberately not extended
+  // to cover it: the rule is that a response is checked where a wrong shape
+  // would render as data, and no web screen reads the counts (Section 9.6;
+  // `ios/SPEC.md` 9.1 states the same division, and the tracker's own guard
+  // is what checks them). These two cases pin that decision from both sides,
+  // so that "the guard ignores `rejected`" is a tested property rather than
+  // an omission a later reader tidies up.
+  it('accepts a body carrying rejected, and one without it', () => {
+    const withoutRejected: Record<string, unknown> = { ...ok };
+    delete withoutRejected.rejected;
+
+    expect(isSamplesResponse(ok)).toBe(true);
+    expect(isSamplesResponse(withoutRejected)).toBe(true);
+  });
+
+  it('does not look inside rejected', () => {
+    expect(isSamplesResponse({ ...ok, rejected: 'not an object' })).toBe(true);
+    expect(isSamplesResponse({ ...ok, rejected: { accuracy: Number.NaN } })).toBe(true);
   });
 
   it('rejects a missing field rather than reading it as an inert default', () => {
     // Each of these had a `?? []` or an `=== true` behind it in
     // tracking/useSampleTracking.ts, which is what made the drift silent:
     // no visits changed, no fog revealed, nobody moving too fast.
+    // `rejected` is not in this list, and the case above says why.
     for (const field of ['newCells', 'newBars', 'visitUpdates', 'tooFastToReveal'] as const) {
       const body: Record<string, unknown> = { ...ok };
       delete body[field];

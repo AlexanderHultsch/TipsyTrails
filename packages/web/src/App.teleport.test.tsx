@@ -159,6 +159,7 @@ function stubMapFetch(options: MapStubOptions = {}) {
         newBars: [],
         visitUpdates: [],
         tooFastToReveal: false,
+        rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
       });
     }
     if (url === '/api/admin/teleport' && init?.method === 'DELETE') {

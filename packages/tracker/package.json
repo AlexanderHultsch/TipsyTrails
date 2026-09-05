@@ -12,6 +12,7 @@
     "@tipsytrails/shared": "workspace:*"
   },
   "devDependencies": {
+    "@tipsytrails/api": "workspace:*",
     "@types/node": "^26.2.0",
     "vite": "^8.2.1"
   }

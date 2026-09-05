@@ -12,6 +12,7 @@ import { openDatabase } from '../db/index.js';
 import { runMigrations } from '../db/migrate.js';
 import { seedCity } from '../db/seed-city.js';
 import { loadEnv } from '../env.js';
+import type { RejectedSampleCounts } from './fog.js';
 
 const migrationsDir = fileURLToPath(new URL('../../migrations', import.meta.url));
 
@@ -62,6 +63,21 @@ const OUTSIDE_BBOX = { lat: 0, lon: 0 };
 const M_PER_DEG_LAT = 110574;
 function offsetMeters(base: { lat: number; lon: number }, northM: number): { lat: number } {
   return { lat: base.lat + northM / M_PER_DEG_LAT };
+}
+
+// SPEC.md Section 9.6's `rejected`, as an expected value. Every exact-body
+// assertion in this file carries all five counts and most batches here fail
+// no gate at all, so the zeroes are written once and the interesting count
+// is passed in — `rejected({ accuracy: 1 })` reads as "this batch failed the
+// accuracy gate once and no other gate at all", which is exactly the claim
+// each per-gate test below is making.
+//
+// The return type is the API's own `RejectedSampleCounts` rather than a
+// second declaration of the shape: a count added to or renamed on the server
+// must break this file's expectations, and a locally declared twin would let
+// the two drift while every assertion still passed.
+function rejected(overrides: Partial<RejectedSampleCounts> = {}): RejectedSampleCounts {
+  return { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0, ...overrides };
 }
 
 let dbPath: string;
@@ -159,6 +175,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: rejected(),
     });
     expect(body.newCells).toBeGreaterThanOrEqual(9);
     expect(body.newCells).toBeLessThanOrEqual(17);
@@ -180,6 +197,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: true,
+      rejected: rejected(),
     });
   });
 
@@ -253,6 +271,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: true,
+      rejected: rejected(),
     });
   });
 
@@ -299,6 +318,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: rejected({ accuracy: 1 }),
     });
   });
 
@@ -330,6 +350,7 @@ describe('POST /api/samples', () => {
         newBars: [],
         visitUpdates: [],
         tooFastToReveal: false,
+        rejected: rejected({ future: 1 }),
       });
 
       // Not merely absent from the response: nothing was written either.
@@ -434,6 +455,7 @@ describe('POST /api/samples', () => {
           newBars: [],
           visitUpdates: [],
           tooFastToReveal: false,
+          rejected: rejected({ future: 1 }),
         });
       });
     });
@@ -452,6 +474,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: rejected({ outsideCity: 1 }),
     });
   });
 
@@ -472,6 +495,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: rejected({ tooFast: 1 }),
     });
   });
 
@@ -488,6 +512,7 @@ describe('POST /api/samples', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: rejected(),
     });
 
     const fogResponse = await injectWithOrigin({
@@ -497,6 +522,150 @@ describe('POST /api/samples', () => {
     });
     const progress = JSON.parse(fogResponse.headers['x-fog-progress'] as string);
     expect(progress.revealedCells).toBe(firstNewCells);
+  });
+
+  // SPEC.md Section 9.6's `rejected`: one count per gate of Section 7.2, for
+  // the samples of this request only.
+  //
+  // One test per gate, each posting a batch that fails THAT gate and no
+  // other, and each asserting all five counts rather than the one it is
+  // about. Asserting only the count under test would pass on an
+  // implementation that incremented every counter, and asserting only that
+  // "some rejection happened" would pass on one that incremented the wrong
+  // one — which is the single most likely way this feature is wrong, because
+  // the five increments sit on five neighbouring `continue`s that differ by
+  // one identifier.
+  //
+  // The bodies of the gate tests above already carry these counts, since
+  // every exact-body assertion in this file does. These are here all the same
+  // and are deliberately not folded into them: those tests are about what the
+  // gate does to the fog, they would still be worth having if `rejected` did
+  // not exist, and a gate whose fog behaviour is asserted somewhere other
+  // than this file (staleness, in routes/visit-samples.test.ts) would
+  // otherwise have no count asserted here at all.
+  describe('the rejected counts', () => {
+    it('counts a sample refused for accuracy, and nothing else', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ accuracy: CONFIG.FOG_MAX_ACCURACY_M + 1 }),
+      ]);
+
+      expect(response.json().rejected).toEqual(rejected({ accuracy: 1 }));
+    });
+
+    it('counts a future-dated sample as future, and nothing else', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ timestamp: Date.now() + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS + 60_000 }),
+      ]);
+
+      expect(response.json().rejected).toEqual(rejected({ future: 1 }));
+    });
+
+    // The other half of Section 7.2 step 2. `stale` and `future` are separate
+    // counts of one step, and this pair is what tells them apart: the two
+    // fixtures differ only in the sign of the offset, so an implementation
+    // that incremented `stale` where `future` belongs fails exactly one of
+    // them.
+    it('counts a stale sample as stale, and nothing else', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ timestamp: Date.now() - CONFIG.SAMPLE_MAX_AGE_MS - 60_000 }),
+      ]);
+
+      expect(response.json().rejected).toEqual(rejected({ stale: 1 }));
+    });
+
+    it('counts a sample outside the bounding box as outsideCity, and nothing else', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [
+        goodSample({ lat: OUTSIDE_BBOX.lat, lon: OUTSIDE_BBOX.lon }),
+      ]);
+
+      expect(response.json().rejected).toEqual(rejected({ outsideCity: 1 }));
+    });
+
+    // Section 7.2 step 4's teleport guard, which needs a previous accepted
+    // sample to measure against — so the first post seeds it and the second
+    // is the one under test.
+    it('counts a sample refused by the teleport guard as tooFast, and nothing else', async () => {
+      const cookie = await registerUser();
+      const seed = await postSamples(cookie, [goodSample({ timestamp: Date.now() })]);
+      expect(seed.json().rejected).toEqual(rejected());
+
+      const response = await postSamples(cookie, [
+        goodSample({ lat: 49.02, lon: 8.42, timestamp: Date.now() }),
+      ]);
+
+      expect(response.json().rejected).toEqual(rejected({ tooFast: 1 }));
+    });
+
+    // `tooFast` is Section 7.2 step 4's guard and NOT Section 7.3's
+    // reveal-speed gate, and the two are easy to conflate because both are
+    // about speed and one of them is even reported in the same body. A sample
+    // above FOG_MAX_SPEED_KMH is ACCEPTED — it discovers bars and advances
+    // visits — and merely reveals nothing, so it is refused by no gate and
+    // counted nowhere. `tooFastToReveal: true` beside five zeroes is the
+    // whole distinction, and this is the only test that states it.
+    it('does not count a sample refused a reveal for speed as rejected at all', async () => {
+      const cookie = await registerUser();
+
+      const response = await postSamples(cookie, [goodSample({ speed: 10 })]);
+
+      expect(response.json().tooFastToReveal).toBe(true);
+      expect(response.json().rejected).toEqual(rejected());
+    });
+
+    // The counts are a partition of the batch: every sample the request did
+    // not accept is counted exactly once, under exactly one gate. Six
+    // samples, five of them failing one gate each, and the sum is five.
+    //
+    // "One accepted" is not taken on trust from the arithmetic either. The
+    // control user posts the accepted sample alone, and the two reveals match
+    // cell for cell — which they could not if the mixed batch had accepted
+    // the far-away sample too, since that one is 1.4 km away and reveals a
+    // different circle.
+    it('counts every refused sample of a mixed batch exactly once', async () => {
+      const cookie = await registerUser();
+      const controlCookie = await registerUser('control');
+      const now = Date.now();
+
+      // Ordering within a batch is by client timestamp (Section 7.2 step 2),
+      // so these are written in the order the loop will see them: the
+      // accepted sample first among the ones that matter, because the
+      // teleport guard needs it to measure the jump against.
+      const accepted = goodSample({ timestamp: now - 5_000 });
+      const samples = [
+        goodSample({ timestamp: now - CONFIG.SAMPLE_MAX_AGE_MS - 60_000 }),
+        accepted,
+        // 1.4 km from the Schloss, one millisecond later.
+        goodSample({ lat: 49.02, lon: 8.42, timestamp: now - 4_999 }),
+        goodSample({ accuracy: CONFIG.FOG_MAX_ACCURACY_M + 1, timestamp: now - 4_000 }),
+        goodSample({ lat: OUTSIDE_BBOX.lat, lon: OUTSIDE_BBOX.lon, timestamp: now - 3_000 }),
+        goodSample({ timestamp: now + CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS + 60_000 }),
+      ];
+
+      const response = await postSamples(cookie, samples);
+      const body = response.json();
+
+      expect(body.rejected).toEqual({
+        accuracy: 1,
+        future: 1,
+        stale: 1,
+        outsideCity: 1,
+        tooFast: 1,
+      });
+      const counts: number[] = Object.values(body.rejected);
+      expect(counts.reduce((sum, count) => sum + count, 0)).toBe(samples.length - 1);
+
+      const control = await postSamples(controlCookie, [accepted]);
+      expect(control.json().newCells).toBeGreaterThan(0);
+      expect(body.newCells).toBe(control.json().newCells);
+    });
   });
 
   it('caps a batch over SAMPLE_MAX_BATCH with a 400', async () => {

@@ -28,7 +28,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.59                                                       |
+| Spec version          | 1.60                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
@@ -47,16 +47,19 @@ pnpm format:check
 pnpm test
 ```
 
-`pnpm install` runs a `prepare` hook that builds `packages/shared`. Do not
-remove it: `packages/api` and `packages/web` import `@tipsytrails/shared`,
-which resolves to a gitignored `dist`. Without the hook a fresh clone
-silently runs a subset of the api package's tests while still printing a
-passing summary. `pnpm test` and `pnpm typecheck` also each carry their own
-`pretest`/`pretypecheck` rebuild of `packages/shared` (SPEC.md v1.6
-changelog) — `prepare` covers a fresh clone, the two `pre*` hooks cover an
-edit mid-session. Running a single package's tests directly
-(`pnpm --filter @tipsytrails/api test`) still bypasses both and can read a
-stale `dist`; that gap is accepted, not missed.
+`pnpm install` runs a `prepare` hook that builds `packages/shared` and then
+`packages/api`. Do not remove either: `packages/api` and `packages/web`
+import `@tipsytrails/shared`, and since v1.60 `packages/api` is itself
+imported by name — `packages/tracker` declares it for `ios/SPEC.md` 13.2's
+replay harness — each through a gitignored `dist`. Without the hook a
+fresh clone silently runs a subset of the api package's tests while still
+printing a passing summary. `pnpm test` and `pnpm typecheck` also each carry
+their own `pretest`/`pretypecheck` rebuild of the same two (SPEC.md v1.6 and
+v1.60 changelogs) — `prepare` covers a fresh clone, the two `pre*` hooks
+cover an edit mid-session. The order matters and is `shared` then `api`,
+because building `api` reads `shared`'s `dist`. Running a single package's
+tests directly (`pnpm --filter @tipsytrails/api test`) still bypasses both
+and can read a stale `dist`; that gap is accepted, not missed.
 
 ---
 

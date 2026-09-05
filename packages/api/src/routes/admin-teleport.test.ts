@@ -436,9 +436,59 @@ describe('POST /api/admin/teleport — the move itself', () => {
     expect(Object.keys(response.json()).sort()).toEqual([
       'newBars',
       'newCells',
+      'rejected',
       'tooFastToReveal',
       'visitUpdates',
     ]);
+  });
+
+  // SPEC.md Section 9.6's `rejected` on this route, and the whole of what it
+  // can ever say here: nothing. All five counts are structurally zero for a
+  // teleport, not merely zero for this fixture, and each for its own reason —
+  //
+  //   accuracy    `TELEPORT_FIX.accuracy` is 0, which no threshold rejects;
+  //   future      the sample's `timestamp` IS the `nowMs` the gate compares
+  //               it against, so the skew is exactly 0;
+  //   stale       the same identity, from the other side;
+  //   outsideCity the route rejects an out-of-box point with a 422 before
+  //               `processSampleBatch` is called at all, so a request that
+  //               reaches the pipeline has already passed this gate;
+  //   tooFast     `skipSpeedGuards: true` — the gate does not run.
+  //
+  // Section 9.6's row for this route says all five, and it says so because of
+  // the five reasons above rather than because a test once saw zeroes: the
+  // point of asserting them here is that a change to any of those five
+  // reasons — a non-zero teleport accuracy, a timestamp taken from anywhere
+  // but the pipeline's own clock, the 422 moved below the call, the guards
+  // switched back on — fails this test rather than quietly making a
+  // specification sentence untrue.
+  it('answers with all five rejection counts at zero', async () => {
+    const cookie = await registerExcludedAdmin('boss');
+
+    const response = await teleport(cookie, SCHLOSS);
+
+    expect(response.json().rejected).toEqual({
+      accuracy: 0,
+      future: 0,
+      stale: 0,
+      outsideCity: 0,
+      tooFast: 0,
+    });
+  });
+
+  // The teleport's own bypass, seen through the counts: a jump that WOULD be
+  // refused as `tooFast` on the public path is accepted here and counted
+  // nowhere. The control for it is `still refuses the identical jump when it
+  // arrives as a sample batch` below, which asserts the same movement is
+  // refused for an ordinary caller.
+  it('counts nothing as tooFast for a jump the public path would refuse', async () => {
+    const cookie = await registerExcludedAdmin('boss');
+
+    await teleport(cookie, SCHLOSS);
+    const second = await teleport(cookie, FAR_POINT);
+
+    expect(second.json().newCells).toBeGreaterThan(0);
+    expect(second.json().rejected.tooFast).toBe(0);
   });
 
   it('rejects a body that is not a lat/lon pair', async () => {

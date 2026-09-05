@@ -128,6 +128,19 @@ export function isPendingVisitsResponse(value: unknown): value is PendingVisitsR
 // bar list, and a malformed bar fails visibly where it is drawn rather than
 // silently. The array-ness itself is checked because `.length` and `.some()`
 // are read off it directly.
+//
+// `rejected` IS NOT CHECKED, AND MUST NOT BE - this is not an oversight to
+// "complete". The rule stated above and in O18 is that a response is
+// validated only where a wrong shape would render as data, and no web screen
+// reads `rejected`: it exists for the iPhone app's tracker, which validates
+// it in its own guard because it is the party that acts on it (`ios/SPEC.md`
+// 9.1 says so in as many words). Adding a check here would buy the web app
+// nothing and cost it the thing this file is most exposed to - a client
+// cached at one version talking to an API at another (Section 4.1's service
+// worker) - by turning a field no screen reads into a reason to reject a
+// whole response every screen does read. `types.ts` declares it all the same,
+// because that file mirrors Section 9.6's table rather than this file's
+// checks; the two lists are deliberately different lengths.
 export function isSamplesResponse(value: unknown): value is SamplesResponse {
   return (
     isObject(value) &&

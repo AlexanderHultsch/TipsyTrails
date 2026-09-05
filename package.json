@@ -7,14 +7,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "prepare": "pnpm --filter @tipsytrails/shared build",
+    "prepare": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build",
     "build": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/tracker build && pnpm --filter @tipsytrails/api build && pnpm --filter @tipsytrails/web build",
-    "pretypecheck": "pnpm --filter @tipsytrails/shared build",
+    "pretypecheck": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "pretest": "pnpm --filter @tipsytrails/shared build",
+    "pretest": "pnpm --filter @tipsytrails/shared build && pnpm --filter @tipsytrails/api build",
     "test": "pnpm -r --if-present test"
   },
   "devDependencies": {

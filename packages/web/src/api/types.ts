@@ -40,6 +40,27 @@ export interface SamplesResponse {
   // second implementation of the same rule, free to disagree with the one
   // that actually decides.
   tooFastToReveal: boolean;
+  // Section 9.6: one count per gate of Section 7.2, in that section's order
+  // and naming, for the samples of this request only. Required and not
+  // optional, because Section 9.6 states it unconditionally for both routes
+  // that answer with this body and this interface is that table's mirror -
+  // an optional field here would describe a server that may omit it, and
+  // there is none.
+  //
+  // No web screen reads it, and that is deliberate rather than an omission:
+  // the field exists for the iPhone app's tracker, which posts from a pocket
+  // with no screen to show a failure on and has to be able to tell "the
+  // phone sent nothing" from "the phone sent it and the server refused it"
+  // (`ios/SPEC.md` 9.1). In the browser the same distinction is visible -
+  // the map is on screen while the samples are posted. Hence also the
+  // absence of a check for it in response-guards.ts, which says why there.
+  rejected: {
+    accuracy: number;
+    future: number;
+    stale: number;
+    outsideCity: number;
+    tooFast: number;
+  };
 }
 
 // The closed vocabularies the bar and visit shapes below carry, mirroring

@@ -172,11 +172,17 @@ function jsonResponse(status: number, body: unknown) {
   } as unknown as Response;
 }
 
-// POST /api/samples answers all four fields of Section 9.6's shape on every
-// request, and since api/response-guards.ts the client checks that it did. A
+// POST /api/samples answers all five fields of Section 9.6's shape on every
+// request, and since api/response-guards.ts the client checks four of them. A
 // fixture naming only the field a case is about is therefore not a smaller
 // response, it is one the server cannot send - so this fills in the rest at
 // their inert values rather than each test restating them.
+//
+// `rejected` is the fifth, added in v1.60, and it is filled in here for the
+// same reason as the other four even though the guard does not check it and
+// no screen reads it: this helper stands for what the server sends, not for
+// what the client happens to look at. A fixture that omits it would be a
+// standing invitation to conclude that the server may omit it too.
 //
 // The field *names* are typed against SamplesResponse and their values are
 // not: these are wire bodies, and several cases here deliberately send one
@@ -187,6 +193,7 @@ function samplesResponse(fields: Partial<Record<keyof SamplesResponse, unknown>>
     newBars: [],
     visitUpdates: [],
     tooFastToReveal: false,
+    rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
     ...fields,
   });
 }
