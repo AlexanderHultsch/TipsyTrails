@@ -1,6 +1,6 @@
 # Tipsy Trails — Technical Specification
 
-**Version:** 1.58
+**Version:** 1.59
 **Status:** Built and deployed; see _Status_ at the end of this front matter
 **Repository:** https://github.com/AlexanderHultsch/TipsyTrails
 **Target host:** Raspberry Pi 4 Model B (4 GB), Raspberry Pi OS Lite 64-bit, Docker
@@ -10,7 +10,7 @@
 
 ## What this is
 
-Tipsy Trails is a location-based exploration game for Karlsruhe, Germany, played in a mobile browser. The whole city starts under fog, and the only way to clear it is to physically walk: every position sample the app accepts uncovers the ground around you, permanently. Bars stay hidden until you come within 100 m of one. A bar is _mastered_ by checking in at it and still being there twenty minutes later. Progress is scored as percentage of the city explored and bars mastered, and each week, month and year the best player on each of those two metrics takes a badge.
+Tipsy Trails is a location-based exploration game for Karlsruhe, Germany, played in a mobile browser, or in the iPhone app of `ios/SPEC.md`. The whole city starts under fog, and the only way to clear it is to physically walk: every position sample the app accepts uncovers the ground around you, permanently. Bars stay hidden until you come within 100 m of one. A bar is _mastered_ by checking in at it and still being there twenty minutes later. Progress is scored as percentage of the city explored and bars mastered, and each week, month and year the best player on each of those two metrics takes a badge.
 
 **The loop, in six parts**
 
@@ -123,7 +123,7 @@ Progress is measured as **percentage of area explored** (per district and city-w
 | Containerization | Docker Compose | Matches existing Pi setup |
 | Public access | Cloudflare Tunnel (`cloudflared`) | Existing infrastructure |
 
-**Explicitly excluded:** PostgreSQL/PostGIS, Redis, any ORM, server-side rendering, native app wrappers, email sending.
+**Explicitly excluded:** PostgreSQL/PostGIS, Redis, any ORM, server-side rendering, email sending. The iPhone app is specified separately, in `ios/SPEC.md`, and it is a shell around this same web app, not a native rewrite of it; the exclusion this row used to state as "native app wrappers" now stands as three narrower ones — no native rewrite of the game, no cross-platform framework (Capacitor, React Native, Flutter), no background-location SDK — each weighed and rejected in `ios/SPEC.md` Section 2.2.
 
 **There is no PWA build plugin, and that is not an omission.** The service worker is `packages/web/public/sw.js`, written by hand and shipped as a static asset; Section 4.1 says why there is exactly one of them and what it may never intercept. The point here is only that a rebuilder must not reach for `vite-plugin-pwa` or Workbox. This row named `vite-plugin-pwa` from v1.1 until v1.34 and was never true of the built system.
 
@@ -141,6 +141,8 @@ Progress is measured as **percentage of area explored** (per district and city-w
 | `api` | devDependencies | `@types/better-sqlite3` ^9.6.0, `@types/node` ^26.2.0, `@types/web-push` ^3.6.4 |
 | `web` | dependencies | `@tipsytrails/shared` `workspace:*`, `maplibre-gl` ^4.7.1, `pmtiles` ^4.4.1, `react` ^18.3.1, `react-dom` ^18.3.1, `react-router-dom` ^7.18.2 |
 | `web` | devDependencies | `@types/node` ^26.2.0, `@types/react` ^18.3.31, `@types/react-dom` ^18.3.7, `@vitejs/plugin-react` ^6.0.5, `jsdom` ^30.0.1, `vite` ^8.2.1 |
+| `tracker` | dependencies | `@tipsytrails/shared` `workspace:*` — bundled into the IIFE, so at runtime the tracker has none (`ios/SPEC.md` 3) |
+| `tracker` | devDependencies | `@tipsytrails/api` `workspace:*` (the replay harness only, `ios/SPEC.md` 13.2), `@types/node`, `vite` — the same major versions `packages/web` carries |
 
 Two rows of that table are traps, and each has a wrong answer that looks right.
 
@@ -153,7 +155,7 @@ Two rows of that table are traps, and each has a wrong answer that looks right.
 
 | Command | Does |
 |---|---|
-| `pnpm build` | Builds `shared`, then `api`, then `web`, in that order |
+| `pnpm build` | Builds `shared`, then `tracker`, then `api`, then `web`, in that order (`ios/SPEC.md` 3) |
 | `pnpm typecheck` | `tsc --noEmit` in every package, after a `pretypecheck` build of `shared` |
 | `pnpm lint` | `eslint .` across the workspace |
 | `pnpm format:check` | `prettier --check .` — note that `SPEC.md` and `README.md` are in `.prettierignore` and are **not** checked |
@@ -243,9 +245,11 @@ TipsyTrails/
 ├── DATA-LICENSE                  # ODbL notice for OSM-derived artefacts
 ├── CONTRIBUTING.md
 ├── CLAUDE.md                     # agent guardrails, see Section 0
+├── ios/                          # the iPhone companion; ios/SPEC.md is its own spec, ios/SPEC.md 4.2 the full tree
 ├── caddy/Caddyfile               # standalone two-container path only
 ├── packages/
 │   ├── shared/                   # types + config constants, imported by both sides
+│   ├── tracker/                  # the phone's tracker, built as one IIFE for the app's JSContext, see ios/SPEC.md 4.2
 │   ├── api/
 │   │   ├── src/
 │   │   ├── migrations/
@@ -568,11 +572,14 @@ CREATE TABLE users (
   excluded_from_rankings INTEGER NOT NULL DEFAULT 0,  -- out of the leaderboard and the badge race, see 7.7/7.8
   age_confirmed_at     INTEGER NOT NULL,
   created_at           INTEGER NOT NULL,
-  last_seen_at         INTEGER
+  last_seen_at         INTEGER,
+  background_tracking_consented_at INTEGER  -- iPhone app only, ios/SPEC.md 9.2; NULL until consented, NULL again on withdrawal
 );
 ```
 
 No email address is collected. Username constraints: 3–20 characters, `[a-zA-Z0-9_-]`, case-insensitively unique.
+
+**`background_tracking_consented_at` exists for a client this app does not otherwise have.** Added by migration, defaulting to `NULL` so no existing account and no new registration consents by default, it records when a player last gave the separate consent the iPhone app's background tracking needs (`ios/SPEC.md` 10.1) — the record Article 7(1) GDPR wants a controller to be able to produce. `PATCH /api/settings` (Section 9.2) is the one route that writes it, `true` re-stamping the server's current second and `false` clearing it back to `NULL`; nothing in this browser-only server ever writes it on its own, and nothing here reads it either — the column exists to be read by the iPhone shell at start (`ios/SPEC.md` 5.4, 7.3), and it is deleted with the account like every other column here (Section 10.6).
 
 **`excluded_from_rankings` takes an account out of the competition without taking it out of the game.** Added by migration `003_users_excluded_from_rankings.sql`, defaulting to "not excluded" so no existing account and no new registration is ever silently removed from the running — setting it is a deliberate act through `PATCH /api/admin/users/:id` (Section 9.3).
 
@@ -905,6 +912,19 @@ export const CONFIG = {
   MAP_DEFAULT_ZOOM: 16,           // opening view AND "to my location" — see 8.3
   MAP_FIT_PADDING_PX: 24,         // margin when "Open on the map" fits a district's box — see 8.3
 
+  // ios/SPEC.md Section 7 — the tracker. Every number the Swift shell uses
+  // reaches it from here through the tracker (ios/SPEC.md I1); Swift holds
+  // none of its own.
+  TRACKER_DESIRED_ACCURACY_M: 10,            // Core Location's "nearest ten metres"; ios/SPEC.md 6.3
+  TRACKER_FOREGROUND_DISTANCE_FILTER_M: 0,   // 0 = every fix; the map is on screen — ios/SPEC.md 7.3
+  TRACKER_WALKING_DISTANCE_FILTER_M: 25,     // half a cell; a fix every 25 m of movement in the background
+  TRACKER_DWELLING_DISTANCE_FILTER_M: 0,     // every fix while a visit is pending at a bar the player is near
+  TRACKER_QUEUE_CAP: 600,                    // oldest dropped beyond this; ~10 min of foreground fixes — ios/SPEC.md 7.4
+  TRACKER_FLUSH_BACKOFF_BASE_MS: 5 * 1000,   // after a failed flush; doubles — ios/SPEC.md 7.4
+  TRACKER_FLUSH_BACKOFF_MAX_MS: 5 * 60 * 1000,
+  TRACKER_RESTART_MIN_INTERVAL_MS: 60 * 1000, // a crashed context is not restarted sooner — ios/SPEC.md 4.4
+  TRACKER_DIAGNOSTIC_DAYS: 7,                // daily counter buckets kept on the device — ios/SPEC.md 7.8
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json',  // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;
@@ -937,7 +957,7 @@ export const SERVER_CONFIG = {
 
 The client obtains positions via `navigator.geolocation.watchPosition({ enableHighAccuracy: true })` while the app is in the foreground, and holds a Screen Wake Lock while an active exploration session is running.
 
-**The app cannot receive positions in the background.** This is a browser platform limitation, not a design choice, and the UI must communicate it plainly (Section 8.6).
+**The web app cannot receive positions in the background.** This is a browser platform limitation, not a design choice, and the UI must communicate it plainly (Section 8.6). The iPhone app can, through a native location session, and `ios/SPEC.md` Section 6 is the authority on what that can and cannot do. Its samples pass every gate below unchanged.
 
 Samples are batched client-side and posted at most every 10 seconds, at most `SAMPLE_MAX_BATCH` per request. Each sample carries `{ lat, lon, accuracy, speed, timestamp }`.
 
@@ -1174,7 +1194,7 @@ What that leaves is a screen posting no samples at all — permission refused, o
 
 Opening the confirmation therefore scrolls its buttons into view rather than trusting them to be on screen, and the banner is capped at the row's height so that it keeps a visible bottom edge instead of appearing to end mid-sentence. A control below a clip the player cannot see is indistinguishable from a control that does not work.
 
-**Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — it would require either background tracking (impossible, Section 7.2) or punishing users whose phone slept. Revisit only if abuse is observed.
+**Accepted trade-off.** A player who checks in, leaves, and returns 20 minutes later completes the visit without having stayed. This is inherent to a two-sample model and is accepted: the mechanic is a social prompt, not an audit. Do not add continuous-presence enforcement in v1 — the iPhone app can now supply the samples (`ios/SPEC.md` 7.6), and this trade-off is kept as a decision rather than a limitation: a visit still completes on two samples and is never enforced by presence. Revisit only if abuse is observed.
 
 **Transparency requirements — these are product requirements, not suggestions.** The mechanic must be legible at every moment:
 - An active pending visit is shown persistently at the top of the screen: bar name, confirmed time, remaining time. **The confirmed figure is the server's `confirmed_s` for that visit** — the elapsed time between check-in and the most recent accepted on-site sample, as Section 5.7 defines it — and the remaining time is derived from it as `VISIT_REQUIRED_S - confirmed_s`, floored at zero.
@@ -1185,7 +1205,7 @@ Opening the confirmation therefore scrolls its buttons into view rather than tru
 
   What it must not do is advance between samples, or advance at all once the player is out of range. The last confirmed value is where it stops, and it stays there until either a new on-site sample moves it or the visit ends. A frozen banner while the player is standing in the bar is the same defect in the other direction, and a client-side timer is not the way to avoid it — the fix is to reflect the server's figure as it changes, not to interpolate between the values the server has actually confirmed.
 - Explicit wording of what is needed, matching the state the visit is actually in. On site: *"Open Tipsy Trails again while you're still here to complete this visit."* Away from the bar, the instruction is the opposite one — return to the bar and open the app there to finish — and the on-site wording is replaced by it rather than shown alongside it. A banner that says a player has moved away and, directly beneath, tells them to stay where they are is not guidance; it is two sentences that cannot both be true.
-- A Web Push notification at `VISIT_PUSH_AFTER_MS`, dispatched by the maintenance job (Section 7.9) and recorded in `push_sent_at` so it fires at most once per visit, and only while the visit is still `pending`.
+- A Web Push notification at `VISIT_PUSH_AFTER_MS`, dispatched by the maintenance job (Section 7.9) and recorded in `push_sent_at` so it fires at most once per visit, and only while the visit is still `pending`. In the iPhone app this reminder is a local notification (`ios/SPEC.md` 7.7); no push subscription is made there.
 - If a sample arrives out of range, show *"You've moved away from {bar} — your visit is still pending"* rather than silently failing, and switch that visit's guidance to the return-to-finish wording of the bullet above.
 - A short "How mastering works" explainer is reachable from the More sheet (Section 8.4) and shown once after the first check-in. "Shown once" is client-side state in `localStorage`; no server column for it.
 
@@ -1535,7 +1555,7 @@ Three icons on the map screen, always visible: GPS, connection, and tracking. **
 - **GPS:** three states derived from the last accepted sample's accuracy — good (≤ `GPS_ACCURACY_GOOD_M`), fair (≤ `GPS_ACCURACY_FAIR_M`), poor (worse, or no fix for `GPS_STALE_MS`).
 - **Connection:** online / offline / syncing, based on `navigator.onLine` plus how far behind this device is on sending. Offline is `!navigator.onLine` and outranks everything else — a device with no connection is not behind on sending, it is unable to send.
   **Syncing means samples have missed a send cycle**, not that a request is in flight. A sample counts once it was already queued when a flush attempt began and is still queued after it, which is either a POST that failed and left it for the next try, or a sample that did not fit in `SAMPLE_MAX_BATCH` and was passed over by the cycle that should have carried it. Everything else is online, including a queue that is filling and draining normally.
-- **Foreground tracking:** whether position tracking is currently running, with a plain-language note that tracking pauses when the app is not in the foreground.
+- **Tracking:** whether position tracking is currently running. In the web app this is two states, with a plain-language note that tracking pauses when the app is not in the foreground — true of the browser and of nothing else. In the iPhone app the same icon carries four states instead, drawn from the shell's own tracking event rather than from anything the browser can observe (`ios/SPEC.md` 8.3): **on in the background** (ok), **on while open only** (degraded — When In Use rather than Always, or consent not given, the panel's words saying which and offering the way to grant it), **blocked** (bad — reduced accuracy, denied, or Location Services off, the reason in words), and **idle** (bad — not signed in). The shape is the one this section fixes for every state on every platform; only the words in the panel and the number of states differ by where the app is running.
 
 Tapping the indicator opens the same short explanation of each state as before. That explanation is where the words live, so an icon-only indicator is still readable by someone who does not know what a colour means. It also carries the one number the player can act on: how many samples are still on this device, which is **every** unsent sample and not only the ones behind — "how much of my walk has not left this phone" is the question a player asks, and it is the same count whether the state is syncing or offline.
 
@@ -1590,7 +1610,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/health` | `{"status":"ok"}` — unauthenticated, used by Phase 0 and by Docker's healthcheck |
 | GET | `/api/city` | Active city metadata + grid parameters |
 | GET | `/api/fog` | Raw fog mask (`application/octet-stream`) + per-district revealed counts; Caddy applies the transport encoding |
-| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates, tooFastToReveal }`. `tooFastToReveal` is a boolean and reports the *last accepted sample* of the batch (Section 7.3). `newBars` carries the same bar shape the two routes below do, `mastered` included (Section 5.7) |
+| POST | `/api/samples` | `{ samples: Sample[] }` → `{ newCells, newBars, visitUpdates, tooFastToReveal, rejected }`. `tooFastToReveal` is a boolean and reports the *last accepted sample* of the batch (Section 7.3). `newBars` carries the same bar shape the two routes below do, `mastered` included (Section 5.7). `rejected` is one count per gate of Section 7.2, for this request's own samples only — a shape the iPhone app's tracker reads and no web screen does (`ios/SPEC.md` 9.1) |
 | GET | `/api/bars` | Discovered bars only. Each carries `mastered` for the calling user (Section 5.7) |
 | GET | `/api/bars/:id` | Bar detail, `mastered` included (Section 5.7) — see 9.5 |
 | POST | `/api/bars/suggest` | `{ name, address, lat, lon }` |
@@ -1600,7 +1620,7 @@ REST, JSON, session cookie auth. All endpoints under `/api`, except the tile rou
 | GET | `/api/progress` | City + per-district progress, bars discovered and bars mastered: `{ city: { revealedCells, playableCells, percent, barsDiscovered, barsMastered }, districts: [{ id, name, revealedCells, playableCells, percent }] }`. The two counts are Section 7.6's city-wide figures for the calling user, computed as two aggregates in one statement and never as rows — this route exists so the start screen (8.3) does not fetch `GET /api/bars` to count two integers. The per-district mastered count of 7.6 is still not returned |
 | GET | `/api/leaderboard` | `?metric=area\|bars&period=all\|week\|month&page=` |
 | GET | `/api/profile/:handle` | Public profile + badges — see 9.5 |
-| PATCH | `/api/settings` | `{ isAnonymous }` |
+| PATCH | `/api/settings` | `{ isAnonymous?, backgroundTracking? }` — a partial body, at least one key required; an omitted key means unchanged and `{}` is a 400. `backgroundTracking` is the iPhone app's consent flag (Section 5.3; `ios/SPEC.md` 9.2), and this is the widening that made the body partial: the route took only `{ isAnonymous }`, required, until this second, independent setting needed a body that could name one key without asserting a value for the other |
 | DELETE | `/api/account` | `{ password }` required; hard delete, cascades everywhere |
 | GET | `/api/push/vapid-public-key` | `{ publicKey: string \| null }` — `null` when push is not configured |
 | POST | `/api/push/subscribe` | Web Push subscription |
@@ -1734,11 +1754,12 @@ acknowledgements, written inline at their call sites in `api/client.ts`, and the
 `api/geo-types.ts`. That file is the client's mirror of what the API sends; the two are
 kept in step by hand, and a rebuilder should generate both from this table rather than from either
 side alone. Timestamps are epoch **seconds** (Section 0, rule 6). `discoveredAt`, `createdAt`,
-`awardedAt`, `startedAt`, `lastSampleAt` and `lastSeenAt` are all absolute; `confirmedS` and
-`remainingS` are durations.
+`awardedAt`, `startedAt`, `lastSampleAt`, `lastSeenAt` and `backgroundTrackingConsentedAt` are all
+absolute; `confirmedS` and `remainingS` are durations.
 
 ```ts
-User          { id, username, avatarSeed, isAdmin, isAnonymous, mustChangePassword }
+User          { id, username, avatarSeed, isAdmin, isAnonymous, mustChangePassword,
+                backgroundTrackingConsentedAt: number|null }
 Bar           { id, districtId: number|null, name, address: string|null, lat, lon,
                 source: 'osm'|'community'|'admin', discoveredAt, mastered: boolean }
 VisitSummary  { id, barId, barName, startedAt, lastSampleAt, onsiteSamples,
@@ -1763,7 +1784,7 @@ FogProgress   { revealedCells, playableCells, districts: { id, revealedCells }[]
 | `GET /api/auth/reset/question` | `{ question: string }` |
 | `GET /api/city` | `CityMeta` |
 | `GET /api/fog` | Binary mask plus `FogProgress` — see the wire-format note below |
-| `POST /api/samples` | `{ newCells: number, newBars: Bar[], visitUpdates: VisitSummary[], tooFastToReveal: boolean }` — `visitUpdates` holds every visit the request changed, and since v1.51 that is three of `VisitSummary`'s four statuses: `pending`, `completed` and `expired` (Section 7.5 step 5's sweep). No field was added; what changed is which entries the list can hold, which is a change of shape all the same — a client that only knew the first two would put an ended visit back into its banner. `cancelled` never appears: only the cancel endpoint writes it |
+| `POST /api/samples` | `{ newCells: number, newBars: Bar[], visitUpdates: VisitSummary[], tooFastToReveal: boolean, rejected: { accuracy: number, future: number, stale: number, outsideCity: number, tooFast: number } }` — `visitUpdates` holds every visit the request changed, and since v1.51 that is three of `VisitSummary`'s four statuses: `pending`, `completed` and `expired` (Section 7.5 step 5's sweep). No field was added; what changed is which entries the list can hold, which is a change of shape all the same — a client that only knew the first two would put an ended visit back into its banner. `cancelled` never appears: only the cancel endpoint writes it. `rejected` is one count per gate of Section 7.2, for this request's own samples only (`ios/SPEC.md` 9.1); the web client's response guard does not check it, because no web screen reads it |
 | `GET /api/bars` | `{ bars: Bar[] }` |
 | `GET /api/bars/:id` | `Bar` |
 | `POST /api/bars/suggest` | `Bar`, 201 |
@@ -1782,7 +1803,7 @@ FogProgress   { revealedCells, playableCells, districts: { id, revealedCells }[]
 | `DELETE /api/admin/bars/:id` | `{ ok: true }` |
 | `GET /api/admin/users` | `{ users: AdminUser[] }` where `AdminUser` is `{ id, username, isAdmin, isAnonymous, mustChangePassword, excludedFromRankings, createdAt, lastSeenAt: number\|null, areaRevealedCells, areaPercent, barsMastered, badgeCount }` |
 | `PATCH /api/admin/users/:id` | `AdminUser` — the same shape the list above holds, so the admin screen can put it straight back into its list (Section 9.3) |
-| `POST /api/admin/teleport` | Exactly `POST /api/samples`'s body, deliberately — the admin screen renders what happened with the fields the map already understands |
+| `POST /api/admin/teleport` | Exactly `POST /api/samples`'s body, deliberately — the admin screen renders what happened with the fields the map already understands. It therefore carries `rejected` too, with `tooFast` always zero, because the teleport's own speed gate is off (Section 9.3) |
 | `GET /api/admin/teleport` | `{ position: { lat, lon } \| null }` — an object with a nullable field, not a bare `null` body, so there is one shape to parse either way |
 | `DELETE /api/admin/teleport` | `{ ok: true }` |
 
@@ -1866,7 +1887,9 @@ Raw positions are **never persisted**. Samples are processed in memory to derive
 
 The admin teleport's own state (Section 9.3) is the second position this server holds and is held the same way: in memory, keyed by user id, discarded on restart. A synthetic position is a position, so C4 covers it exactly as it covers a real one — there is no table, no column and no migration for it, and the survival it does have across a reload comes from being the server's rather than from being stored.
 
-Stored per user: username, hashes, avatar seed, fog bitmask, per-day reveal counts, discovered bar IDs, visit records (bar + timestamps), badges, push subscription. Nothing else.
+Stored per user: username, hashes, avatar seed, fog bitmask, per-day reveal counts, discovered bar IDs, visit records (bar + timestamps), badges, push subscription, the iPhone app's background-tracking consent timestamp. Nothing else.
+
+The iPhone app carries the same rule further than the browser can: it holds no position on the device at all, not the queue, not the last fix, not a diagnostic breadcrumb (`ios/SPEC.md` I2). What it stores locally is a consent preference, a notification preference and the diagnostic counters of `ios/SPEC.md` 7.8, none of which is a position.
 
 The per-day reveal counts (Section 5.5) record *how much* was revealed on a day, never *where*, and are therefore consistent with C4. State this in the privacy page.
 
@@ -1879,10 +1902,12 @@ A short, project-specific privacy page at `/privacy`, in English, covering: what
 Three things this page must get right, because each is a claim of *absence* and nothing forces a claim of absence to be re-checked when the code beneath it changes:
 
 - **OpenStreetMap is the source the map data came from, not a service the app talks to.** Tiles are served by this app's own `/tiles/*` route; the browser never contacts OSM.
-- **Two outside services do see live traffic and must be named**: Cloudflare, which tunnels every request including position samples (C1, Section 4), and the browser vendor's own push service — Google, Apple or Mozilla depending on the browser — which carries the subscription and each reminder when push is on.
+- **Two outside services do see live traffic and must be named**: Cloudflare, which tunnels every request including position samples (C1, Section 4), and, **in the browser only**, the browser vendor's own push service — Google, Apple or Mozilla depending on the browser — which carries the subscription and each reminder when push is on. The iPhone app's own reminders name no such service, because it uses none (below).
 - **Deletion is immediate in the database but not in backups.** C7's existing Pi backup job means a routine backup can still hold a copy until it cycles out; say so rather than claiming unqualified immediate removal.
 
 The per-day reveal counters feed both the badge job (7.7) and the leaderboard's week/month filters (7.8); the page says both.
+
+**The iPhone app.** Rendered on the same page, everywhere it renders, because the policy is one document and not one per client. It states: that the app can collect location while closed, and only after the separate, in-app consent `ios/SPEC.md` 10.1 describes; that its samples are processed exactly as the browser's and stored exactly as little (10.2); that the app schedules its own notifications on the device and uses no push service, so no outside party carries them — which is what the bullet above corrects for, and which remains true of the browser as it stands; that the app stores on the device only the consent preference, the notification preference and the diagnostic counters of `ios/SPEC.md` 7.8, none of which is a position; that the consent timestamp is stored on the account and deleted with it (10.6); and that the diagnostic report, if the player shares one, holds counts and no coordinates. The Article 13 items already on this page — retention, the anonymity setting, deletion, the backup caveat — are unchanged and cover the app as they cover the browser.
 
 ### 10.4 Age gate
 
@@ -2153,6 +2178,20 @@ PWA manifest and install prompt, offline shell, privacy page, performance pass, 
 - [x] Every network failure produces a user-facing message, never a silent failure — the same centralized network-error path (`packages/web/src/api/client.ts`) is exercised failing at three independent call sites: login (`packages/web/src/App.test.tsx`, `shows a message rather than failing silently on a network failure during login`), the city boundary fetch (`packages/web/src/App.test.tsx`, `shows a message rather than an empty screen when the city boundary fetch fails`), and the district overview fetch (`packages/web/src/App.privacy.test.tsx`, describe `network failures surface a message`)
 - [ ] Total container memory under load < 400 MB — needs the Pi under load. No image has ever been built in this environment; the Pi has built and run one (`HANDOVER.md` Section 2 item 4), but nothing has measured it, idle or under load
 
+### Phase 9 — iOS companion
+
+A native Swift shell and `packages/tracker`, a TypeScript package that gives the game background location on iPhone: the tracker's state machine, queue, flush, visits and notifications; the server's two small additions; the web app's second driver for its tracking hook; a replay harness that proves the whole pipeline against the real API; and the Swift shell itself. Specified in full in `ios/SPEC.md`, which this phase's Definition of Done points to rather than repeats.
+
+**Definition of Done**
+
+- [ ] Step A — the amendments this phase itself is, `packages/tracker`'s scaffold, and the constants of `ios/SPEC.md` 7.1 in `config.ts` — Definition of Done in `ios/SPEC.md` Section 12, Step A
+- [ ] Step B — the tracker itself: the state machine, the queue and its flush, visits, and notifications, each under Vitest against a fake host with a controllable clock — Definition of Done in `ios/SPEC.md` Section 12, Step B
+- [ ] Step C — the server's two additions: `rejected` on `POST /api/samples` and the teleport, and the consent column behind the widened `PATCH /api/settings` — Definition of Done in `ios/SPEC.md` Section 12, Step C
+- [ ] Step D — the web app's shell detection and bridge, and the tracking hook's second driver behind them — Definition of Done in `ios/SPEC.md` Section 12, Step D
+- [ ] Step E — the replay harness: the eight scenarios of `ios/SPEC.md` 13.2, run against the built tracker bundle and the real API on an in-memory database — Definition of Done in `ios/SPEC.md` Section 12, Step E
+- [ ] Step F — the Swift shell itself, and the two mechanical guards that check it without compiling it — Definition of Done in `ios/SPEC.md` Section 12, Step F
+- [ ] Step G — the owner's walk: six walks through Karlsruhe on the owner's phone, each with a diagnostic report attached to the commit that closes it — Definition of Done in `ios/SPEC.md` Section 12, Step G
+
 ---
 
 ## 13. Open Source and Licensing
@@ -2219,7 +2258,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | O2  | No **drawn** logo. The wordmark (Section 8.1) is the mark and is on every main screen; what is deferred is a pictogram to stand beside or instead of it. It would have to satisfy the wordmark's four rules, and one narrows the field sharply: it may not be a downloaded font (Section 8.2). An SVG in the ink style of the map symbols is the shape a future answer takes.                                                                                                                                                                                                                                                                                                                                                                      | Deferred                        |
 | O3  | `cell_size_m` may move from 50 m to 25 m after real-world testing. At 25 m the grid is 834 × 686 = 572,124 cells: mask ~70 KiB, texture ~559 KiB, `grid.bin` ~1.1 MB — all viable. What is not built is the migration: every existing `fog_state.mask` has to be re-projected onto the new grid and `fog_district_progress` / `fog_daily_progress` recomputed with it, atomically, against a live database. `scripts/rebuild-grid.ts` validates its arguments and then refuses to run, deliberately, rather than silently doing nothing.                                                                                                                                                                                                            | Deferred                        |
-| O4  | Native iOS wrapper (Capacitor) for true background tracking — the only route to background reveal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Out of scope for v1             |
+| O4  | **Superseded by `ios/SPEC.md` as of v1.59.** This asked for a native iOS wrapper (Capacitor) for true background tracking, the only route to background reveal. The answer is not a section of this document but a whole separate specification: `ios/SPEC.md` specifies the shell, the tracker, and the amendments of Section 14 below that connect it to this one. Row kept rather than deleted, per this section's rule: the question was dissolved, not answered here — the answer lives in another document entirely.                                                                                                                                                                                                                              | Superseded in v1.59             |
 | O5  | Additional cities. The data model and the pipeline support them; no admin flow for adding one exists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Out of scope for v1             |
 | O6  | GitHub Actions + GHCR build pipeline if on-Pi build times become painful. No workflow exists in the repository.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Documented, not built           |
 | O7  | Friends, shared sessions, and social features.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Out of scope for v1             |
@@ -2235,6 +2274,7 @@ Re-audited against the code at v1.33. Items that were resolved and whose reasoni
 
 A record of **what** changed, newest first. The reasoning lives in the numbered sections, which are the authority; nothing here needs to be read to rebuild the system. v1.1 is the baseline, and anything not listed is unchanged since it.
 
+- **v1.59** — `ios/SPEC.md` lands on `main`: the iPhone companion's specification, nothing of it built, plus the eighteen amendments its Section 14 required of this document, made in one commit, each inside its own section without renumbering. Front matter and Sections 3, 4.2, 5.3, 7.1, 7.2, 7.5, 8.6, 9.2, 9.6, 10.2, 10.3, 12 and 14 each gain a sentence, a row or a constants block that points at the iOS specification or widens what an existing route is documented to accept from it; none of them changes what the running system does today. `packages/tracker` arrives as this workspace's fourth package, built by Vite in library mode to one IIFE that a Swift `JSContext` evaluates unmodified — `packages/shared` gains the nine `TRACKER_*` constants of `ios/SPEC.md` 7.1 in `config.ts` (desired accuracy; the foreground, walking and dwelling distance filters; the queue cap; the flush backoff base and ceiling; the restart interval; the diagnostic window), and nothing outside `packages/tracker`'s own two tests reads any of them yet. Section 12 gains Phase 9, seven steps (A–G) whose Definition of Done points at `ios/SPEC.md` Section 12 rather than repeating it; only Step A — this commit — is done. O4 is superseded rather than answered by anything in this document and is kept, marked closed, per Section 14's own delete-vs-keep rule: the question was dissolved by a whole separate specification, not answered in a section of this one. No route, component or existing constant changed — `packages/api` and `packages/web` are untouched, and this release adds a fourth package and documents what it will connect to without altering any behaviour a player sees today. Front matter; Sections 3, 4.2, 5.3, 7.1, 7.2, 7.5, 8.6, 9.2, 9.6, 10.2, 10.3, 12, 14; `packages/shared/src/config.ts`, `packages/tracker/`, `ios/SPEC.md`, `ios/PARENT-CONTRACT.md`, `HANDOVER.md`. 1436 tests (shared 243, api 566, web 625, tracker 2).
 - **v1.58** — The two gaps v1.57's audit found are closed, in tests only; no route, component or constant changed. Phase 3's future-dated sample guard gains four tests in `packages/api/src/routes/fog.test.ts` (describe `the clock-skew guard`) and one in `packages/api/src/routes/visit-samples.test.ts`: a sample further ahead of the server clock than `CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS` reveals nothing, writes nothing, touches no pending visit and — the consequence a "no cells revealed" test misses — does not become the previous accepted position that the teleport guard measures the next sample against; a sample inside the tolerance is still accepted; and the boundary is pinned on a frozen clock as the code has it, `>`, so exactly the tolerance is accepted. Deleting the guard now fails four tests and changing its `>` to `>=` fails exactly the boundary one. Phase 2's app-shell budget gains two in `packages/web/src/bundle.test.ts`, which already built the production bundle for the badge-floor greps and threw the structure away: the rollup output is now kept as chunks and assets, the eagerly loaded set is derived by following static `imports` from the entry chunk, and its gzipped size (82.0 kB: 76.9 kB of JS, 5.0 kB of CSS) is asserted under 150 000 bytes with the measured figures in the failure message, while a second test asserts that no eagerly reachable chunk carries MapLibre and that the chunk which does is reached only across a `dynamicImports` edge. No bound is asserted on the map chunk's own size, because the DoD's "~250 KB" is a description and not a limit, and the 150 KB budget lives in the test rather than in `config.ts`: nothing imports it at runtime, and `config.ts` ships to the browser it would be measuring. One thing found while measuring: Vitest sets `NODE_ENV=test`, Vite's `isProduction` reads it, and so that file had been building React's **development** bundle since v1.53 — harmless for greps, wrong by 56 kB for a size — so the build now stubs `NODE_ENV=production` and reproduces `pnpm build` chunk hash for chunk hash. Section 12's Phase 3 box moves from `[~]` to `[x]` and Phase 2's shell box now names tests instead of a date. 1427 tests (shared 236, api 566, web 625).
 - **v1.57** — Documentation only; no route, component, constant or test changed, and the suite is the same 1420 tests it was at v1.56. Section 12's Definition-of-Done lists are audited box by box against the code: the 45 unticked items of Phases 0–4 and 8 become 27 `[x]`, 7 `[~]` and 11 still `[ ]`, and every one of the 81 boxes now names its evidence or what it is waiting for. The lists had been written when each phase was planned and never revisited, so the document said Phase 0 was unfinished while the README said Phases 0–8 were implemented; the README was right about the code. Every new tick names a test or a file, and a record observed on the live site — the public `/api/health` answer, the browser that loaded the shell — is attributed to `HANDOVER.md` Section 2 as second-hand rather than presented as something this repository proves. Section 12's preamble gains the distinction that made the rest consistent: an item only the owner's environment can settle stays `[ ]` with what it needs named, and does not gate a later phase, while an unticked box with no annotation still does. Two gaps found by the audit and deliberately not closed here, because this pass changed no code: the future-dated sample guard in `packages/api/src/routes/fog.ts` (`SAMPLE_MAX_CLOCK_SKEW_MS`) has no test, and nothing asserts Phase 2's 150 KB app-shell budget — it was measured at 82.7 kB gzipped from one build, not pinned. `HANDOVER.md` Section 2 is re-ordered into done / open / blocked, with item 3 resolved to done for `PUBLIC_ORIGIN` and `DB_PATH` (the app cannot boot without either, and it booted) and left open for `PORT`, which the recorded log line does not distinguish from `API_PORT`'s own default. Section 12; `HANDOVER.md`. No open item changed status.
 - **v1.56** — `API_PORT` reaches Caddy on the standalone compose path. The caddy service had no environment at all, so `caddy/Caddyfile`'s `reverse_proxy api:{$API_PORT:3000}` — a substitution Caddy resolves in its own container — always used its `3000` fallback: any other `API_PORT` left the API listening on one port and Caddy proxying to another, every `/api/*` request answering 502 while the api service reported healthy, and no log line naming the variable. `docker-compose.yml` now resolves `${API_PORT:-${PORT:-3000}}` once in a top-level anchor, mirroring `loadEnv`'s precedence and its empty-is-unset rule, and gives that one value to both services, so the port the API listens on and the port Caddy proxies to cannot differ — including when it comes from the shell rather than `.env`, which the api service's `env_file` alone never saw. The `PORT` alias therefore holds on this path too, which is what `.env.example` already promised. The caddy service is given that variable rather than the api service's `env_file: .env`, which would also hand a public-facing container the secrets in that file. `packages/api/src/compose-caddy-env.test.ts` (five tests) asserts the general rule — every `{$VAR}` the Caddyfile references is named in the caddy service's `environment`, both services agree on any variable they share, and the `reverse_proxy` upstream names a service that exists — parsing both files rather than pinning `API_PORT` by name. Section 4.3; `README.md`, `.env.example`. No open item changed status.
@@ -2317,4 +2357,4 @@ Kept only where a future reader might otherwise re-propose the reverted thing an
 
 ---
 
-_End of specification v1.58_
+_End of specification v1.59_
