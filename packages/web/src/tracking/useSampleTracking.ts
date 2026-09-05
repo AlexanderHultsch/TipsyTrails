@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CONFIG, TELEPORT_FIX } from '@tipsytrails/shared';
+import { CONFIG, TELEPORT_FIX, computeBehindDepth } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
 import type { Bar, Sample, SamplesResponse, VisitSummary } from '../api/types.js';
 import { isShell, subscribeToShellEvents } from '../shell/bridge.js';
@@ -433,19 +433,20 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
         const result = await postSamples(batch);
         queueRef.current = queueRef.current.slice(batch.length);
         setQueueDepth(queueRef.current.length);
-        // Whatever was queued when this attempt began and is still queued did
-        // not fit into SAMPLE_MAX_BATCH: the cycle that should have carried it
-        // went without it, so this device is behind by exactly that many
-        // samples. Nought whenever the queue fitted in one batch, which is the
-        // normal case and is what puts the icon back to `online`.
-        setBehindDepth(queuedAtAttempt - batch.length);
+        // A success removed the whole batch, so what is still behind is
+        // whatever was queued at the start and did not fit into
+        // SAMPLE_MAX_BATCH - see computeBehindDepth for the rule and for why
+        // the sign matters.
+        setBehindDepth(computeBehindDepth(queuedAtAttempt, batch.length));
         // A post this hook made is never a replay, so the counters advance.
         applyServerAnswer(result, true);
         setPostError(null);
       } catch (err) {
-        // The send failed and nothing left the queue, so everything that was
-        // in it when this attempt began has now failed at least one send.
-        setBehindDepth(queuedAtAttempt);
+        // The send failed and nothing left the queue - the batch is still at
+        // its front, waiting for the next attempt - so the same rule is
+        // applied with a sent count of nothing, and everything that was queued
+        // when this attempt began is behind.
+        setBehindDepth(computeBehindDepth(queuedAtAttempt, 0));
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
       } finally {
         flushingRef.current = false;
