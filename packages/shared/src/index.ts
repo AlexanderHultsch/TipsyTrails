@@ -44,6 +44,7 @@ export {
   onsiteRadiusM,
 } from './visits.js';
 export type { OnsiteCandidate } from './visits.js';
+export { computeBehindDepth } from './samples.js';
 export { TELEPORT_FIX } from './teleport.js';
 export { compareBarsByName } from './bars.js';
 export type { BarListEntry } from './bars.js';

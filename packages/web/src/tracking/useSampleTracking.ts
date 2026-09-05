@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CONFIG, TELEPORT_FIX } from '@tipsytrails/shared';
+import { CONFIG, TELEPORT_FIX, computeBehindDepth } from '@tipsytrails/shared';
 import { ApiError, postSamples } from '../api/client.js';
 import type { Bar, Sample, VisitSummary } from '../api/types.js';
 import { clearLastKnownPosition, setLastKnownPosition } from './lastKnownPosition.js';
@@ -332,7 +332,7 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
         // went without it, so this device is behind by exactly that many
         // samples. Nought whenever the queue fitted in one batch, which is the
         // normal case and is what puts the icon back to `online`.
-        setBehindDepth(queuedAtAttempt - batch.length);
+        setBehindDepth(computeBehindDepth(queuedAtAttempt, batch.length));
         // Set from the answer either way round, never only when it is true:
         // a message about a train that survives the player getting off it is
         // the same kind of lie as a banner claiming time the player never
@@ -370,7 +370,7 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       } catch (err) {
         // The send failed and nothing left the queue, so everything that was
         // in it when this attempt began has now failed at least one send.
-        setBehindDepth(queuedAtAttempt);
+        setBehindDepth(computeBehindDepth(queuedAtAttempt, 0));
         setPostError(err instanceof ApiError ? err.message : SYNC_ERROR_MESSAGE);
       } finally {
         flushingRef.current = false;
