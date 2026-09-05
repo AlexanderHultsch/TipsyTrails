@@ -19,6 +19,7 @@ import {
   getPendingVisits,
 } from '../api/client.js';
 import type { Bar, VisitSummary } from '../api/types.js';
+import { postShellVisitEnded, postShellVisitStarted } from '../shell/messages.js';
 import type { LastAcceptedPosition } from './useSampleTracking.js';
 
 // Internal: hook results are destructured at the one call site, never held
@@ -227,6 +228,13 @@ export function useVisits(
     setCheckInError(null);
     try {
       const visit = await postCheckIn({ barId });
+      // ios/SPEC.md 8.2: `visitStarted` at the moment `POST /api/visits`
+      // succeeds, carrying the whole `VisitSummary`. The shell forwards it to
+      // the tracker's pending set, and the set is what selects the dwelling
+      // profile (7.6) - so this is the message that makes the phone start
+      // sampling at full rate the moment the player taps "Check in", rather
+      // than a flush later. Outside the shell it posts nothing.
+      postShellVisitStarted(visit);
       localChangeSeqRef.current++;
       setPendingVisits((current) => [...current.filter((v) => v.id !== visit.id), visit]);
       return true;
@@ -263,11 +271,22 @@ export function useVisits(
     setCancelError(null);
     try {
       await postCancelVisit(visitId);
+      // ios/SPEC.md 8.2: `visitEnded` when "the cancel succeeds", and the id is
+      // the whole payload (7.5 says why). It takes the visit out of the
+      // tracker's pending set, which ends the dwelling profile it was holding.
+      postShellVisitEnded(visitId);
       localChangeSeqRef.current++;
       setPendingVisits((current) => current.filter((visit) => visit.id !== visitId));
       return true;
     } catch (err) {
       if (isVisitAlreadyGone(err)) {
+        // The 404 branch is a success here - the server is stating that this
+        // visit is not pending, which is what the player asked for - so it is
+        // one of the moments 8.2 names, and the tracker must hear about it for
+        // the same reason: it is holding a pending visit the server does not
+        // agree is pending, and nothing else on this path will tell it before
+        // its next reconciliation on returning to the foreground (7.6).
+        postShellVisitEnded(visitId);
         localChangeSeqRef.current++;
         setPendingVisits((current) => current.filter((visit) => visit.id !== visitId));
         return true;

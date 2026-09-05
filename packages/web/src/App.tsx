@@ -22,6 +22,7 @@ import { Profile } from './screens/Profile.js';
 import { Register } from './screens/Register.js';
 import { Reset } from './screens/Reset.js';
 import { Settings } from './screens/Settings.js';
+import { useShellReady } from './shell/useShellReady.js';
 import { useShellSettingsUpdate } from './shell/useShellSettingsUpdate.js';
 
 // MapLibre + PMTiles are ~250 KB gzipped on their own (Section 12, Phase 2
@@ -52,6 +53,10 @@ export function App() {
   // Consent screen, at a moment no route of this app can predict. Outside the
   // shell it attaches nothing and touches nothing (shell/bridge.ts).
   useShellSettingsUpdate();
+  // `ready` (ios/SPEC.md 8.2): the shell answers it with the tracker's current
+  // state, so it is posted from the one place that mounts before every screen.
+  // Outside the shell it posts nothing (shell/messages.ts).
+  useShellReady();
 
   return (
     <CurrentUserProvider>
