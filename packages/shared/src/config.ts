@@ -314,6 +314,61 @@ export const CONFIG = {
   // margin around the *city* and answers a different question.
   MAP_FIT_PADDING_PX: 24,
 
+  // ios/SPEC.md Section 7 — the tracker (`packages/tracker`). These nine are
+  // the numbers the Swift shell actually runs on, and the shell holds none of
+  // its own: every one reaches it from the tracker, which reads it from here
+  // (ios/SPEC.md I1). Nothing below is withheld from a client either, so the
+  // whole block stays in this file rather than splitting across the two.
+  //
+  // Core Location takes no metres-typed accuracy, so the shell maps this to
+  // the nearest kCLLocationAccuracy* constant — 10 becomes
+  // kCLLocationAccuracyNearestTenMeters (ios/SPEC.md 6.3). Kept under
+  // GPS_ACCURACY_GOOD_M on purpose: a fix this tight still reads as "good" on
+  // Section 8.6's indicator, and it is one of the two levers ios/SPEC.md O-I7
+  // names if the evening walk finds the battery cost unacceptable.
+  TRACKER_DESIRED_ACCURACY_M: 10,
+
+  // The three profiles of ios/SPEC.md 7.3, one distance filter apiece, chosen
+  // by app state and by whether a visit is pending nearby. 0 means every fix
+  // Core Location offers; a positive number throttles before a sample ever
+  // reaches the queue.
+  //
+  // Foreground takes every fix because the map is on screen, and the
+  // player's own marker should move as it does in a browser tab.
+  TRACKER_FOREGROUND_DISTANCE_FILTER_M: 0,
+  // Half of the 50 m fog cell, so a background walk cannot cross a whole
+  // cell between two fixes and leave it unrevealed. The other O-I7 lever:
+  // widening it to a full cell trades a diagonal walk's corner for less
+  // background GPS use.
+  TRACKER_WALKING_DISTANCE_FILTER_M: 25,
+  // Every fix again, like foreground, because a player standing in a bar
+  // does not walk 25 m — a throttled profile here would starve the pending
+  // visit of the on-site samples it needs to complete (ios/SPEC.md 7.6).
+  TRACKER_DWELLING_DISTANCE_FILTER_M: 0,
+
+  // The tracker's in-memory queue (ios/SPEC.md 7.4). Past this many samples
+  // the OLDEST is dropped, never the newest: a queue this full is already
+  // behind, and the sample saying where the player is *now* is the one
+  // thing a stale queue must not lose.
+  TRACKER_QUEUE_CAP: 600,
+
+  // One pair (ios/SPEC.md 7.4): a failed flush waits this long, doubles on
+  // every consecutive failure, and is capped at TRACKER_FLUSH_BACKOFF_MAX_MS
+  // below, reset back to this base the next time a flush succeeds.
+  TRACKER_FLUSH_BACKOFF_BASE_MS: 5 * 1000,
+  TRACKER_FLUSH_BACKOFF_MAX_MS: 5 * 60 * 1000,
+
+  // How soon a JS context that threw on start may be restarted (ios/SPEC.md
+  // 4.4). Without this floor, a bundle that throws immediately on every
+  // start would restart as fast as the shell can loop — a spin, not a retry.
+  TRACKER_RESTART_MIN_INTERVAL_MS: 60 * 1000,
+
+  // How many Berlin days of the counters in ios/SPEC.md 7.8 the device keeps
+  // in UserDefaults for the Diagnostics screen, by the same calendar the
+  // badge job uses (`berlinDateString`), so a bucket's day means the same
+  // thing everywhere it is computed.
+  TRACKER_DIAGNOSTIC_DAYS: 7,
+
   TILES_FILENAME: 'karlsruhe.2026-08.pmtiles',
   VAPID_KEY_FILENAME: 'vapid-keys.json', // generated on first boot, persisted beside DATABASE_PATH — see 5.9
 } as const;

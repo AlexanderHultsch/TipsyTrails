@@ -76,3 +76,29 @@ describe('CONFIG.FOG_REVEAL_ANIMATION_MS', () => {
     expect(CONFIG.FOG_REVEAL_ANIMATION_MS).toBe(600);
   });
 });
+
+describe('CONFIG tracker constants', () => {
+  // A cap below one batch would drop samples the very next flush was going
+  // to send.
+  it('keeps the queue cap at least one batch deep', () => {
+    expect(CONFIG.TRACKER_QUEUE_CAP).toBeGreaterThanOrEqual(CONFIG.SAMPLE_MAX_BATCH);
+  });
+
+  // The two backoff constants are one pair; a base above the cap makes the
+  // doubling meaningless.
+  it('keeps the flush backoff base under its own cap', () => {
+    expect(CONFIG.TRACKER_FLUSH_BACKOFF_BASE_MS).toBeLessThan(CONFIG.TRACKER_FLUSH_BACKOFF_MAX_MS);
+  });
+
+  // The fixes the shell asks for must be good enough to read as "good" on
+  // Section 8.6's indicator.
+  it('keeps the desired accuracy within the good-fix threshold', () => {
+    expect(CONFIG.TRACKER_DESIRED_ACCURACY_M).toBeLessThanOrEqual(CONFIG.GPS_ACCURACY_GOOD_M);
+  });
+
+  // A filter wider than the reveal radius would let a walk cross ground no
+  // sample reveals, which is the whole property that profile exists to keep.
+  it('keeps the walking distance filter under the fog reveal radius', () => {
+    expect(CONFIG.TRACKER_WALKING_DISTANCE_FILTER_M).toBeLessThan(CONFIG.FOG_REVEAL_RADIUS_M);
+  });
+});
