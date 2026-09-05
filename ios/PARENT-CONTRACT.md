@@ -140,9 +140,10 @@ Naming what is out is as useful as naming what is in: it is what lets a reader s
 
 One row per merge of `main` into `ios-app`. **Never one row per change** — that is the whole reason this record is affordable to keep, and affordable is what makes it get written. The merge commit message carries the reasoning; the row carries the verdict and points at the commit.
 
-| Date       | `main` commit | Parent `SPEC.md` | Verdict                                                                                                                                                                                         |
-| ---------- | ------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-09-04 | `3862b97`     | v1.58            | Baseline, not a merge. `ios-app` is `3862b97` plus the commit that added `ios/SPEC.md`. Nothing is outstanding: the surface of Section 1 is the surface as of v1.58 and the pin agrees with it. |
+| Date       | `main` commit        | Parent `SPEC.md` | Verdict                                                                                                                                                                                                                                                                                                                                      |
+| ---------- | -------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-04 | `3862b97`            | v1.58            | Baseline, not a merge. `ios-app` is `3862b97` plus the commit that added `ios/SPEC.md`. Nothing is outstanding: the surface of Section 1 is the surface as of v1.58 and the pin agrees with it.                                                                                                                                              |
+| 2026-09-05 | Step A (this commit) | v1.59            | Not a merge: these amendments were authored directly on `main`, where both documents live, so there is no `main` commit to merge in the sense this column names. The surface moved because `ios/SPEC.md` asked it to — the reverse of the direction this record exists to catch — and entries E1, A1, A2, A4, C1, D1 and D3 moved by design. |
 
 **How a row is added.**
 
