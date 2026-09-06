@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { errorMessage, login } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
+import { postShellSignedIn } from '../shell/messages.js';
 
 export function Login() {
   const navigate = useNavigate();
@@ -18,6 +19,11 @@ export function Login() {
     setSubmitting(true);
     try {
       const user = await login({ username, password });
+      // ios/SPEC.md 8.2: "after login or registration succeeds" - the shell
+      // re-reads the cookie and starts the tracker if it was idle. Posted
+      // before navigating, because the destination is a screen and this is not
+      // a fact about a screen; outside the shell it posts nothing.
+      postShellSignedIn();
       setUser(user);
       navigate(user.mustChangePassword ? '/change-password' : '/app', { replace: true });
     } catch (err) {

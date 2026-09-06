@@ -58,6 +58,7 @@ describe('initialiseDatabase', () => {
       '001_init.sql',
       '002_clear_admin_must_change_password.sql',
       '003_users_excluded_from_rankings.sql',
+      '004_users_background_tracking_consent.sql',
     ]);
   });
 
@@ -69,7 +70,7 @@ describe('initialiseDatabase', () => {
     const migrationRow = firstDb
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(migrationRow?.count).toBe(3);
+    expect(migrationRow?.count).toBe(4);
     const userRow = firstDb
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM users')
       .get();
@@ -81,7 +82,7 @@ describe('initialiseDatabase', () => {
     const migrationRowAfter = db
       .prepare<[], { count: number }>('SELECT COUNT(*) AS count FROM schema_migrations')
       .get();
-    expect(migrationRowAfter?.count).toBe(3);
+    expect(migrationRowAfter?.count).toBe(4);
     expect(usersCount()).toBe(usersBefore);
   });
 

@@ -242,6 +242,25 @@ describe('GET /api/profile/:handle', () => {
     expect(fogRow).toBeUndefined();
   });
 
+  // SPEC.md Section 5.3 and ios/SPEC.md 9.2: a public profile has no reason
+  // to know when its subject consented to background tracking, so the field
+  // is absent from this shape. Asserted with the column set on the profile's
+  // subject, so this is the shape refusing to carry a value rather than the
+  // value happening to be NULL — and asserted on the caller's own profile,
+  // which is the one reading that could plausibly have been allowed.
+  it('never carries backgroundTrackingConsentedAt, even when the subject has consented', async () => {
+    const { cookie, userId } = await registerUser('walker');
+    db.prepare('UPDATE users SET background_tracking_consented_at = 1700000000 WHERE id = ?').run(
+      userId,
+    );
+
+    const response = await getProfile(cookie, 'walker');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty('backgroundTrackingConsentedAt');
+    expect(response.payload).not.toContain('background_tracking_consented_at');
+  });
+
   it('an unknown username 404s', async () => {
     const { cookie } = await registerUser('viewer');
 

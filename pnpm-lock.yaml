@@ -82,6 +82,9 @@ importers:
         specifier: workspace:*
         version: link:../shared
     devDependencies:
+      '@tipsytrails/api':
+        specifier: workspace:*
+        version: link:../api
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0

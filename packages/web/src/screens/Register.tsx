@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { errorMessage, register } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
+import { postShellSignedIn } from '../shell/messages.js';
 
 export function Register() {
   const navigate = useNavigate();
@@ -31,6 +32,10 @@ export function Register() {
         securityAnswer,
         ageConfirmed,
       });
+      // ios/SPEC.md 8.2: the other half of "after login or registration
+      // succeeds". Registration signs the new account in with the same cookie
+      // a login sets, so the shell needs telling here for the same reason.
+      postShellSignedIn();
       setUser(user);
       navigate(user.mustChangePassword ? '/change-password' : '/app', { replace: true });
     } catch (err) {

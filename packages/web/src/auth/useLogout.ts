@@ -1,5 +1,6 @@
 import { logout } from '../api/client.js';
 import { clearFogState } from '../map/fog/fog-cache.js';
+import { postShellSignedOut } from '../shell/messages.js';
 import { clearLastKnownPosition } from '../tracking/lastKnownPosition.js';
 import { useCurrentUser } from './CurrentUserContext.js';
 
@@ -11,6 +12,21 @@ export function useLogout(): () => Promise<void> {
   const { user, setUser } = useCurrentUser();
 
   return async function handleLogout() {
+    // ios/SPEC.md 8.2, and the order is the contract: `signedOut` goes
+    // **before** the web app's own logout request, because the shell answers it
+    // by telling the tracker `sessionLost('cookie')` "so no sample is posted
+    // against a cookie about to be deleted". Posted after the request, a flush
+    // already in flight - the tracker posts from a pocket every few seconds -
+    // could carry a cookie the server has just invalidated, which is a 401 the
+    // tracker reads as a session lost from elsewhere (5.2) and tells the player
+    // about with a notification. The cookie-store observer of 5.2 is the safety
+    // net for a missed message, and a safety net is not a schedule.
+    //
+    // It is outside the `try` for the same reason it is first: nothing about
+    // this message depends on the request that follows it, and a message the
+    // shell has already read cannot be un-posted by a failure afterwards.
+    // Outside the shell it posts nothing (shell/messages.ts).
+    postShellSignedOut();
     try {
       // Phase 8 task brief, part B: whether this succeeds or fails (e.g. a
       // network error), the `finally` block below still clears the local

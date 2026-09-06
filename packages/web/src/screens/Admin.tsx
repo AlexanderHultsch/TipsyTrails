@@ -24,6 +24,7 @@ import type {
 import { BottomNav } from '../components/BottomNav.js';
 import { MapPicker } from '../map/MapPicker.js';
 import type { PickedPosition } from '../map/MapPicker.js';
+import { postShellVisitEnded } from '../shell/messages.js';
 import { isVisitAlreadyGone } from '../tracking/useVisits.js';
 
 // The bar sources the API can actually report, plus the no-filter option -
@@ -453,12 +454,20 @@ function PendingVisitsSection() {
     setCancellingVisitId(visit.id);
     try {
       await cancelVisit(visit.id);
+      // ios/SPEC.md 8.2's `visitEnded`, for the same reason tracking/useVisits.ts
+      // posts it: this screen's escape hatch cancels the admin's *own* pending
+      // visit, so under the shell it ends a visit the tracker is holding, and a
+      // tracker that is not told holds the dwelling profile for a bar nobody is
+      // at. The message follows the endpoint and not the surface that called
+      // it.
+      postShellVisitEnded(visit.id);
       setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
     } catch (err) {
       // Section 9.5's identical 404 means the visit is not pending, which is
       // what the click asked for - the same rule the banner follows, from
       // the same helper, so the two screens cannot disagree about it.
       if (isVisitAlreadyGone(err)) {
+        postShellVisitEnded(visit.id);
         setPendingVisits((current) => current.filter((entry) => entry.id !== visit.id));
         return;
       }

@@ -140,6 +140,7 @@ function stubSignedInUser(overrides: Record<string, unknown> = {}) {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
     ...overrides,
   });
 }
@@ -778,6 +779,7 @@ function adminUser(overrides: Record<string, unknown> = {}) {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
     excludedFromRankings: false,
     createdAt: 1_700_000_000,
     lastSeenAt: null,
@@ -976,6 +978,7 @@ describe('admin teleport', () => {
         newBars: [communityBar()],
         visitUpdates: [],
         tooFastToReveal: false,
+        rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
       });
     });
 

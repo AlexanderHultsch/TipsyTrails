@@ -5,10 +5,18 @@ import { deleteAccount, errorMessage, updateSettings } from '../api/client.js';
 import { useCurrentUser } from '../auth/CurrentUserContext.js';
 import { useLogout } from '../auth/useLogout.js';
 import { BottomNav } from '../components/BottomNav.js';
+import { isShell } from '../shell/bridge.js';
+import { postShellOpenConsent } from '../shell/messages.js';
 
 export function Settings() {
   const { user, setUser } = useCurrentUser();
   const handleLogout = useLogout();
+  // `ios/SPEC.md` 8.6: a "Background tracking" row, under the shell only.
+  // "The row does not render in Safari, where it would describe a feature
+  // the browser does not have" - a browser cannot track in the background at
+  // all (`SPEC.md` 7.2), so a row offering to turn it on would be an offer
+  // nothing could honour. Fixed at mount, as everywhere else this page asks.
+  const [inShell] = useState(isShell);
 
   const [anonymousSaving, setAnonymousSaving] = useState(false);
   const [anonymousError, setAnonymousError] = useState<string | null>(null);
@@ -76,6 +84,54 @@ export function Settings() {
             </p>
           )}
         </section>
+
+        {/* `ios/SPEC.md` 8.6, and 12's row 7 of "The list for `main`". Two
+            things and no third: it *shows* the consent state, and it opens
+            the shell's Consent screen.
+
+            **It does not write consent, deliberately.** The write path is the
+            shell calling `requestSettingsUpdate(backgroundTracking)` from
+            that Consent screen's two call sites, which this page answers with
+            `PATCH /api/settings` (8.2, shell/useShellSettingsUpdate.ts). A
+            toggle here would be a second way into the same column, racing the
+            native screen and racing iOS's own Always prompt, which the
+            Consent screen shows *after* recording consent (6.2, 10.1) - a box
+            ticked here would record consent for a permission iOS had not been
+            asked for yet.
+
+            The state itself is `backgroundTrackingConsentedAt` on the account
+            (5.4, `SPEC.md` 9.6), which is where the record lives rather than
+            anywhere on this device. It is shown as on or off and not as a
+            date: the column is Article 7 evidence held on the server, and the
+            player's question here is whether it is on. */}
+        {inShell && (
+          <section className="settings-section">
+            <h2>Background tracking</h2>
+            <p>
+              <strong>
+                Right now: {user?.backgroundTrackingConsentedAt != null ? 'On' : 'Off'}
+              </strong>
+            </p>
+            {user?.backgroundTrackingConsentedAt != null ? (
+              <p>
+                Tipsy Trails records your position while the app is closed, so a walk counts with
+                the phone in your pocket. You can turn that off again on the next screen.
+              </p>
+            ) : (
+              <p>
+                Tipsy Trails records your position only while the app is open. Turning background
+                tracking on lets a walk count with the phone in your pocket.
+              </p>
+            )}
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={postShellOpenConsent}
+            >
+              Background tracking settings
+            </button>
+          </section>
+        )}
 
         <section className="settings-section">
           <Link className="button button--secondary" to="/change-password">

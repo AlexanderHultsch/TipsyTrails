@@ -659,6 +659,43 @@ describe('GET /api/admin/users', () => {
       users.find((user: { username: string }) => user.username === 'walker').excludedFromRankings,
     ).toBe(false);
   });
+
+  // SPEC.md Section 5.3 and ios/SPEC.md 9.2: the background-tracking consent
+  // timestamp is not shown on the admin user list, which has no reason to
+  // know. Asserted with the column set, so the absence is the shape refusing
+  // to carry a value rather than the value happening to be NULL.
+  it('never carries backgroundTrackingConsentedAt, even for an account that has consented', async () => {
+    const adminCookie = await registerAdmin('boss');
+    await registerUser('walker');
+    db.prepare(
+      'UPDATE users SET background_tracking_consented_at = 1700000000 WHERE username = ?',
+    ).run('walker');
+
+    const users = (await adminGetUsers(adminCookie)).json().users;
+
+    for (const user of users) {
+      expect(user).not.toHaveProperty('backgroundTrackingConsentedAt');
+      expect(user).not.toHaveProperty('background_tracking_consented_at');
+    }
+  });
+
+  it('never carries it on PATCH /api/admin/users/:id either, which answers with the same shape', async () => {
+    const adminCookie = await registerAdmin('boss');
+    const walkerId = (await adminGetUsers(adminCookie)).json().users[0].id as number;
+    db.prepare('UPDATE users SET background_tracking_consented_at = 1700000000 WHERE id = ?').run(
+      walkerId,
+    );
+
+    const response = await injectWithOrigin({
+      method: 'PATCH',
+      url: `/api/admin/users/${walkerId}`,
+      headers: { cookie: adminCookie },
+      payload: { excludedFromRankings: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).not.toHaveProperty('backgroundTrackingConsentedAt');
+  });
 });
 
 // SPEC.md Sections 7.8, 9.3: the only thing an admin may change about a

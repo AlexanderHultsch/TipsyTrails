@@ -137,6 +137,7 @@ function stubSignedInUser() {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
   });
 }
 

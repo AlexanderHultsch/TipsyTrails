@@ -1,9 +1,20 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DERIVED } from '@tipsytrails/shared';
 import { BottomNav } from '../components/BottomNav.js';
+import { isShell } from '../shell/bridge.js';
+import { postShellRequestNotifications } from '../shell/messages.js';
 import { usePushSubscription } from '../tracking/usePushSubscription.js';
 
 const REQUIRED_MINUTES = Math.round(DERIVED.VISIT_REQUIRED_S / 60);
+
+// What the reminder is for, in one sentence. Both offers below open with it -
+// the browser's Web Push opt-in and the shell's `requestNotifications`
+// button - because it describes the reminder and not the mechanism that
+// delivers it, and a second copy of it is a second thing to keep in step.
+const REMINDER_OFFER =
+  "Tipsy Trails can notify you once a pending visit is nearly complete, so you don't have to " +
+  'remember to reopen the app yourself.';
 
 // Section 7.5's transparency requirements: a short, honest explanation of
 // the actual mechanic, reachable from the More sheet at any time and
@@ -15,6 +26,21 @@ const REQUIRED_MINUTES = Math.round(DERIVED.VISIT_REQUIRED_S / 60);
 // on sits right next to the explanation, per the task brief for this step.
 export function HowMasteringWorks() {
   const { permission, subscribed, working, error, enable, disable } = usePushSubscription();
+  // `ios/SPEC.md` 8.4's first bullet: inside the iPhone shell this offer is
+  // "replaced ... by a button that posts `requestNotifications`", and the
+  // shell shows its Consent screen's notification step (11.2). Fixed at
+  // mount for the same reason `useSampleTracking`'s `shellDriven` is: the
+  // screen should not change its offer underneath a player.
+  //
+  // **The hook is still called, and still reports `unsupported` there** -
+  // 8.4 says so in as many words, "which it already does when the Push API
+  // is absent, so the change is the button's destination and not the hook".
+  // `WKWebView` exposes no `PushManager`, so `pushSupported()` is false and
+  // nothing below it - the permission read, the registration, the
+  // subscription - can run. It is left unconditional because hooks are, and
+  // because a branch here would be this screen deciding what the hook
+  // reports rather than reading it.
+  const [inShell] = useState(isShell);
 
   return (
     <main className="screen">
@@ -37,12 +63,37 @@ export function HowMasteringWorks() {
           it can't be lost.
         </p>
 
-        {permission !== 'unsupported' && (
+        {/* The shell's offer (ios/SPEC.md 8.4). Same place on the screen and
+            the same button as the browser's, and a different destination:
+            there is no permission to read, no error to show and no
+            subscription to turn off again, because the shell owns all three
+            on its Consent screen (11.2). It answers the message by showing
+            that screen's notification step; there is no reply, so this
+            posts and stops - the same shape as every other Page -> shell
+            message (8.2). */}
+        {inShell && (
           <section className="settings-section">
-            <p>
-              Tipsy Trails can notify you once a pending visit is nearly complete, so you don't have
-              to remember to reopen the app yourself.
-            </p>
+            <p>{REMINDER_OFFER}</p>
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={postShellRequestNotifications}
+            >
+              Enable notifications
+            </button>
+          </section>
+        )}
+
+        {/* The browser's offer, unchanged. `!inShell` is belt and braces
+            rather than the load-bearing condition - `usePushSubscription`
+            already reports `unsupported` inside a `WKWebView`, which has no
+            `PushManager`, so this section is hidden there either way - but
+            8.4 says the offer is *replaced*, and a replacement that depended
+            on a WebKit fact this page cannot check would be one deployment
+            of iOS away from showing both offers at once. */}
+        {!inShell && permission !== 'unsupported' && (
+          <section className="settings-section">
+            <p>{REMINDER_OFFER}</p>
             {error && (
               <p className="error-message" role="alert">
                 {error}

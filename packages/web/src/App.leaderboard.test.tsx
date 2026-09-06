@@ -99,6 +99,7 @@ function stubSignedInUser(overrides: Record<string, unknown> = {}) {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
     ...overrides,
   });
 }

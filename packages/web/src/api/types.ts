@@ -8,6 +8,18 @@ export interface User {
   isAdmin: boolean;
   isAnonymous: boolean;
   mustChangePassword: boolean;
+  // Section 9.6: epoch seconds, or null when this account has not consented
+  // to the iPhone app's background tracking (Section 5.3). It is on this
+  // shape because every route that answers with a user answers with the same
+  // body, and the iPhone shell reads it from that body (`ios/SPEC.md` 5.4).
+  // **One web screen reads it since v1.63** - the Settings screen's shell-only
+  // "Background tracking" row (`ios/SPEC.md` 8.6) shows it as on or off - and
+  // no screen writes it: the write path is `PATCH /api/settings` called in
+  // answer to the shell (8.2, shell/useShellSettingsUpdate.ts). `isUser` does
+  // not exist and must not be added for it: Section 9.6's rule is that a
+  // response is validated only where a wrong shape renders as data, and a
+  // missing timestamp here renders as "Off" rather than as a broken screen.
+  backgroundTrackingConsentedAt: number | null;
 }
 
 // Section 7.2: what each client-side position sample carries.
@@ -40,6 +52,27 @@ export interface SamplesResponse {
   // second implementation of the same rule, free to disagree with the one
   // that actually decides.
   tooFastToReveal: boolean;
+  // Section 9.6: one count per gate of Section 7.2, in that section's order
+  // and naming, for the samples of this request only. Required and not
+  // optional, because Section 9.6 states it unconditionally for both routes
+  // that answer with this body and this interface is that table's mirror -
+  // an optional field here would describe a server that may omit it, and
+  // there is none.
+  //
+  // No web screen reads it, and that is deliberate rather than an omission:
+  // the field exists for the iPhone app's tracker, which posts from a pocket
+  // with no screen to show a failure on and has to be able to tell "the
+  // phone sent nothing" from "the phone sent it and the server refused it"
+  // (`ios/SPEC.md` 9.1). In the browser the same distinction is visible -
+  // the map is on screen while the samples are posted. Hence also the
+  // absence of a check for it in response-guards.ts, which says why there.
+  rejected: {
+    accuracy: number;
+    future: number;
+    stale: number;
+    outsideCity: number;
+    tooFast: number;
+  };
 }
 
 // The closed vocabularies the bar and visit shapes below carry, mirroring

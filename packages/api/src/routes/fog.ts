@@ -405,12 +405,39 @@ function applyReveal(
 /** One position sample, exactly as `sampleSchema` above accepts it. */
 export type SampleInput = z.infer<typeof sampleSchema>;
 
+/**
+ * SPEC.md Section 9.6 and `ios/SPEC.md` 9.1: one count per gate of Section
+ * 7.2, in that section's order and naming, for the samples of THIS REQUEST
+ * only. A batch of sixty in which fifty-eight were accepted answers with
+ * counts summing to two.
+ *
+ * Section 7.2's second gate is two tests and therefore two counts. A sample
+ * dated too far ahead of the server (`future`) and one dated too far behind
+ * it (`stale`) are refused by neighbouring `if`s for opposite reasons, and
+ * a client that could not tell them apart could not tell a phone whose
+ * clock is wrong from a phone whose network is: exactly the distinction the
+ * counts exist to make (`ios/SPEC.md` 13.2 scenario 3 reads `stale` alone).
+ *
+ * Nothing is stored. These are computed in the loop that already decides
+ * each sample's fate and are gone with the request, which is why they are
+ * on the result and not in a table: they describe one batch, and the caller
+ * is the only party that knows which samples it sent.
+ */
+export interface RejectedSampleCounts {
+  accuracy: number;
+  future: number;
+  stale: number;
+  outsideCity: number;
+  tooFast: number;
+}
+
 /** What a processed batch produces — `POST /api/samples`'s response body. */
 export interface SampleBatchResult {
   newCells: number;
   newBars: BarSummary[];
   visitUpdates: VisitSummary[];
   tooFastToReveal: boolean;
+  rejected: RejectedSampleCounts;
 }
 
 export interface SampleBatchInput {
@@ -513,17 +540,33 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
 
   const visitProgressByBarId = loadPendingVisitProgress(db, userId);
 
+  // SPEC.md Section 9.6's `rejected`. One counter per `continue` below, and
+  // that is the whole implementation: a count incremented anywhere but on
+  // the branch that refuses the sample would be a second reading of a rule
+  // this loop already applies, free to disagree with it — the mistake
+  // `tooFastToReveal` above is written the way it is to avoid.
+  const rejected: RejectedSampleCounts = {
+    accuracy: 0,
+    future: 0,
+    stale: 0,
+    outsideCity: 0,
+    tooFast: 0,
+  };
+
   for (const sample of sorted) {
     // 1. accuracy
     if (sample.accuracy > CONFIG.FOG_MAX_ACCURACY_M) {
+      rejected.accuracy += 1;
       continue;
     }
     // 2. clock skew / staleness, against server time
     const skewMs = sample.timestamp - nowMs;
     if (skewMs > CONFIG.SAMPLE_MAX_CLOCK_SKEW_MS) {
+      rejected.future += 1;
       continue;
     }
     if (nowMs - sample.timestamp > CONFIG.SAMPLE_MAX_AGE_MS) {
+      rejected.stale += 1;
       continue;
     }
     // 3. inside the active city's bounding box (Section 5.1: the box is
@@ -532,6 +575,7 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
     // ground that has no fog grid, no cells and no districts, so there is
     // nothing there to test against and nothing to write.
     if (toCell(sample.lat, sample.lon, grid) === null) {
+      rejected.outsideCity += 1;
       continue;
     }
     // 4. teleport guard against the previous accepted sample
@@ -539,6 +583,7 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
     if (previous) {
       derivedSpeedKmh = impliedSpeedKmh(previous, sample);
       if (!skipSpeedGuards && derivedSpeedKmh > CONFIG.SAMPLE_TELEPORT_SPEED_KMH) {
+        rejected.tooFast += 1;
         continue;
       }
     }
@@ -657,7 +702,7 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
   const visitUpdates = anyVisitTouched ? applyVisitUpdates(db, visitProgressByBarId) : [];
 
   if (revealCandidates.size === 0) {
-    return { newCells: 0, newBars, visitUpdates, tooFastToReveal };
+    return { newCells: 0, newBars, visitUpdates, tooFastToReveal, rejected };
   }
 
   const newCells = applyReveal(
@@ -670,7 +715,7 @@ export function processSampleBatch(input: SampleBatchInput): SampleBatchResult {
     revealCandidates,
     nowMs,
   );
-  return { newCells, newBars, visitUpdates, tooFastToReveal };
+  return { newCells, newBars, visitUpdates, tooFastToReveal, rejected };
 }
 
 // SPEC.md Section 7.2's teleport guard and Section 10.2's data-minimisation

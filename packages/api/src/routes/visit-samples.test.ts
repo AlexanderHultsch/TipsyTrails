@@ -347,6 +347,7 @@ describe('POST /api/samples visitUpdates', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: { accuracy: 0, future: 0, stale: 1, outsideCity: 0, tooFast: 0 },
     });
 
     const row = getVisit(visitId);
@@ -371,6 +372,7 @@ describe('POST /api/samples visitUpdates', () => {
       newBars: [],
       visitUpdates: [],
       tooFastToReveal: false,
+      rejected: { accuracy: 0, future: 1, stale: 0, outsideCity: 0, tooFast: 0 },
     });
 
     const row = getVisit(visitId);

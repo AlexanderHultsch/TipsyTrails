@@ -98,6 +98,7 @@ function stubSignedInUser(overrides: Record<string, unknown> = {}) {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
     ...overrides,
   });
 }
@@ -367,6 +368,7 @@ describe('offline indicator and queued samples', () => {
           newBars: [],
           visitUpdates: [],
           tooFastToReveal: false,
+          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
         });
       }
       throw new Error(`Unexpected request while offline: ${url}`);

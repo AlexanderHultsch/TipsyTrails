@@ -90,6 +90,7 @@ function stubSignedInUser() {
     isAdmin: false,
     isAnonymous: false,
     mustChangePassword: false,
+    backgroundTrackingConsentedAt: null,
   });
 }
 
@@ -920,6 +921,7 @@ describe('check-in and mastering', () => {
           newCells: 0,
           newBars: [],
           tooFastToReveal: false,
+          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
           visitUpdates:
             sampleCalls === 1
               ? [
@@ -1004,6 +1006,7 @@ describe('check-in and mastering', () => {
           newCells: 0,
           newBars: [],
           tooFastToReveal: false,
+          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
           visitUpdates: [
             {
               id: 1,
@@ -1074,6 +1077,7 @@ describe('check-in and mastering', () => {
           newBars: [],
           visitUpdates: [pendingVisit({ id: 77, barId: 1, barName: 'The Fox', status: 'expired' })],
           tooFastToReveal: false,
+          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -1157,6 +1161,7 @@ describe('check-in and mastering', () => {
           newBars: [],
           visitUpdates: [drifted],
           tooFastToReveal: false,
+          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
         });
       }
       throw new Error(`Unexpected request: ${url}`);
