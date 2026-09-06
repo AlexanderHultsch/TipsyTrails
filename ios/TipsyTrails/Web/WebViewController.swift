@@ -9,9 +9,9 @@ import os
 // (Section 8.5's own words: "Navigating away from the map does not destroy
 // it, and the tracker does not care whether it exists"). This file is the
 // whole of Web/'s Swift surface for this substep (F2b): the view's
-// configuration (8.5), both directions of the bridge (8.2), and the seven
-// message types of 8.2's table. Section 11's screens (F3) present this
-// view; nothing here decides when.
+// configuration (8.5), both directions of the bridge (8.2), and the nine
+// message types across eight rows of 8.2's table. Section 11's screens (F3)
+// present this view; nothing here decides when.
 final class WebViewController: NSObject {
     let webView: WKWebView
     let serverOrigin: URL
@@ -98,6 +98,34 @@ final class WebViewController: NSObject {
     // substep only defines it.
     func loadServerOrigin() {
         webView.load(URLRequest(url: serverOrigin))
+    }
+
+    // Section 8.2/5.4: the *Shell → page* half of the bridge's other
+    // member, beside `dispatch` - guarded exactly as `dispatch` is, so a
+    // page that has not yet implemented `requestSettingsUpdate` on its own
+    // `window.__tipsyTrails` object is a no-op rather than a thrown
+    // exception. Moved here from Screens/ConsentScreen.swift's extension
+    // (F3's write scope) now that this file (F5) owns the reply half too,
+    // `settingsUpdated` above - the two halves of one request belong beside
+    // each other. "The call has a return value... the shell treats anything
+    // but `true` as 'no reply is coming'" (8.2): `completion` reports
+    // whether the page returned exactly `true`, on the main queue, the
+    // queue Section 4.4 gives the web view.
+    func requestSettingsUpdate(backgroundTracking: Bool, completion: @escaping (Bool) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            self.webView.evaluateJavaScript(
+                "window.__tipsyTrails && window.__tipsyTrails.requestSettingsUpdate && "
+                    + "window.__tipsyTrails.requestSettingsUpdate(\(backgroundTracking));"
+            ) { result, _ in
+                DispatchQueue.main.async {
+                    completion(result as? Bool == true)
+                }
+            }
+        }
     }
 
     private static func readServerOrigin() -> URL {
@@ -291,11 +319,12 @@ extension WebViewController: WKUIDelegate {
 }
 
 extension WebViewController: WKScriptMessageHandler {
-    // Section 8.2's table, exactly the seven rows: `visitStarted` and
-    // `visitEnded` share one row there and share one case here, dispatching
-    // internally on `type`. Section 8.2's own words license the default
-    // case: "the page is loaded over the network and may be newer than the
-    // shell" - an unknown `type` is logged and ignored, never a crash.
+    // Section 8.2's table, exactly the eight rows across nine message
+    // types: `visitStarted` and `visitEnded` share one row there and share
+    // one case here, dispatching internally on `type`. Section 8.2's own
+    // words license the default case: "the page is loaded over the network
+    // and may be newer than the shell" - an unknown `type` is logged and
+    // ignored, never a crash.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard
             message.name == Self.messageHandlerName,
@@ -318,6 +347,8 @@ extension WebViewController: WKScriptMessageHandler {
             delegate?.webBridgeRequestedNotifications()
         case "openConsent":
             delegate?.webBridgeRequestedConsent()
+        case "settingsUpdated":
+            handleSettingsUpdated(body: body)
         default:
             Self.logger.info("unknown web bridge message type, ignored: \(type, privacy: .public)")
         }
@@ -355,13 +386,31 @@ extension WebViewController: WKScriptMessageHandler {
         guard let urlString = body["url"] as? String, let url = URL(string: urlString) else { return }
         openExternally(url)
     }
+
+    // Section 8.2: "settingsUpdated | the PATCH /api/settings that
+    // requestSettingsUpdate triggered has settled, once per request |
+    // continues the Consent screen's flow (11.2)." `reason` is present only
+    // when `ok` is `false` (8.2's own payload note), so it is read as
+    // optional here and left `nil` when the page omits it - the delegate's
+    // conformance (Screens/, via App/) is what maps a missing reason to the
+    // `server` sentence 11.2 gives.
+    private func handleSettingsUpdated(body: [String: Any]) {
+        guard
+            let backgroundTracking = body["backgroundTracking"] as? Bool,
+            let ok = body["ok"] as? Bool
+        else { return }
+        let reason = body["reason"] as? String
+        delegate?.webBridgeSettingsUpdated(backgroundTracking: backgroundTracking, ok: ok, reason: reason)
+    }
 }
 
-// Section 8.2: the seven message types of the table above, minus
-// `openExternal` (resolved locally, its own comment says why) - App/ wires
-// a conformance that routes `ready`/`signedIn`/`signedOut`/`visitStarted`/
-// `visitEnded` to Runtime/TrackerRuntime.swift and
-// `requestNotifications`/`openConsent` to Screens/ (F3, not yet built).
+// Section 8.2: the nine message types across eight rows of the table above,
+// minus `openExternal` (resolved locally, its own comment says why) - App/
+// wires a conformance that routes `ready`/`signedIn`/`signedOut`/
+// `visitStarted`/`visitEnded` to Runtime/TrackerRuntime.swift,
+// `requestNotifications`/`openConsent` to Screens/ (F3, not yet built), and
+// `settingsUpdated` to `webBridgeSettingsUpdated` (F5), which Screens/ and
+// App/ resolve into the Consent screen's reply flow (11.2).
 protocol WebBridgeDelegate: AnyObject {
     func webBridgeReady()
     func webBridgeSignedIn()
@@ -370,6 +419,7 @@ protocol WebBridgeDelegate: AnyObject {
     func webBridgeVisitEnded(_ visitId: Int)
     func webBridgeRequestedNotifications()
     func webBridgeRequestedConsent()
+    func webBridgeSettingsUpdated(backgroundTracking: Bool, ok: Bool, reason: String?)
 }
 
 // This file's own retain-cycle rule, stated once at the top: holds its

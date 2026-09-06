@@ -31,6 +31,7 @@ struct TipsyTrailsApp: App {
             if
                 let rootState = appDelegate.rootState,
                 let trackerStateObserver = appDelegate.trackerStateObserver,
+                let consentReply = appDelegate.consentReply,
                 let webViewController = appDelegate.webViewController,
                 let locationEngine = appDelegate.locationEngine,
                 let notificationCentre = appDelegate.notificationCentre,
@@ -40,6 +41,7 @@ struct TipsyTrailsApp: App {
                 RootView(
                     rootState: rootState,
                     trackerState: trackerStateObserver,
+                    consentReply: consentReply,
                     webViewController: webViewController,
                     locationEngine: locationEngine,
                     notificationCentre: notificationCentre,
@@ -85,6 +87,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     // Both are defined at the bottom of this file, beside `RootView`.
     fileprivate var rootState: AppRootState?
     fileprivate var trackerStateObserver: TrackerStateObserver?
+    // Section 11.2: the Consent screen's own `@ObservedObject` for a
+    // `requestSettingsUpdate` reply in flight - owned here for the same
+    // reason `trackerStateObserver` is (one instance, handed down through
+    // `RootView` to the screen that reads it).
+    fileprivate var consentReply: ConsentReplyObserver?
 
     private var cookieProvider: CookieProvider?
     private var eventReceiver: BridgedEventReceiver?
@@ -162,6 +169,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // on every `tracking` event, alongside its two existing readers.
         let trackerStateObserver = TrackerStateObserver()
 
+        // Section 11.2: one instance, owned here, for the same reason
+        // `trackerStateObserver` above is - `AppWebBridgeDelegate` (below)
+        // resolves it on `settingsUpdated`, and `RootView` hands it to
+        // `ConsentScreen` as an `@ObservedObject`.
+        let consentReply = ConsentReplyObserver()
+
         let receiver = BridgedEventReceiver(
             webViewController: webView,
             diagnosticsStore: diagnostics,
@@ -202,6 +215,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let bridgeDelegate = AppWebBridgeDelegate(
             trackerRuntime: trackerRuntime,
             rootState: rootState,
+            consentReply: consentReply,
             onSignedIn: { [weak self] in self?.restartTracker() }
         )
         webView.delegate = bridgeDelegate
@@ -239,6 +253,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         runtime = trackerRuntime
         self.rootState = rootState
         self.trackerStateObserver = trackerStateObserver
+        self.consentReply = consentReply
 
         // Section 7.3: `start` needs a cookie and an authorization pair
         // before anything else. `cookies.currentSessionCookieValue()` is
@@ -398,11 +413,18 @@ final class BridgedEventReceiver: TrackerEventReceiving {
 final class AppWebBridgeDelegate: WebBridgeDelegate {
     private weak var trackerRuntime: TrackerRuntime?
     private weak var rootState: AppRootState?
+    private weak var consentReply: ConsentReplyObserver?
     private let onSignedIn: () -> Void
 
-    init(trackerRuntime: TrackerRuntime, rootState: AppRootState, onSignedIn: @escaping () -> Void) {
+    init(
+        trackerRuntime: TrackerRuntime,
+        rootState: AppRootState,
+        consentReply: ConsentReplyObserver,
+        onSignedIn: @escaping () -> Void
+    ) {
         self.rootState = rootState
         self.trackerRuntime = trackerRuntime
+        self.consentReply = consentReply
         self.onSignedIn = onSignedIn
     }
 
@@ -463,6 +485,15 @@ final class AppWebBridgeDelegate: WebBridgeDelegate {
     // settings from the web app | shows the Consent screen."
     func webBridgeRequestedConsent() {
         rootState?.showConsent = true
+    }
+
+    // Section 8.2: "settingsUpdated | the PATCH /api/settings that
+    // requestSettingsUpdate triggered has settled, once per request |
+    // continues the Consent screen's flow (11.2)." Forwarded verbatim to
+    // `ConsentReplyObserver`, which is what actually matches it against a
+    // pending request.
+    func webBridgeSettingsUpdated(backgroundTracking: Bool, ok: Bool, reason: String?) {
+        consentReply?.resolve(backgroundTracking: backgroundTracking, ok: ok, reason: reason)
     }
 }
 
@@ -639,6 +670,7 @@ struct WebViewRepresentable: UIViewRepresentable {
 struct RootView: View {
     @ObservedObject var rootState: AppRootState
     @ObservedObject var trackerState: TrackerStateObserver
+    @ObservedObject var consentReply: ConsentReplyObserver
     let webViewController: WebViewController
     let locationEngine: LocationEngine
     let notificationCentre: NotificationCentre
@@ -674,6 +706,7 @@ struct RootView: View {
                 diagnosticsStore: diagnosticsStore,
                 webViewController: webViewController,
                 trackerState: trackerState,
+                consentReply: consentReply,
                 onConsentChanged: onConsentChanged,
                 onDismiss: { rootState.showConsent = false }
             )

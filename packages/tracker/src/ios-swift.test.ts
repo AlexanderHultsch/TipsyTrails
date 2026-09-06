@@ -36,8 +36,10 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const IOS_ROOT = join(REPO_ROOT, 'ios');
 const IOS_APP_ROOT = join(IOS_ROOT, 'TipsyTrails');
+const IOS_SPEC_PATH = join(IOS_ROOT, 'SPEC.md');
 const HOST_TS_PATH = join(REPO_ROOT, 'packages/tracker/src/host.ts');
 const HOST_BRIDGE_SWIFT_PATH = join(IOS_APP_ROOT, 'Runtime/HostBridge.swift');
+const WEB_VIEW_CONTROLLER_SWIFT_PATH = join(IOS_APP_ROOT, 'Web/WebViewController.swift');
 
 // Step F's own decision (ios/SPEC.md Section 12): every layout number
 // Section 11's four screens need is confined, by construction, to this one
@@ -334,6 +336,113 @@ describe('GUARD 2: Runtime/HostBridge.swift installs every Host member and no ot
       extraInSwift,
       `Runtime/HostBridge.swift installs these names onto the host object but host.ts's Host ` +
         `interface declares no such member - dead code or a typo of a real one: ` +
+        `${extraInSwift.join(', ')}`,
+    ).toEqual([]);
+  });
+});
+
+// GUARD 3: the "Page → shell" message types (ios/SPEC.md Section 8.2, Step
+// F's substep F5). The source of truth is ios/SPEC.md itself, not a
+// hand-written list in this file: the spec's own table is parsed for its
+// backticked identifiers, so a future message type added to 8.2's table
+// without a matching Swift `case` fails here rather than being caught only
+// by reading.
+function pageToShellMessageTypesFromSpec(specSource: string): string[] {
+  const markerIndex = specSource.indexOf('**Page → shell.**');
+  if (markerIndex === -1) return [];
+  const afterMarker = specSource.slice(markerIndex);
+  const tableMatch = /\n((?:\|.*\|\n?)+)/.exec(afterMarker);
+  if (!tableMatch) return [];
+  // The first two lines of a Markdown table are the header row and the
+  // `| --- | --- |` separator; every identifier this guard wants is in a
+  // data row's first cell, from the third line on.
+  const dataRows = tableMatch[1].trim().split('\n').slice(2);
+  const types: string[] = [];
+  for (const row of dataRows) {
+    const firstCell = row.split('|')[1] ?? '';
+    for (const match of firstCell.matchAll(/`([^`]+)`/g)) {
+      types.push(match[1]);
+    }
+  }
+  return types;
+}
+
+// Reads a `{ ... }` block by counting braces rather than anchoring on a
+// fixed indentation (Guard 2's `hostInterfaceMemberNames` anchors on
+// `\n\}`, which only works because `interface Host` never nests a brace of
+// its own) - `switch type { ... }`'s own body calls functions with
+// parentheses but no braces of its own today, so counting costs nothing and
+// survives a reindent that a fixed-column anchor would not.
+function extractBracedBody(source: string, opener: string): string | null {
+  const openerIndex = source.indexOf(opener);
+  if (openerIndex === -1) return null;
+  let i = openerIndex + opener.length;
+  let depth = 1;
+  const start = i;
+  while (i < source.length && depth > 0) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') depth--;
+    i++;
+  }
+  return depth === 0 ? source.slice(start, i - 1) : null;
+}
+
+// Swift side: every string literal on a `case "a", "b":` line inside
+// `userContentController(_:didReceive:)`'s `switch type { ... }` block.
+// Read from the raw source, deliberately not run through
+// stripCommentsAndStrings above, for the same reason Guard 2's own comment
+// gives for HOST_INSTALL_PATTERN: the string literals this looks for are
+// exactly what that function erases.
+function swiftPageToShellMessageTypes(webViewControllerSource: string): string[] {
+  const switchBody = extractBracedBody(webViewControllerSource, 'switch type {');
+  if (switchBody === null) return [];
+  const types: string[] = [];
+  for (const rawLine of switchBody.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('case ') || !line.endsWith(':')) continue;
+    for (const match of line.matchAll(/"([^"]+)"/g)) {
+      types.push(match[1]);
+    }
+  }
+  return types;
+}
+
+describe('GUARD 3: Web/WebViewController.swift routes exactly the Page → shell message types of 8.2', () => {
+  const specSource = readFileSync(IOS_SPEC_PATH, 'utf-8');
+  const webViewControllerSource = readFileSync(WEB_VIEW_CONTROLLER_SWIFT_PATH, 'utf-8');
+
+  const specTypes = pageToShellMessageTypesFromSpec(specSource);
+  const swiftTypes = swiftPageToShellMessageTypes(webViewControllerSource);
+
+  it('parsed a non-empty Page → shell table from ios/SPEC.md', () => {
+    expect(specTypes.length).toBeGreaterThan(0);
+  });
+
+  it('found at least one routed message type in Web/WebViewController.swift', () => {
+    expect(swiftTypes.length).toBeGreaterThan(0);
+  });
+
+  it('routes exactly the message types the table declares, no fewer and no more', () => {
+    const specTypeSet = new Set(specTypes);
+    const swiftTypeSet = new Set(swiftTypes);
+
+    // In the spec's table but never routed by the Swift: a message the page
+    // can send that the shell silently drops.
+    const missingFromSwift = specTypes.filter((type) => !swiftTypeSet.has(type));
+    // Routed by the Swift but not declared in the table: dead code, or a
+    // typo of a real type.
+    const extraInSwift = swiftTypes.filter((type) => !specTypeSet.has(type));
+
+    expect(
+      missingFromSwift,
+      `ios/SPEC.md 8.2's "Page → shell" table declares these message types but ` +
+        `Web/WebViewController.swift's switch never routes them - the page can send one of these and ` +
+        `nothing happens: ${missingFromSwift.join(', ')}`,
+    ).toEqual([]);
+    expect(
+      extraInSwift,
+      `Web/WebViewController.swift's switch routes these message types but ios/SPEC.md 8.2's ` +
+        `"Page → shell" table declares no such type - dead code or a typo of a real one: ` +
         `${extraInSwift.join(', ')}`,
     ).toEqual([]);
   });

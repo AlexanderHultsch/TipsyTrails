@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import WebKit
+import os
 
 // ios/SPEC.md Section 11.2, and Section 10.1 is the authority on its
 // content - reached from the web app's Settings row (8.6), from the
@@ -27,6 +28,7 @@ struct ConsentScreen: View {
     let diagnosticsStore: DiagnosticsStore
     let webViewController: WebViewController
     @ObservedObject var trackerState: TrackerStateObserver
+    @ObservedObject var consentReply: ConsentReplyObserver
     // Section 5.4: "the shell learns the result back through the tracker's
     // next start" - App/TipsyTrailsApp.swift owns assembling a fresh
     // `start` call (it already assembles the first one, at launch) and
@@ -72,6 +74,26 @@ struct ConsentScreen: View {
         // accent this application allows.
         .tint(Metrics.accentColor)
         .onAppear(perform: refreshNotificationAuthorization)
+        // Section 11.2: the reply's two `ok` outcomes, once `settingsUpdated`
+        // resolves `consentReply.phase` out of `.recording` - `.failed`
+        // shows its sentence on its own (`consentSection`'s footer, below)
+        // and does nothing here, per that section's own words.
+        .onChange(of: consentReply.phase) { _, phase in
+            switch phase {
+            case .succeeded(let backgroundTracking):
+                if backgroundTracking {
+                    // Section 10.1 step 4: "Only then, and only once the
+                    // server has recorded the consent... the iOS prompt for
+                    // Always."
+                    locationEngine.requestAlwaysAuthorization()
+                } else {
+                    hasCheckedConsentSentence = false
+                }
+                onConsentChanged()
+            case .idle, .recording, .failed:
+                break
+            }
+        }
     }
 
     // MARK: - Section 10.1 step 1
@@ -134,31 +156,67 @@ struct ConsentScreen: View {
             .accessibilityAddTraits(hasCheckedConsentSentence ? [.isSelected] : [])
 
             Button(action: recordConsent) {
-                PrimaryButtonLabel(title: "I agree, and continue")
+                // Section 11.2: "the button becomes disabled and reads
+                // 'Recording…' until settingsUpdated arrives."
+                PrimaryButtonLabel(title: isAwaitingConsentReply ? "Recording…" : "I agree, and continue")
             }
             // Section 10.1: "the button that records it is disabled until
-            // it is checked."
-            .disabled(!hasCheckedConsentSentence)
+            // it is checked." Section 11.2 adds the second reason: a reply
+            // already in flight.
+            .disabled(!hasCheckedConsentSentence || isAwaitingConsentReply)
         } header: {
             Text("Your consent")
         } footer: {
-            // Section 10.1: "Only then, the iOS prompt for Always."
-            Text("Only after this does iOS ask whether to allow Always access.")
+            if case .failed(_, let reason) = consentReply.phase {
+                // Section 11.2: "the screen shows one sentence for the
+                // reason" - the checkbox above is left exactly as it was
+                // (11.2: "the checkbox stays checked so the player can tap
+                // again"), so this is the only change on a failed reply.
+                Text(consentFailureSentence(for: reason))
+            } else {
+                // Section 10.1: "Only then, the iOS prompt for Always."
+                Text("Only after this does iOS ask whether to allow Always access.")
+            }
         }
         .listRowBackground(Metrics.paperColor)
     }
 
+    private var isAwaitingConsentReply: Bool {
+        if case .recording = consentReply.phase { return true }
+        return false
+    }
+
+    // Section 11.2's three sentences, verbatim; an unknown reason - a page
+    // sending something Section 8.2's payload does not name - falls to the
+    // `server` sentence, exactly as `ConsentReplyObserver.resolve` already
+    // does for a missing one.
+    private func consentFailureSentence(for reason: String) -> String {
+        switch reason {
+        case "offline":
+            return "Your phone is offline. Try again when it is connected."
+        case "unauthenticated":
+            return "Sign in to the game first."
+        default:
+            return "The server could not record your consent. Try again."
+        }
+    }
+
     private func recordConsent() {
-        webViewController.requestSettingsUpdate(backgroundTracking: true)
-        // Section 10.1: "Only then, the iOS prompt for Always" - step 4
-        // runs only from here, after `recordConsent` is reachable at all
-        // only once the checkbox of step 3 is checked (`.disabled`, above).
-        // That ordering is 10.1's legal basis for asking Always - the
-        // player has already said yes in the app's own words - not a
-        // nicety, so it is worth keeping this call after, never before,
-        // `requestSettingsUpdate` above.
-        locationEngine.requestAlwaysAuthorization()
-        onConsentChanged()
+        webViewController.requestSettingsUpdate(backgroundTracking: true) { promised in
+            if promised {
+                consentReply.begin(backgroundTracking: true)
+            } else {
+                // Section 11.2: "If the page did not return true - a page
+                // older than this rule, possible because the page is served
+                // live and the app is not - the shell behaves as before this
+                // version: it proceeds to the Always prompt and learns the
+                // state through the next start." Section 10.1's ordering
+                // still holds: this only runs once the checkbox of step 3 is
+                // checked (`.disabled`, above).
+                locationEngine.requestAlwaysAuthorization()
+                onConsentChanged()
+            }
+        }
     }
 
     // MARK: - Current status (11.2: "so it is also where a player sees why
@@ -309,9 +367,17 @@ struct ConsentScreen: View {
     }
 
     private func withdrawConsent() {
-        webViewController.requestSettingsUpdate(backgroundTracking: false)
-        hasCheckedConsentSentence = false
-        onConsentChanged()
+        webViewController.requestSettingsUpdate(backgroundTracking: false) { promised in
+            if promised {
+                consentReply.begin(backgroundTracking: false)
+            } else {
+                // Section 11.2: the withdrawal flow is symmetric with
+                // `recordConsent`'s own fallback above - a page that
+                // predates the reply gets the pre-v0.11 behaviour.
+                hasCheckedConsentSentence = false
+                onConsentChanged()
+            }
+        }
     }
 
     // MARK: - Section 11.3: "Reached from the Consent screen's footer."
@@ -332,29 +398,55 @@ struct ConsentScreen: View {
     }
 }
 
-// ios/SPEC.md Section 5.4: "The shell sets it through the web app rather
-// than directly: the consent screen (Section 11.2) is native, and on the
-// player's confirmation the shell asks the web view to call the settings
-// endpoint, so there is one client that writes settings and it is the one
-// that already does." Section 8.2's page<->shell bridge table (built on
-// `main`, not this branch, under I7) has no shell-to-page call for this yet.
-// Narrowly defined here, mirroring Web/WebViewController.swift's own
-// `dispatch`'s guarded-call idiom ("window.__tipsyTrails &&
-// window.__tipsyTrails.dispatch(...)") - a page that has not yet
-// implemented `requestSettingsUpdate` on its own `window.__tipsyTrails`
-// object simply ignores this call rather than throwing. Defined here, in
-// Screens/, rather than in Web/WebViewController.swift itself, because this
-// substep's write scope is Screens/ and App/TipsyTrailsApp.swift only (I7).
-// Flagged in this substep's own report as a new shell-to-page surface that
-// belongs in Section 8.2's table and in `packages/web`'s own bridge
-// wrapper - the list for `main` this branch cannot write to directly (I7).
-extension WebViewController {
-    func requestSettingsUpdate(backgroundTracking: Bool) {
-        DispatchQueue.main.async {
-            self.webView.evaluateJavaScript(
-                "window.__tipsyTrails && window.__tipsyTrails.requestSettingsUpdate && "
-                    + "window.__tipsyTrails.requestSettingsUpdate(\(backgroundTracking));"
-            )
+// ios/SPEC.md Section 11.2: tracks a `requestSettingsUpdate` call through to
+// its `settingsUpdated` reply (8.2), so this screen can show "Recording…"
+// while one is pending and the per-reason sentence when it comes back
+// `ok: false`. An `ObservableObject` for the same reason
+// App/TipsyTrailsApp.swift's `TrackerStateObserver` is: SwiftUI redraws this
+// screen when `phase` changes, with no further plumbing.
+final class ConsentReplyObserver: ObservableObject {
+    enum Phase: Equatable {
+        case idle
+        case recording(backgroundTracking: Bool)
+        case failed(backgroundTracking: Bool, reason: String)
+        case succeeded(backgroundTracking: Bool)
+    }
+
+    @Published private(set) var phase: Phase = .idle
+
+    private static let logger = Logger(subsystem: "com.ahultsch.tipsytrails", category: "consent")
+
+    // Called right after `Web/WebViewController.swift`'s
+    // `requestSettingsUpdate` reports the page promised a reply (8.2: "The
+    // page returns `true` when it has taken the request").
+    func begin(backgroundTracking: Bool) {
+        phase = .recording(backgroundTracking: backgroundTracking)
+    }
+
+    // Called from `webBridgeSettingsUpdated` (App/TipsyTrailsApp.swift's
+    // `AppWebBridgeDelegate`), which forwards the `settingsUpdated` message
+    // verbatim. A reply that does not match a pending request - none
+    // pending at all, or one pending for the other `backgroundTracking`
+    // value - is a page or shell disagreeing with itself about which
+    // request is in flight, so it is ignored and logged rather than acted
+    // on.
+    func resolve(backgroundTracking: Bool, ok: Bool, reason: String?) {
+        guard case .recording(let pendingBackgroundTracking) = phase else {
+            Self.logger.info("settingsUpdated reply with no request pending, ignored")
+            return
         }
+        guard pendingBackgroundTracking == backgroundTracking else {
+            Self.logger.info(
+                "settingsUpdated reply backgroundTracking mismatch, ignored: pending "
+                    + "\(pendingBackgroundTracking, privacy: .public), got \(backgroundTracking, privacy: .public)"
+            )
+            return
+        }
+        // Section 8.2: "reason is present only when ok is false"; Section
+        // 11.2's own sentence for an unknown reason is the `server` one, so
+        // a missing reason on a `false` reply is treated the same way here.
+        phase = ok
+            ? .succeeded(backgroundTracking: backgroundTracking)
+            : .failed(backgroundTracking: backgroundTracking, reason: reason ?? "server")
     }
 }
