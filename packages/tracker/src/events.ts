@@ -62,9 +62,9 @@ export interface VisitSummary {
 // POST /api/samples response shape. Mirrors
 // packages/web/src/api/types.ts's `SamplesResponse`, widened by
 // `SPEC.md` Section 9.6 (this spec's own Section 9.1) to carry `rejected` -
-// one count per gate, for this request's samples only. The web mirror does
-// not yet carry this field because no web screen reads it; the tracker's
-// guard does (Section 9.1).
+// one count per gate, for this request's samples only. The web mirror has
+// carried this field since parent v1.60, though no web screen reads it; the
+// tracker's guard does (Section 9.1).
 export interface SamplesResponse {
   newCells: number;
   newBars: Bar[];
