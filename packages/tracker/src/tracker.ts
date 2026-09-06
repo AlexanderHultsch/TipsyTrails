@@ -14,7 +14,7 @@
 // queue, so two calls into this module never interleave, and the boolean
 // exists only to refuse a second flush attempt while one is still awaiting
 // its response.
-import { CONFIG } from '@tipsytrails/shared';
+import { CONFIG, computeBehindDepth } from '@tipsytrails/shared';
 import type { LatLon } from '@tipsytrails/shared';
 import { getBar, getMe, getPendingVisits, postSamples } from './api.js';
 import type { ApiResult } from './api.js';
@@ -40,15 +40,7 @@ import {
   buildSignedOutNotification,
   reminderId,
 } from './notifications.js';
-import {
-  computeBehindDepth,
-  createQueue,
-  depth,
-  dropStale,
-  enqueue,
-  peekBatch,
-  removeSent,
-} from './queue.js';
+import { createQueue, depth, dropStale, enqueue, peekBatch, removeSent } from './queue.js';
 import type { SampleQueue } from './queue.js';
 import {
   addPendingVisit,

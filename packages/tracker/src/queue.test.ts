@@ -3,15 +3,7 @@ import { CONFIG } from '@tipsytrails/shared';
 import { createCounters } from './counters.js';
 import type { Counters } from './counters.js';
 import type { Sample } from './events.js';
-import {
-  computeBehindDepth,
-  createQueue,
-  depth,
-  dropStale,
-  enqueue,
-  peekBatch,
-  removeSent,
-} from './queue.js';
+import { createQueue, depth, dropStale, enqueue, peekBatch, removeSent } from './queue.js';
 
 // A fixed instant rather than Date.now() everywhere - ios/SPEC.md Section
 // 7.2's Host.now() is what feeds this module in production, and this suite
@@ -319,23 +311,5 @@ describe('counters.queue.currentDepth', () => {
       operation();
       expect(counters.queue.currentDepth).toBe(depth(queue));
     }
-  });
-});
-
-describe('computeBehindDepth', () => {
-  it('is zero when the whole queue at attempt start was sent', () => {
-    expect(computeBehindDepth(5, 5)).toBe(0);
-  });
-
-  it('is the unsent remainder when the batch could not carry everything queued at attempt start', () => {
-    expect(computeBehindDepth(80, 60)).toBe(20);
-  });
-
-  it('is the full amount queued at attempt start on a failed attempt, which sends nothing', () => {
-    expect(computeBehindDepth(12, 0)).toBe(12);
-  });
-
-  it('is zero when nothing was queued at attempt start', () => {
-    expect(computeBehindDepth(0, 0)).toBe(0);
   });
 });
