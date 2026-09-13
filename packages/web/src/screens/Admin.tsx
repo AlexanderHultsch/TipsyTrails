@@ -24,6 +24,7 @@ import type {
 import { BottomNav } from '../components/BottomNav.js';
 import { MapPicker } from '../map/MapPicker.js';
 import type { PickedPosition } from '../map/MapPicker.js';
+import { isShell } from '../shell/bridge.js';
 import { postShellVisitEnded } from '../shell/messages.js';
 import { isVisitAlreadyGone } from '../tracking/useVisits.js';
 
@@ -629,6 +630,22 @@ function UsersSection() {
 // not free, this screen is mostly about bars and users, and on a server that
 // never enabled teleport the map would be a WebGL context built for a button
 // that answers 404.
+//
+// **It does not render inside the iPhone shell** (ios/SPEC.md 8.3 and 15's
+// O-I8, decided as row 13 of 12's list for `main`), which is the mirror image of
+// the Settings row of 8.6: that one renders only under the shell, this one only
+// outside it. The reason is the same in both directions - a control the platform
+// cannot honour is not offered there. Under the shell the native tracker is the
+// account's sole writer of samples, so a teleport taken in the app would be a
+// faked position competing with a real one, which is the interleaving O-I8
+// recorded and row 13 removed. The fixture is not withdrawn: it is the web app's,
+// and the web app is in Safari on the same phone, signed in to the same account.
+//
+// Nothing is rendered in its place, deliberately. A note saying where the
+// fixture went would be copy about an admin tool on a screen anyone can reach by
+// guessing a URL, and it would be the one sentence on this panel that read like
+// a security measure when it is not: every gate that matters is the server's,
+// exactly as the paragraph above says.
 function TeleportSection() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [position, setPosition] = useState<PickedPosition | null>(null);
@@ -752,6 +769,12 @@ function TeleportSection() {
 // are four components rather than one with a dozen `useState` calls between
 // them.
 export function Admin() {
+  // Fixed at mount, the way every other shell question on a screen is asked
+  // (screens/Settings.tsx): `isShell()` is 8.1's one detector, and an injected
+  // object arriving later must not move a mounted screen from one answer to the
+  // other halfway through.
+  const [inShell] = useState(isShell);
+
   return (
     <main className="screen">
       <BottomNav />
@@ -760,7 +783,10 @@ export function Admin() {
         <BarsSection />
         <PendingVisitsSection />
         <UsersSection />
-        <TeleportSection />
+        {/* Row 13: the teleport is the web app's fixture and stays in Safari.
+            See TeleportSection above for why, and for why nothing takes its
+            place here. */}
+        {!inShell && <TeleportSection />}
       </div>
     </main>
   );

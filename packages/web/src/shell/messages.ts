@@ -10,14 +10,21 @@ import { isShell } from './bridge.js';
 // reason `bridge.ts` states about `window.__tipsyTrails`: a surface that is
 // spoken to from one place stays countable when it grows.
 //
-// **There are eight, and 8.2's table has seven rows** - `visitStarted` and
-// `visitEnded` share one there, and the shell's own `WKScriptMessageHandler`
-// shares one `case` for them and dispatches on `type` inside it. So "the seven
-// message types" (12's row 3 for `main`) counts rows and not types. Step D's
-// Definition of Done names five, which leaves `openExternal`,
-// `requestNotifications` and `openConsent` with no item to fail; all eight are
-// built here, and the three without a moment on `main` today are listed at the
-// foot of this file with the trigger each is waiting on.
+// **There are nine. Eight of them are 8.2's table, which has seven rows** -
+// `visitStarted` and `visitEnded` share one there, and the shell's own
+// `WKScriptMessageHandler` shares one `case` for them and dispatches on `type`
+// inside it. So "the seven message types" (12's row 3 for `main`) counts rows
+// and not types. Step D's Definition of Done names five, which leaves
+// `openExternal`, `requestNotifications` and `openConsent` with no item to fail;
+// all eight are built here, and the ones without a moment on `main` today are
+// listed at the foot of this file with the trigger each is waiting on.
+//
+// **The ninth is `settingsUpdated`**, row 12 of 12's list for `main` (the
+// `for-ios` issue that carries it is #2). It is the reply to
+// `requestSettingsUpdate`, which until that row had none: the shell asked the
+// page to write consent and then learned whether it took only from the tracker's
+// next `start`, one whole `GET /api/auth/me` later, with nothing to show a
+// player standing in front of a checkbox in the meantime.
 
 // The messages, with the payloads 8.2 fixes. Five carry `{ type }` and nothing
 // else - "the shell reads only the message name for these five".
@@ -36,13 +43,48 @@ export type ShellMessage =
   | { type: 'visitEnded'; id: number }
   | { type: 'openExternal'; url: string }
   | { type: 'requestNotifications' }
-  | { type: 'openConsent' };
+  | { type: 'openConsent' }
+  // The reply of row 12, posted once per `requestSettingsUpdate` when the
+  // `PATCH /api/settings` it triggered has settled. `backgroundTracking` echoes
+  // the request, because the shell can have asked twice - ticked, withdrawn -
+  // before either answer arrives, and a reply that did not say which request it
+  // belonged to would leave it guessing.
+  //
+  // **Written as two members rather than one with an optional `reason`**, which
+  // is the same shape on the wire and a stronger one here: 8.2 has `reason`
+  // present only when `ok` is false, and a single member with `ok: boolean` and
+  // `reason?:` lets this page post an `ok: true` carrying a reason, or an
+  // `ok: false` carrying none, without anything failing. The Swift side reads
+  // `{ type, backgroundTracking, ok, reason? }` either way.
+  | { type: 'settingsUpdated'; backgroundTracking: boolean; ok: true }
+  | {
+      type: 'settingsUpdated';
+      backgroundTracking: boolean;
+      ok: false;
+      reason: SettingsUpdateFailure;
+    };
+
+// Why the write failed, and the three cases are a distinction the shell acts on
+// rather than a log line (8.2, 11.2):
+//
+//  - `offline` is a transport failure that never got an HTTP status - the phone
+//    has no network, or the request never left it. Nothing is wrong with the
+//    consent the player gave, and asking again later is the whole remedy.
+//  - `unauthenticated` is a 401. The session is gone, which is 5.2's case, and
+//    the way out is the web app's login screen and not a retry.
+//  - `server` is every other status, the schema's own 400 included. The page got
+//    an answer and the answer was no.
+export type SettingsUpdateFailure = 'offline' | 'unauthenticated' | 'server';
 
 // Exhaustiveness, checked by the compiler rather than by counting: a message
 // added to the union above and not listed here is an error, and so is a name
-// listed here that the union does not carry. Exported because the eight are a
+// listed here that the union does not carry. Exported because the nine are a
 // contract with a Swift `switch` that nothing in this repository can compile,
 // so the count and the names are worth asserting from a test.
+//
+// `ShellMessage['type']` collapses the two `settingsUpdated` members to the one
+// name they share, so the check still counts message types and not union
+// members.
 const MESSAGE_TYPES = {
   ready: true,
   signedIn: true,
@@ -52,6 +94,7 @@ const MESSAGE_TYPES = {
   openExternal: true,
   requestNotifications: true,
   openConsent: true,
+  settingsUpdated: true,
 } satisfies Record<ShellMessage['type'], true>;
 
 export const SHELL_MESSAGE_TYPES = Object.keys(MESSAGE_TYPES) as ShellMessage['type'][];
@@ -70,7 +113,7 @@ declare global {
 //
 // `isShell()` is 8.1's one detector, and Section 8's opening rule is that every
 // change in it "is behind one detection and is a no-op outside it". Asking here
-// is what makes that literally true of these eight messages: in a browser
+// is what makes that literally true of these nine messages: in a browser
 // nothing is posted, whatever else the page happens to be running inside. A
 // `WKWebView` that is not this shell defines `window.webkit` too.
 //
@@ -186,4 +229,26 @@ export function postShellRequestNotifications(): void {
 // for `main`, a block that has not been built.
 export function postShellOpenConsent(): void {
   postShellMessage({ type: 'openConsent' });
+}
+
+// Row 12: the reply to `requestSettingsUpdate`, posted by
+// `useShellSettingsUpdate.ts` when the PATCH it made has settled, and posted
+// exactly once per call the shell made.
+//
+// **`reason === null` is the success case, and that is why there is one function
+// and not two.** The two outcomes are one moment - a request settled - and the
+// Swift side switches on `ok`; splitting them here would put the choice of which
+// to call at the two call sites, which is the one place the failure path and the
+// success path must not be able to disagree. A `null` reason cannot produce an
+// `ok: false` and a reason cannot produce an `ok: true`, because this is the only
+// thing that builds either message.
+export function postShellSettingsUpdated(
+  backgroundTracking: boolean,
+  reason: SettingsUpdateFailure | null,
+): void {
+  postShellMessage(
+    reason === null
+      ? { type: 'settingsUpdated', backgroundTracking, ok: true }
+      : { type: 'settingsUpdated', backgroundTracking, ok: false, reason },
+  );
 }

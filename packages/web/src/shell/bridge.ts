@@ -27,6 +27,16 @@ import type { ReplayableEventType, TrackerEvent } from './events.js';
 // exception", which only means anything if the property can be absent - so it
 // is optional here, and `useShellSettingsUpdate` is what fills it in.
 //
+// **It returns `true`, and that is the whole of row 12's first half.** The shell
+// calls it through `evaluateJavaScript` and reads the value out of the
+// completion handler: `true` means a `settingsUpdated` message is coming when
+// the PATCH settles (`messages.ts`), and nothing at all - an absent property, a
+// page too old to have been given this - means no reply is coming and the shell
+// keeps the behaviour it had, learning the outcome from the tracker's next
+// `start`. So the return type is the promise itself, and a page that returned
+// `false` or `undefined` here while still posting the message would be the one
+// lie this signature can tell.
+//
 // `dispatch` and `addListener` are the Shell -> page event path of 8.2, left
 // undeclared by the block that wrote the rest of this file "until they arrive
 // rather than guessed at now". They arrive here, with the `TrackerEvent` union
@@ -54,7 +64,7 @@ export interface ShellBridge {
   readonly platform: 'ios';
   readonly shellVersion: string;
   readonly trackerVersion: string;
-  requestSettingsUpdate?: (backgroundTracking: boolean) => void;
+  requestSettingsUpdate?: (backgroundTracking: boolean) => true;
   dispatch?: (json: string) => void;
   addListener?: (listener: (event: TrackerEvent, isReplay: boolean) => void) => void;
 }

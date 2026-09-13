@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONFIG, TELEPORT_FIX } from '@tipsytrails/shared';
+import { CONFIG } from '@tipsytrails/shared';
 import { App } from './App.js';
 import type { Bar, SamplesResponse, VisitSummary } from './api/types.js';
 import type { TrackerEvent } from './shell/events.js';
@@ -1301,25 +1301,33 @@ describe('the existing screens, driven by the tracker’s events instead of a wa
 });
 
 // ---------------------------------------------------------------------------
-// The teleport, which keeps its own path under both drivers
+// The teleport, which the shell driver ignores
 // ---------------------------------------------------------------------------
 
-describe('a standing teleport under the shell driver (ios/SPEC.md 8.3, O-I8)', () => {
-  it('asserts the teleported point, ignores the shell’s fixes for it, and keeps posting', async () => {
+// Row 13 of ios/SPEC.md 12's list for `main`, which decides 15's O-I8: under the
+// shell driver this hook ignores `TeleportMode` and never posts to
+// `POST /api/samples`, so the tracker is the sole writer for the account.
+//
+// Until then the hook kept posting the teleported point on its own path under
+// both drivers, and the cost was in O-I8: two posters against one account, the
+// server's previous-accepted position alternating between a faked point and a
+// real one, and Section 7.2's step 4 refusing some of both. These cases are the
+// other side of that decision - everything the mode used to take over is now the
+// tracker's, and the three assertions are the three things it took over.
+//
+// **The browser's teleport is untouched and is tested where it always was**, in
+// App.teleport.test.tsx and App.test.tsx, both unedited by this change. What is
+// asserted here is only what the shell driver does with a mode the admin screen
+// can no longer even start inside the app (screens/Admin.tsx).
+describe('a standing teleport under the shell driver (ios/SPEC.md 8.3, row 13)', () => {
+  it('asserts no point, leaves the tracker’s counts standing, and posts nothing', async () => {
     vi.useFakeTimers();
     const shell = injectShell();
     const geo = stubGeolocation();
     const wakeLock = stubWakeLock();
+    // Every request is unexpected here. The hook under test fetches nothing of
+    // its own, so any call at all is the post this row forbids.
     const fetchMock = stubFetch((url) => {
-      if (url === '/api/samples') {
-        return jsonResponse(200, {
-          newCells: 0,
-          newBars: [],
-          visitUpdates: [],
-          tooFastToReveal: false,
-          rejected: { accuracy: 0, future: 0, stale: 0, outsideCity: 0, tooFast: 0 },
-        });
-      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -1332,48 +1340,75 @@ describe('a standing teleport under the shell driver (ios/SPEC.md 8.3, O-I8)', (
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    // In Safari this is the teleported point, asserted at once without waiting
+    // for a cadence tick. Here the mode says nothing about where the phone is.
+    expect(state().lastPosition).toBeNull();
+    expect(getLastKnownPosition()).toBeNull();
+
+    // The tracker's fixes are the position, and they are not "ignored for
+    // `lastPosition`" any more - there is nothing to override them with.
+    dispatchAll(shell, positionEvent({ lat: REAL_FIX.lat, lon: REAL_FIX.lon }));
     expect(state().lastPosition).toEqual({
-      lat: TELEPORT_POINT.lat,
-      lon: TELEPORT_POINT.lon,
-      accuracy: TELEPORT_FIX.accuracy,
+      lat: REAL_FIX.lat,
+      lon: REAL_FIX.lon,
+      accuracy: CONFIG.GPS_ACCURACY_GOOD_M,
       heading: null,
     });
+    expect(getLastKnownPosition()?.lat).toBe(REAL_FIX.lat);
 
-    // The shell's fixes are the real position, which is the position the mode
-    // exists to override.
-    dispatchAll(shell, positionEvent({ lat: REAL_FIX.lat, lon: REAL_FIX.lon }));
-    expect(state().lastPosition?.lat).toBe(TELEPORT_POINT.lat);
-
-    // The tracker's own queue is not this path's, so it does not write over
-    // the counts the teleport's posts produce.
+    // The tracker's queue is the only queue there is, mode or no mode, so its
+    // counts reach the indicator instead of being held back for a second
+    // poster's.
     dispatchAll(shell, queueEvent(11, 7));
-    expect(state().queueDepth).toBe(0);
-    expect(state().connectionStatus).toBe('online');
+    expect(state().queueDepth).toBe(11);
+    expect(state().connectionStatus).toBe('syncing');
 
-    // And the point is posted on the ordinary cadence, through the ordinary
-    // route, with no bypass - the one thing this hook still sends under the
-    // shell driver (O-I8 records what it costs).
+    // `trackingActive` is the tracker's state alone. In Safari a standing
+    // teleport makes it true while the watch is stopped, because the cadence is
+    // posting; under this driver nothing is, and a `tracking` event is the only
+    // thing entitled to say otherwise.
+    expect(state().trackingActive).toBe(false);
+    dispatchAll(shell, trackingEvent('tracking', { background: true }));
+    expect(state().trackingActive).toBe(true);
+
+    // The cadence tick that used to queue and post the teleported point. The
+    // queue is empty because nothing writes it under this driver, so `flush()`
+    // returns before it can reach `postSamples`.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(CONFIG.SAMPLE_MIN_INTERVAL_MS * 3);
     });
-    const posted = callsTo(fetchMock, '/api/samples');
-    expect(posted).toHaveLength(1);
-    const body = JSON.parse(String((posted[0][1] as RequestInit).body)) as {
-      samples: { lat: number; lon: number }[];
-    };
-    expect(body.samples).toEqual([
-      {
-        lat: TELEPORT_POINT.lat,
-        lon: TELEPORT_POINT.lon,
-        accuracy: TELEPORT_FIX.accuracy,
-        speed: TELEPORT_FIX.speed,
-        timestamp: expect.any(Number) as unknown as number,
-      },
-    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(callsTo(fetchMock, '/api/samples')).toHaveLength(0);
 
-    // Still no watch and still no wake lock: the teleport is the one exception
-    // to "posts nothing", and not an exception to anything else.
+    // And still no watch and no wake lock: row 13 removed an exception to
+    // "posts nothing", and added none to anything else.
     expect(geo.watchPosition).not.toHaveBeenCalled();
     expect(wakeLock.request).not.toHaveBeenCalled();
+  });
+
+  // Leaving the mode drops the asserted point in Safari - the server has just
+  // forgotten it too, and a marker claiming a position neither side believes is
+  // the phantom that feature was filing bugs against. Under this driver there is
+  // no asserted point to drop, and the tracker's own position must survive the
+  // mode ending underneath it: the phone is still in the pocket, still sending.
+  it('leaves the tracker’s position alone when the mode ends', async () => {
+    const shell = injectShell();
+    stubGeolocation();
+    stubWakeLock();
+    stubFetch((url) => {
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderTracking({ status: 'on', lat: TELEPORT_POINT.lat, lon: TELEPORT_POINT.lon });
+    dispatchAll(shell, positionEvent({ lat: REAL_FIX.lat, lon: REAL_FIX.lon }));
+    expect(state().lastPosition?.lat).toBe(REAL_FIX.lat);
+
+    await act(async () => {
+      root.render(<TrackingHarness teleport={{ status: 'off' }} />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(state().lastPosition?.lat).toBe(REAL_FIX.lat);
+    expect(getLastKnownPosition()?.lat).toBe(REAL_FIX.lat);
   });
 });

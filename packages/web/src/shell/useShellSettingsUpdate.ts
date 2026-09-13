@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
-import { errorMessage, updateSettings } from '../api/client.js';
+import { ApiError, errorMessage, updateSettings } from '../api/client.js';
 import { getShellBridge } from './bridge.js';
+import { postShellSettingsUpdated } from './messages.js';
+import type { SettingsUpdateFailure } from './messages.js';
 
-// `requestSettingsUpdate`, page side (`ios/SPEC.md` 8.2, and `ios/SPEC.md` 12's
-// row 3 of "The list for `main`").
+// `requestSettingsUpdate`, page side (`ios/SPEC.md` 8.2 and 11.2, and
+// `ios/SPEC.md` 12's rows 3 and 12 of "The list for `main`").
 //
 // The shell's native Consent screen calls
 // `window.__tipsyTrails.requestSettingsUpdate(backgroundTracking)` from its two
@@ -11,6 +13,14 @@ import { getShellBridge } from './bridge.js';
 // and *before* iOS's Always prompt, and `withdrawConsent` with `false` behind
 // the withdrawal confirmation. The page answers it with `PATCH /api/settings`
 // and `{ backgroundTracking }` (`SPEC.md` 9.2).
+//
+// **And, since row 12, it answers the shell twice: `true` at once, and one
+// `settingsUpdated` message when that PATCH settles.** The first says a reply is
+// coming and the second is the reply. Before it, the Consent screen ticked a box
+// and went straight on to iOS's Always prompt with no way to know whether the
+// account had recorded anything; what it had instead was the tracker's next
+// `start` re-reading `GET /api/auth/me`, which is a different question answered
+// much later.
 //
 // **Why the page makes the request and not the shell.** `ios/SPEC.md` 5.4: one
 // client writes settings and it is the web app. A shell that called
@@ -34,37 +44,88 @@ import { getShellBridge } from './bridge.js';
 // The argument is not coerced. A non-boolean is a 400 from the schema, logged
 // below like any other failure, which is louder and more honest than a
 // `Boolean()` that would turn a protocol mistake into a recorded consent.
-export function applyShellSettingsUpdate(backgroundTracking: boolean): void {
+// **Answers `true`, and that is a promise rather than a status** (row 12): a
+// `settingsUpdated` message will be posted when this request settles, exactly
+// once, whichever way it settles. The shell reads the value through
+// `evaluateJavaScript`'s completion handler and waits for the message; a page
+// without this handler returns nothing, which is how it says no reply is coming
+// (`bridge.ts`).
+export function applyShellSettingsUpdate(backgroundTracking: boolean): true {
   // Two guards, and they are not equal partners - HANDOVER.md's third habit
-  // asks that a branch nothing can reach be written down as one. The `.catch`
-  // is where every real failure arrives: a 400, a 401, a 5xx, a dead network,
-  // all of them rejections of the promise `updateSettings` returns, and it is
-  // the guard the tests exercise. The surrounding `try` covers a synchronous
-  // throw from `updateSettings` itself, which nothing today can produce -
-  // `api/client.ts` does its work inside an async function, so even a
+  // asks that a branch nothing can reach be written down as one. The rejection
+  // handler is where every real failure arrives: a 400, a 401, a 5xx, a dead
+  // network, all of them rejections of the promise `updateSettings` returns, and
+  // it is the guard the tests exercise. The surrounding `try` covers a
+  // synchronous throw from `updateSettings` itself, which nothing today can
+  // produce - `api/client.ts` does its work inside an async function, so even a
   // `JSON.stringify` failure would reach us as a rejection. It is kept as
   // defence in depth because of where this function is called from: the shell's
   // `evaluateJavaScript`, where an exception is the shell's problem and not the
   // page's (8.2), and where the page has no way to learn it caused one.
+  //
+  // **Exactly one reply per request, and the two-argument `then` is what makes
+  // it exact.** Written as `.then(report).catch(report)` the success path's own
+  // failure would reach the rejection handler and post a second, contradicting
+  // message; written as two handlers on one `then`, at most one of them can run,
+  // and the synchronous `catch` below can only run when no promise was created
+  // at all.
   try {
-    void updateSettings({ backgroundTracking }).catch((err: unknown) => {
-      reportFailure(backgroundTracking, err);
-    });
+    void updateSettings({ backgroundTracking }).then(
+      () => {
+        postShellSettingsUpdated(backgroundTracking, null);
+      },
+      (err: unknown) => {
+        reportFailure(backgroundTracking, err);
+        postShellSettingsUpdated(backgroundTracking, failureReason(err));
+      },
+    );
   } catch (err: unknown) {
     reportFailure(backgroundTracking, err);
+    postShellSettingsUpdated(backgroundTracking, failureReason(err));
   }
+  return true;
 }
 
-// **The failure path is not specified, and this is the honest minimum rather
-// than an invention.** 8.2: "The shell does not read a reply to this call -
-// there is none", and the shell learns whether consent took through the
-// tracker's next `start`, which re-reads `GET /api/auth/me`. So a failed PATCH
-// is silent to the shell today, and it stays silent: a return value, a callback
-// or a new message would each be a change to the bridge protocol, which belongs
-// to `ios-app` and not here. What the page owes is that the failure is not
-// invisible to a developer - the web view's console is attached to Safari's Web
-// Inspector, and this is the same channel `map/fog/fog-controller.ts` uses for
-// its own unattributable failures.
+// Which of 8.2's three reasons a failure is. `ApiError` carries the status the
+// page actually saw (`api/client.ts`), so this reads that rather than the
+// message: a 401 and a 503 are one sentence apart in prose and two different
+// screens apart on the phone.
+//
+// `status === 0` is that module's one sentinel for "fetch itself rejected, so
+// there was never an HTTP status" - the `network_error` code is set in the same
+// place - and it is the only thing 8.2's `offline` can honestly mean.
+//
+// Two cases reach `server` by falling through rather than by matching, and both
+// are deliberate. A body the page cannot read (`invalid_response`, O18) carries
+// the 2xx it arrived with and is not offline and not a 401; and anything that is
+// not an `ApiError` at all is the synchronous throw above, which nothing today
+// can produce. Calling either of them `offline` would have the shell tell a
+// player with a working connection to try again later, which is the one wrong
+// answer of the three.
+function failureReason(err: unknown): SettingsUpdateFailure {
+  if (err instanceof ApiError) {
+    if (err.status === 0) {
+      return 'offline';
+    }
+    if (err.status === 401) {
+      return 'unauthenticated';
+    }
+  }
+  return 'server';
+}
+
+// **The console line stays, now that the failure is also reported to the
+// shell.** When this was written the failure path was unspecified, and the note
+// here said so: 8.2 read "the shell does not read a reply to this call - there is
+// none", so a failed PATCH was silent to the shell, and a return value or a new
+// message would each have been a change to a bridge protocol that belongs to
+// `ios-app`. Row 12 is that change, decided there and carried out here, and it
+// does not retire this line - it is a different reader. `settingsUpdated` tells
+// the shell which of three things went wrong, in a vocabulary a player can be
+// shown; this says which value was asked for and what the server's own message
+// was, to the web view's console, which is attached to Safari's Web Inspector.
+// The same channel `map/fog/fog-controller.ts` uses for its own unattributable
+// failures.
 function reportFailure(backgroundTracking: boolean, err: unknown): void {
   console.error(
     `[shell] requestSettingsUpdate(${String(backgroundTracking)}): PATCH /api/settings failed, ` +
@@ -104,9 +165,12 @@ export function attachSettingsUpdateHandler(): () => void {
     return () => {};
   }
 
-  const handler = (backgroundTracking: boolean): void => {
+  // The `true` travels out through the completion handler of the shell's
+  // `evaluateJavaScript` (row 12), so it is returned and not dropped here. A
+  // fresh function per attach, rather than `applyShellSettingsUpdate` itself,
+  // is what makes the identity check in the detach below mean anything.
+  const handler = (backgroundTracking: boolean): true =>
     applyShellSettingsUpdate(backgroundTracking);
-  };
   bridge.requestSettingsUpdate = handler;
 
   return () => {
