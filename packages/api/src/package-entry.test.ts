@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // `./index.js` — a relative import would pass with no `exports` block, no
 // `main`, and no emitted `dist/`, which is precisely the state this file
 // exists to catch.
-import { buildApp } from '@tipsytrails/api';
+import { buildApp, loadEnv, openDatabase, runMigrations } from '@tipsytrails/api';
+import type { SqliteDatabase } from '@tipsytrails/api';
 import { describe, expect, it } from 'vitest';
 
 // `packages/api` as a package other packages can IMPORT, rather than as a
@@ -29,11 +30,12 @@ import { describe, expect, it } from 'vitest';
 //  1. `packages/tracker` declares the devDependency and `pnpm-lock.yaml`
 //     carries the link, so the name resolves from that package at all.
 //  2. `package.json` names an entry point, and it is `src/index.ts` — which
-//     exports `buildApp` and `loadEnv` and calls nothing. `src/server.ts` is
-//     the entry that listens, and it is deliberately NOT what the package
-//     resolves to: an entry point that started a server on import would make
-//     importing this package a side effect, and the harness would be racing
-//     a listening socket it never asked for.
+//     exports `buildApp`, `loadEnv`, `openDatabase` and `runMigrations`, and
+//     calls nothing. `src/server.ts` is the entry that listens, and it is
+//     deliberately NOT what the package resolves to: an entry point that
+//     started a server on import would make importing this package a side
+//     effect, and the harness would be racing a listening socket it never
+//     asked for.
 //  3. The build emits declarations (`declaration: true` in
 //     tsconfig.build.json), so `types` in the `exports` block points at a
 //     file that exists. Without it the import resolves at run time and is an
@@ -58,9 +60,50 @@ import { describe, expect, it } from 'vitest';
 // there: it resolves the name FROM `packages/tracker`'s position in the
 // workspace, which is the resolution the harness will perform, without
 // putting a file in that package.
+// The three calls `ios/SPEC.md` 13.2's harness makes, as types. The assertion
+// is each annotation — `openDatabase` answers with the database `runMigrations`
+// and `buildApp` take, and `SqliteDatabase` is the name the entry point gives
+// that type — and it is made here rather than inline below because it is the
+// compiler's and not a test body's.
+//
+// It is not covered by the runtime cases: the entry could export both functions
+// and a `SqliteDatabase` that had drifted from their signatures, or stop
+// emitting declarations altogether (failure 3 above), and every `typeof` check
+// in this file would still pass. A consumer that may not depend on
+// `better-sqlite3` itself (I7) has no second way to name this type, so the
+// re-export is as much of the export surface as the functions are.
+const openDatabaseSignature: (path: string) => SqliteDatabase = openDatabase;
+const runMigrationsSignature: (db: SqliteDatabase, migrationsDir: string) => string[] =
+  runMigrations;
+// The return is `unknown` because what it is — Fastify's instance — is not this
+// file's subject, and naming it here would make `fastify` a dependency of an
+// assertion about an `exports` block. What is asserted is the second parameter.
+const buildAppSignature: (env: ReturnType<typeof loadEnv>, db: SqliteDatabase) => unknown =
+  buildApp;
+
 describe('@tipsytrails/api as an importable package', () => {
   it('exposes buildApp through the package name', () => {
     expect(typeof buildApp).toBe('function');
+  });
+
+  // Row 14 of `ios/SPEC.md` 12's list for `main`. `buildApp(env, db)` takes an
+  // already-open database, and the harness of 13.2 is what has to open and
+  // migrate one: it opens a temporary SQLite file, runs `packages/api/migrations`
+  // against it, and hands the result to `buildApp`. Neither step was exported,
+  // and `packages/tracker` may not depend on `better-sqlite3` itself (I7), so
+  // the harness could not take them at all.
+  it('exposes openDatabase and runMigrations through the package name', () => {
+    expect(typeof openDatabase).toBe('function');
+    expect(typeof runMigrations).toBe('function');
+  });
+
+  // The identity is what makes the annotations above assertions about the
+  // package and not about three local aliases: the functions the compiler
+  // checked are the functions the package exports.
+  it('names the type its callers need, and the pair keeps the signatures that type describes', () => {
+    expect(openDatabaseSignature).toBe(openDatabase);
+    expect(runMigrationsSignature).toBe(runMigrations);
+    expect(buildAppSignature).toBe(buildApp);
   });
 
   // The workspace link itself: `packages/tracker`'s devDependency and its
@@ -83,5 +126,27 @@ describe('@tipsytrails/api as an importable package', () => {
 
     const loaded: unknown = await import(pathToFileURL(entry).href);
     expect(typeof (loaded as { buildApp?: unknown }).buildApp).toBe('function');
+    // The two of row 14, from the same position and through the same
+    // resolution. Asserted here and not only above because the import at the
+    // top of this file is resolved from `packages/api`, and a build that
+    // emitted an entry point this package can reach and that one cannot is a
+    // state the first case would not see.
+    expect(typeof (loaded as { openDatabase?: unknown }).openDatabase).toBe('function');
+    expect(typeof (loaded as { runMigrations?: unknown }).runMigrations).toBe('function');
+  });
+
+  // The entry point, counted. `src/index.ts` is a list of re-exports and is
+  // meant to stay one, so what it exports is small enough to write down — and
+  // writing it down is what makes an addition a decision rather than a drift.
+  // `SqliteDatabase` is absent because a type is: nothing of it survives to
+  // run time, which is the reason it is also checked by the annotations above.
+  it('exports these four runtime values and nothing else', async () => {
+    const loaded: unknown = await import('@tipsytrails/api');
+    expect(Object.keys(loaded as Record<string, unknown>).sort()).toEqual([
+      'buildApp',
+      'loadEnv',
+      'openDatabase',
+      'runMigrations',
+    ]);
   });
 });
