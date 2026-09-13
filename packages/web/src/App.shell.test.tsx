@@ -13,6 +13,7 @@ import {
   postShellOpenExternal,
   postShellReady,
   postShellRequestNotifications,
+  postShellSettingsUpdated,
   postShellSignedIn,
   postShellSignedOut,
   postShellVisitEnded,
@@ -21,10 +22,10 @@ import {
 import { attachSettingsUpdateHandler } from './shell/useShellSettingsUpdate.js';
 import { useVisits } from './tracking/useVisits.js';
 
-// ios/SPEC.md 8.1 and 8.2, and 12's row 3 of "The list for `main`": the shell
-// module's detection, the page side of `requestSettingsUpdate`, the Shell ->
-// page event subscription with its `isReplay` rule, and the eight Page -> shell
-// messages.
+// ios/SPEC.md 8.1 and 8.2, and 12's rows 3 and 12 of "The list for `main`": the
+// shell module's detection, the page side of `requestSettingsUpdate` with the
+// reply row 12 gives it, the Shell -> page event subscription with its
+// `isReplay` rule, and the nine Page -> shell messages.
 //
 // **The property that matters most here is the one a passing suite does not
 // show: in a browser, none of this happens.** Every one of these calls sits on
@@ -150,7 +151,7 @@ function injectShell(): ShellDouble {
 }
 
 // The other half of the shell's web view configuration: the named script
-// message handler the eight Page -> shell messages are posted to (8.2).
+// message handler the nine Page -> shell messages are posted to (8.2).
 // Installed separately from the injected object so that a test can have one
 // without the other, which is what the browser-path assertions need.
 function installMessageHandler(): unknown[] {
@@ -433,6 +434,204 @@ describe('requestSettingsUpdate (ios/SPEC.md 8.2)', () => {
     expect(String(consoleError.mock.calls[0][0])).toContain('PATCH /api/settings failed');
   });
 
+  // ── Row 12: the reply ────────────────────────────────────────────────────
+  //
+  // What these cases are about is the moment a player is standing in front of
+  // the native Consent screen's checkbox. Before row 12 the shell ticked the
+  // box, called this, and went straight on to iOS's Always prompt with no way to
+  // know whether the account had recorded anything; the outcome reached it from
+  // the tracker's next `start` re-reading `GET /api/auth/me`, which is a
+  // different question answered much later. So the assertions are the three
+  // things the shell now has: a value that says a reply is coming, exactly one
+  // reply per request, and a reason it can turn into words.
+
+  it('answers the shell with true, so the shell knows a reply is coming', async () => {
+    injectShell();
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/settings') {
+        return stubSignedInUser({ backgroundTrackingConsentedAt: 1_757_000_000 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+
+    // The value the shell reads out of `evaluateJavaScript`'s completion
+    // handler. A page too old to have this handler has no property to call and
+    // returns nothing at all, which is how the protocol says "no reply is
+    // coming" - the case the `?.` here stands for.
+    let answer: unknown;
+    act(() => {
+      answer = window.__tipsyTrails?.requestSettingsUpdate?.(true);
+    });
+    await flush();
+
+    expect(answer).toBe(true);
+  });
+
+  it('posts exactly one settingsUpdated, with ok true and no reason, when the PATCH succeeds', async () => {
+    injectShell();
+    const posted = installMessageHandler();
+    const fetchMock = stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/settings') {
+        return stubSignedInUser({ backgroundTrackingConsentedAt: 1_757_000_000 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+    posted.length = 0;
+
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(true);
+    });
+    await flush();
+
+    expect(settingsCalls(fetchMock)).toHaveLength(1);
+    expect(posted).toEqual([{ type: 'settingsUpdated', backgroundTracking: true, ok: true }]);
+  });
+
+  // A 401 is 5.2's case and not a retry: the session is gone, and what the
+  // player needs is the web app's login screen. The console line stays beside
+  // the message, because the two have different readers (useShellSettingsUpdate.ts).
+  it('reports a 401 as unauthenticated, and still logs it', async () => {
+    injectShell();
+    const posted = installMessageHandler();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/settings') {
+        return jsonResponse(401, { code: 'unauthenticated', message: 'Authentication required.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+    posted.length = 0;
+
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(true);
+    });
+    await flush();
+
+    expect(posted).toEqual([
+      { type: 'settingsUpdated', backgroundTracking: true, ok: false, reason: 'unauthenticated' },
+    ]);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  // `offline` is the transport failure that never got an HTTP status - fetch
+  // itself rejected, which `api/client.ts` carries as status 0. It is the one of
+  // the three that means "nothing is wrong with the consent you gave, ask
+  // again", so nothing else may be reported as it.
+  it('reports a transport failure that never got a status as offline', async () => {
+    injectShell();
+    const posted = installMessageHandler();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      throw new Error('network down');
+    });
+
+    await renderApp('/privacy');
+    posted.length = 0;
+
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(false);
+    });
+    await flush();
+
+    expect(posted).toEqual([
+      { type: 'settingsUpdated', backgroundTracking: false, ok: false, reason: 'offline' },
+    ]);
+  });
+
+  // "Every other status including a 400 from the schema" (8.2). The 400 is the
+  // case worth its own assertion: it is what a shell sending something other
+  // than a boolean would get, and it is the reason this page does not coerce the
+  // argument - a protocol mistake stays a protocol mistake instead of becoming a
+  // recorded consent.
+  it.each([
+    [400, { code: 'invalid_request', message: 'Invalid request.' }],
+    [500, { code: 'internal_error', message: 'Something went wrong.' }],
+  ])('reports a %i as server', async (status, body) => {
+    injectShell();
+    const posted = installMessageHandler();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/settings') {
+        return jsonResponse(status, body);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+    posted.length = 0;
+
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(true);
+    });
+    await flush();
+
+    expect(posted).toEqual([
+      { type: 'settingsUpdated', backgroundTracking: true, ok: false, reason: 'server' },
+    ]);
+  });
+
+  // "Exactly once, per request" (8.2), and `backgroundTracking` echoes the
+  // request for exactly this reason: the shell can have ticked and then
+  // withdrawn before either answer arrives, and a reply that did not say which
+  // request it belonged to would leave it guessing. The two here settle
+  // differently as well, so neither reply can be the other's.
+  it('posts one reply per request, each echoing the value that request asked for', async () => {
+    injectShell();
+    const posted = installMessageHandler();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let settingsCallCount = 0;
+    stubFetch((url) => {
+      if (url.startsWith('/api/auth/me')) {
+        return stubSignedInUser();
+      }
+      if (url === '/api/settings') {
+        settingsCallCount += 1;
+        return settingsCallCount === 1
+          ? stubSignedInUser({ backgroundTrackingConsentedAt: 1_757_000_000 })
+          : jsonResponse(500, { code: 'internal_error', message: 'Something went wrong.' });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await renderApp('/privacy');
+    posted.length = 0;
+
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(true);
+    });
+    await flush();
+    act(() => {
+      window.__tipsyTrails?.requestSettingsUpdate?.(false);
+    });
+    await flush();
+
+    expect(posted).toEqual([
+      { type: 'settingsUpdated', backgroundTracking: true, ok: true },
+      { type: 'settingsUpdated', backgroundTracking: false, ok: false, reason: 'server' },
+    ]);
+  });
+
   it('reports a network failure the same way rather than leaving an unhandled rejection', async () => {
     injectShell();
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -646,8 +845,9 @@ describe('the Page -> shell messages (ios/SPEC.md 8.2)', () => {
   // 8.2's table has seven rows and eight types: `visitStarted` and `visitEnded`
   // share a row there, and share a `case` in the shell's own message handler.
   // The count is asserted because "the seven message types" is written down in
-  // 12's row 3 for `main`, and a reader counting rows will build seven.
-  it('carries eight message types, not the seven 8.2’s table has rows for', () => {
+  // 12's row 3 for `main`, and a reader counting rows will build seven. The
+  // ninth is row 12's `settingsUpdated`, which is in no table there at all.
+  it('carries nine message types, not the seven 8.2’s table has rows for', () => {
     expect(SHELL_MESSAGE_TYPES).toEqual([
       'ready',
       'signedIn',
@@ -657,6 +857,7 @@ describe('the Page -> shell messages (ios/SPEC.md 8.2)', () => {
       'openExternal',
       'requestNotifications',
       'openConsent',
+      'settingsUpdated',
     ]);
   });
 
@@ -721,6 +922,34 @@ describe('the Page -> shell messages (ios/SPEC.md 8.2)', () => {
   // a stale `status` - the pending one, since that is all either side still has
   // - rather than the true reason the visit ended, and the tracker would seed
   // its pending set from it. So the keys are asserted, not just the id.
+  // Row 12. `reason` is present only when `ok` is false (8.2), so the keys are
+  // asserted and not only the values: `toEqual` reads a key whose value is
+  // `undefined` as an absent one, and the Swift decoder does not - an `ok: true`
+  // carrying `reason: undefined` would arrive there as a field that exists.
+  it('posts settingsUpdated with the keys each outcome has, and no others', () => {
+    injectShell();
+    const posted = installMessageHandler();
+
+    postShellSettingsUpdated(true, null);
+    postShellSettingsUpdated(false, 'unauthenticated');
+
+    expect(posted).toEqual([
+      { type: 'settingsUpdated', backgroundTracking: true, ok: true },
+      { type: 'settingsUpdated', backgroundTracking: false, ok: false, reason: 'unauthenticated' },
+    ]);
+    expect(Object.keys(posted[0] as Record<string, unknown>)).toEqual([
+      'type',
+      'backgroundTracking',
+      'ok',
+    ]);
+    expect(Object.keys(posted[1] as Record<string, unknown>)).toEqual([
+      'type',
+      'backgroundTracking',
+      'ok',
+      'reason',
+    ]);
+  });
+
   it('posts visitEnded with an id and nothing else', () => {
     injectShell();
     const posted = installMessageHandler();
@@ -753,7 +982,7 @@ describe('the Page -> shell messages (ios/SPEC.md 8.2)', () => {
     expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
-  // The single most important assertion in this file. Every one of the eight is
+  // The single most important assertion in this file. Every one of the nine is
   // called with a message handler installed and listening, and no shell
   // detected - and none of them posts. Section 8's own rule is that every
   // change in it is behind one detection (8.1) and a no-op outside it, so a
@@ -770,6 +999,8 @@ describe('the Page -> shell messages (ios/SPEC.md 8.2)', () => {
     postShellOpenExternal('https://example.com/');
     postShellRequestNotifications();
     postShellOpenConsent();
+    postShellSettingsUpdated(true, null);
+    postShellSettingsUpdated(false, 'offline');
 
     expect(posted).toEqual([]);
     expect(window.__tipsyTrails).toBeUndefined();
