@@ -151,7 +151,9 @@ export type TeleportMode =
 // (Section 12, Phase 8's "never fail silently" habit, applied early).
 //
 // Section 9.3: while a teleport stands, the teleported point IS the
-// position. The watch is not started, and that one change fixes the map
+// position - IN A BROWSER, which since ios/SPEC.md 12's row 13 is the only
+// place this hook honours the mode at all (see the three primitives below).
+// The watch is not started, and that one change fixes the map
 // marker, the nearby-bars panel, the check-in offer and the battery drain
 // together, because all four already read `lastPosition` and nothing else.
 // Samples keep being posted on the ordinary cadence from that point, through
@@ -172,12 +174,13 @@ export type TeleportMode =
 // `shellDriven` inside the single existing effect, and its two arms are
 // `attachGeolocationDriver` and `attachShellDriver` below. Each arm owns only
 // what is its own - the watch, the wake lock and `visibilitychange`; the
-// subscription - and everything both drivers need is shared between them: the
-// teleport, `flush()`, the `online`/`offline` listeners, the cadence interval,
-// and `applyServerAnswer`. That shared middle is not left over from a
+// subscription - and everything both drivers need is shared between them:
+// `flush()`, the `online`/`offline` listeners, the cadence interval, and
+// `applyServerAnswer`. That shared middle is not left over from a
 // refactor, it is what 8.3 requires: one `computeConnectionStatus` over one
 // `behindDepth`, so SPEC.md Section 8.6's `syncing` cannot mean two things on
-// one icon, and one teleport path under both drivers.
+// one icon. The teleport was in that list until row 13 and is not any more: it
+// is one path, and it is the browser's.
 //
 // Three other shapes were weighed and rejected:
 //
@@ -255,9 +258,25 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
   // Read out of the mode as three primitives, because the effect keys on
   // them: an object rebuilt by the map screen on every render would tear the
   // watch down and rebuild it on every render with it.
-  const teleportStatus = teleport.status;
-  const teleportLat = teleport.status === 'on' ? teleport.lat : null;
-  const teleportLon = teleport.status === 'on' ? teleport.lon : null;
+  //
+  // **THE SHELL DRIVER IGNORES THE MODE, AND THIS IS WHERE IT DOES SO**
+  // (ios/SPEC.md 8.3, 15's O-I8, decided as row 13 of 12's list for `main`).
+  // Reading it as `off` here, rather than at each of the four places the effect
+  // asks about it, is what makes "the page never posts a sample under the shell"
+  // a fact about two lines instead of a property a reader has to reassemble: the
+  // teleport is the only thing that ever wrote this hook's queue besides the
+  // watch, and the watch does not start under this driver. It also keeps these
+  // three constant under the shell, so an admin's map screen resolving the mode
+  // no longer tears down and rebuilds the tracker subscription for nothing.
+  //
+  // The fixture itself is untouched - it is the web app's, and it is still there
+  // in Safari on the same phone, which is where 8.3 now sends an admin who wants
+  // it. What is gone is the interleaving: two posters against one account, the
+  // server's previous-accepted position alternating between a faked point and a
+  // real one and refusing some of both on Section 7.2 step 4.
+  const teleportStatus = shellDriven ? 'off' : teleport.status;
+  const teleportLat = !shellDriven && teleport.status === 'on' ? teleport.lat : null;
+  const teleportLon = !shellDriven && teleport.status === 'on' ? teleport.lon : null;
 
   useEffect(() => {
     // Both null for every non-admin and for every admin who is not
@@ -494,9 +513,10 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
     // THE SHELL DRIVER (ios/SPEC.md 8.3). One subscription, and every one of
     // the thirteen members below comes off 7.5's events by that section's
     // table. There is no watchPosition here, no wake lock, no queue of this
-    // hook's own and no POST - the tracker owns all four inside the shell
-    // (I4), and the only sample this hook can still put on the wire is a
-    // standing teleport's, which keeps its own path under both drivers.
+    // hook's own and no POST - the tracker owns all four inside the shell (I4),
+    // and since row 13 that list has no exception: the teleport is read as `off`
+    // under this driver (above), so the tracker is the sole writer for the
+    // account and nothing below has to ask whether a mode stands.
     function attachShellDriver(): () => void {
       // One function for both callbacks, because ios/SPEC.md 8.3's table is
       // the same table for a replayed payload and a live one: every row but
@@ -527,16 +547,6 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
               computeGpsStatus({ accuracy: event.accuracy, receivedAt: event.receivedAt }, now),
             );
             scheduleStaleCheck();
-            // Section 9.3 / 8.3: while a teleport stands the teleported point
-            // IS the position, and the shell's fixes are the real one - which
-            // is exactly what the mode exists to override. So they are
-            // ignored for `lastPosition` and for nothing else: the GPS
-            // reading above is still the honest state of this device's
-            // receiver, and Safari has no equivalent only because it stopped
-            // its watch.
-            if (teleported) {
-              return;
-            }
             const accepted: LastAcceptedPosition = {
               lat: event.lat,
               lon: event.lon,
@@ -559,21 +569,18 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
           // "exactly as useSampleTracking computes it", which is what lets
           // one computeConnectionStatus serve both drivers (8.3, D2).
           //
-          // Both are the teleport path's while a teleport stands, exactly as
-          // in Safari, so the tracker's counts are not written over them.
+          // Unconditional since row 13. These two used to be held back while a
+          // teleport stood, so that the counts of a second poster did not write
+          // over this hook's own; there is no second poster now.
           case 'queue':
-            if (!teleported) {
-              setQueueDepth(event.queued);
-              setBehindDepth(event.behind);
-            }
+            setQueueDepth(event.queued);
+            setBehindDepth(event.behind);
             return;
           case 'flush':
-            if (!teleported) {
-              setQueueDepth(event.queued);
-              setBehindDepth(event.behind);
-            }
-            // Whoever posted them, these are the server's answers, so they
-            // keep feeding the members that read the server (8.3).
+            setQueueDepth(event.queued);
+            setBehindDepth(event.behind);
+            // These are the server's answers, so they feed the members that
+            // read the server (8.3).
             applyServerAnswer(event, advanceCounters);
             return;
           // `visit`, `sessionLost` and `notification` (7.5) reach no member of
@@ -612,16 +619,11 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       };
       setLastPosition(standingAt);
       setLastKnownPosition(standingAt);
-      // In Safari this is what keeps the third icon honest while the watch is
-      // stopped: the interval below is posting, so "paused" would be false.
-      // Under the shell driver the icon reports the tracker's own state
-      // (ios/SPEC.md 8.3's table, which gives `trackingActive` no teleport
-      // exception where it gives the other four one) - the phone in the
-      // pocket is still what the player is being told about, and a `tracking`
-      // event is the only thing entitled to say otherwise.
-      if (!shellDriven) {
-        setTrackingActive(true);
-      }
+      // What keeps the third icon honest while the watch is stopped: the
+      // interval below is posting, so "paused" would be false. Unconditional
+      // again since row 13 - this whole branch is the browser's now, because the
+      // shell driver reads the mode as `off` (above) and reaches it never.
+      setTrackingActive(true);
     } else if (wasTeleportedRef.current) {
       // Leaving the mode. The teleported point is dropped rather than left
       // standing until the first real fix replaces it: the server has just
@@ -641,13 +643,20 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     // Left running under both drivers, and under the shell driver it has
-    // nothing to do unless a teleport stands. That is a fact about the queue
-    // rather than about this timer: `queueRef` is written in exactly two
-    // places, `handlePosition` (which only the watch calls, and the watch
-    // never starts under the shell) and the teleport branch just below, so
-    // under the shell driver an empty queue makes flush() return before it
-    // can reach postSamples. Cutting the timer instead would strand whatever
-    // the teleport queued at the moment the admin left the mode.
+    // nothing to do at all. That is a fact about the queue rather than about
+    // this timer, and row 13 is what makes it total: `queueRef` is written in
+    // exactly two places, `handlePosition` (which only the watch calls, and the
+    // watch never starts under the shell) and the teleport branch just below
+    // (which the shell driver reads as `off` and never enters), so under that
+    // driver the queue is always empty and flush() returns before it can reach
+    // postSamples. **This is the whole proof that the page posts no sample
+    // inside the shell**, and it is two call sites long on purpose: a third
+    // writer of `queueRef` would have to make this claim again.
+    //
+    // The timer stays shared rather than being cut under the shell, because
+    // cutting it in Safari would strand whatever the teleport queued at the
+    // moment the admin left the mode, and a branch that exists only to silence
+    // an empty queue is a branch to keep right for nothing.
     const flushInterval = setInterval(() => {
       // The teleported point, on the ordinary cadence and through the
       // ordinary route. It needs no bypass and must not have one: the
@@ -657,9 +666,9 @@ export function useSampleTracking(teleport: TeleportMode): SampleTrackingState {
       // needs on-site samples twenty minutes apart, and a teleport that
       // posted once could never produce the second one.
       //
-      // ios/SPEC.md 8.3: this is the one thing the hook still posts under the
-      // shell driver, and O-I8 records what it costs - two posters against one
-      // account for as long as an admin stays teleported inside the app.
+      // Safari only, since row 13: under the shell driver `teleported` is null
+      // whatever the mode says, so this is the browser's path and the tracker is
+      // the account's sole writer in the app (ios/SPEC.md 8.3).
       if (teleported) {
         queueRef.current.push({
           ...teleported,

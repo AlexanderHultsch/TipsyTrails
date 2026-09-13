@@ -232,6 +232,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  // The injected object of ios/SPEC.md 8.1, which one case in the teleport
+  // describe below installs. A leaked one would put every later test in this
+  // file inside the shell.
+  delete window.__tipsyTrails;
 });
 
 describe('suggest a bar', () => {
@@ -967,6 +971,31 @@ describe('admin teleport', () => {
     openPicker();
 
     expect(container.querySelector('.map-picker')).not.toBeNull();
+  });
+
+  // Row 13 of ios/SPEC.md 12's list for `main`, which decides 15's O-I8: inside
+  // the iPhone shell the native tracker is the account's sole writer of samples,
+  // so a teleport taken in the app would be a faked position competing with a
+  // real one. The panel is therefore absent there - the mirror image of the
+  // Settings row of 8.6, which renders only under the shell - and the fixture
+  // stays available in Safari on the same phone, which is where an admin who
+  // wants it goes.
+  //
+  // The other three sections are asserted present, so this is the panel's
+  // absence and not the screen failing to render.
+  it('does not render the panel inside the iPhone shell', async () => {
+    stubAdminScreen(() => jsonResponse(200, {}));
+    window.__tipsyTrails = { platform: 'ios', shellVersion: '1.0.0', trackerVersion: '1.0.0' };
+
+    await renderApp('/admin');
+
+    const headings = Array.from(container.querySelectorAll('h2')).map(
+      (heading) => heading.textContent,
+    );
+    expect(headings).toEqual(['Bars', 'Your pending visits', 'Users']);
+    expect(
+      Array.from(container.querySelectorAll('button')).map((button) => button.textContent),
+    ).not.toContain('Choose a point on the map');
   });
 
   it('sends the picked point and reports what the server did', async () => {

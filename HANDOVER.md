@@ -3,11 +3,19 @@
 For the next Claude Code session, and for the owner. Written after the
 session that completed Phase 8 — the last phase in `SPEC.md` Section 12's
 plan of what runs on the Pi. There is now a Phase 9, the iPhone companion
-specified in full in `ios/SPEC.md`, and nothing of it is built. The frame
-this file used to write in, "before Phase N", no longer applies to Phases
-0–8: every one of them is built, and what remains for the site itself is not
-more building but the operational work of actually running this on the Pi,
-plus the handful of spec items nobody has built at all (Section 3 below).
+specified in full in `ios/SPEC.md`. The app itself is not built here and
+cannot be — no Xcode, no Simulator and no phone in this environment — but the
+parent's half of it is: every row of that document's "list for `main`" (its
+Section 12) has been carried out on this branch, the last three of them at
+v1.65, and `packages/tracker` has been this workspace's fourth package since
+v1.59. What runs on the phone is the `ios-app` branch's, and
+`ios/PARENT-CONTRACT.md` is how the two stay in step — its Section 1 is what a
+change here is checked against, and `packages/shared/src/ios-parent-pin.test.ts`
+is what makes that check unavoidable. The frame this file used to write in,
+"before Phase N", no longer applies to Phases 0–8: every one of them is built,
+and what remains for the site itself is not more building but the operational
+work of actually running this on the Pi, plus the handful of spec items nobody
+has built at all (Section 3 below).
 
 `SPEC.md` is the source of truth; `CLAUDE.md` holds the guardrails. The spec
 version this file was last checked against is in the table below, stated in
@@ -28,7 +36,7 @@ this file in the same commit.
 | Repository            | `AlexanderHultsch/TipsyTrails`, branch `main`              |
 | Local clone directory | `Tipsy-Trails` — stale name, do not rename, it is cosmetic |
 | Phases complete       | All eight (0–8)                                            |
-| Spec version          | 1.64                                                       |
+| Spec version          | 1.65                                                       |
 
 The test count used to sit in that table and is deliberately gone: it moved on
 almost every commit, no test could pin it without failing constantly for no
